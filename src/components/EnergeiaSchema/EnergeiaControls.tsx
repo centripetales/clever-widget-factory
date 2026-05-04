@@ -158,6 +158,8 @@ interface EnergeiaControlsProps {
   camera?: import('three').Camera;
   canvasRef?: React.RefObject<HTMLDivElement>;
   canvasHeight?: number;
+  legendHoveredId?: string | null;
+  onLegendHover?: (id: string | null) => void;
 }
 
 export function EnergeiaControls({
@@ -178,6 +180,8 @@ export function EnergeiaControls({
   camera,
   canvasRef,
   canvasHeight = 560,
+  legendHoveredId,
+  onLegendHover,
 }: EnergeiaControlsProps) {
   const uniquePersons = useMemo(() => {
     const seen = new Map<string, string>();
@@ -249,7 +253,7 @@ export function EnergeiaControls({
 
   return (
     <div
-      className="flex flex-row flex-wrap gap-6 mt-4 p-4 rounded-xl"
+      className="flex flex-row flex-wrap gap-6 mt-4 p-4 rounded-xl w-full"
       style={{
         background: 'rgba(8, 13, 26, 0.75)',
         backdropFilter: 'blur(12px)',
@@ -446,6 +450,8 @@ export function EnergeiaControls({
             camera={camera}
             canvasRef={canvasRef}
             canvasHeight={canvasHeight}
+            hoveredId={legendHoveredId}
+            onHoverChange={onLegendHover}
           />
         </div>
       )}

@@ -108,10 +108,12 @@ export function HoverTooltip({ hoveredPoint, hoveredCluster, clusters }: HoverTo
 
   return (
     <div
-      className="absolute pointer-events-none z-10"
+      className="absolute pointer-events-none z-30"
       style={{ top: 16, right: 16 }}
     >
-      <div className="bg-[#050510] border border-white/10 rounded-lg px-3 py-2 shadow-xl max-w-[240px]">
+      <div className="border border-white/10 rounded-lg px-3 py-2 shadow-xl max-w-[240px]"
+        style={{ backgroundColor: '#050510' }}
+      >
         {hoveredPoint && (() => {
           const { actionTitle, personName, clusterTitle } = buildTooltipContent(hoveredPoint, clusters);
           const statusStyle = STATUS_STYLES[hoveredPoint.status] ?? { className: 'bg-zinc-500/20 text-zinc-400', label: hoveredPoint.status };

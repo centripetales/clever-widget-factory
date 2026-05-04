@@ -24,13 +24,56 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
 
   const createMutation = useMutation({
     mutationFn: (data: CreateObservationData) => stateService.createState(data),
-    onSuccess: (newState, variables) => {
-      // Invalidate the filtered states list
+
+    // Optimistic update: add provisional observation to filtered cache immediately
+    onMutate: async (variables) => {
+      if (!filters) return undefined;
+
+      // Cancel any outgoing refetches for the filtered key to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: statesQueryKey(filters) });
+
+      // Snapshot previous filtered list for rollback on error
+      const previousFilteredStates = queryClient.getQueryData<Observation[]>(statesQueryKey(filters));
+
+      // Prepend a provisional observation to the filtered cache
+      const provisionalObservation: Observation = {
+        id: 'optimistic-' + Date.now(),
+        organization_id: '',
+        observation_text: variables.state_text ?? '',
+        captured_by: '',
+        captured_by_name: '',
+        captured_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        photos: (variables.photos ?? []) as Observation['photos'],
+        links: (variables.links ?? []) as Observation['links'],
+      };
+
+      queryClient.setQueryData<Observation[]>(statesQueryKey(filters), (old) => {
+        return [provisionalObservation, ...(old ?? [])];
+      });
+
+      return { previousFilteredStates };
+    },
+
+    onSuccess: (_newState, _variables, _context) => {
+      // Invalidate the filtered states list to replace the optimistic entry with the real server id
       if (filters) {
         queryClient.invalidateQueries({ queryKey: statesQueryKey(filters) });
       }
-      // Invalidate all states
-      queryClient.invalidateQueries({ queryKey: statesQueryKey() });
+      // NOTE: intentionally NOT invalidating statesQueryKey() (broad key) to avoid cascade refetches.
+      // If this state is linked to an action, invalidate actions cache to keep counts consistent.
+      if (filters?.entity_type === 'action') {
+        queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
+        queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
+      }
+    },
+
+    onError: (_error, _variables, context) => {
+      // Rollback the optimistic update on error
+      if (context?.previousFilteredStates !== undefined && filters) {
+        queryClient.setQueryData(statesQueryKey(filters), context.previousFilteredStates);
+      }
     },
   });
 

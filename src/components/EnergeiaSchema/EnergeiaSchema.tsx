@@ -62,13 +62,16 @@ export function EnergeiaSchema({ startDate, endDate, selectedUsers }: EnergeiaSc
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const handleCamera = useCallback((cam: THREE.Camera) => { cameraRef.current = cam; }, []);
 
+  // Lifted legend hover state — shared between Controls (sets it) and Map (draws HUD lines)
+  const [legendHoveredId, setLegendHoveredId] = useState<string | null>(null);
+
   return (
-    <div className="relative rounded-xl overflow-hidden" style={{ background: '#050510' }}>
+    <div className="relative rounded-xl overflow-hidden w-full" style={{ background: '#050510' }}>
 
       {isEmpty && !isRefreshing ? (
         <EnergeiaEmptyState />
       ) : (
-        <div className="relative">
+        <div className="relative overflow-x-hidden w-full">
 
           {/* ── Canvas / starfield ── */}
           {data && (
@@ -84,6 +87,7 @@ export function EnergeiaSchema({ startDate, endDate, selectedUsers }: EnergeiaSc
               personColorMap={personColorMap}
               onCamera={handleCamera}
               canvasContainerRef={canvasContainerRef}
+              legendHoveredId={legendHoveredId}
             />
           )}
 
@@ -142,7 +146,7 @@ export function EnergeiaSchema({ startDate, endDate, selectedUsers }: EnergeiaSc
 
           {/* ── Kinesis bar — liquid energy compass below header ── */}
           {data && (
-            <div className="absolute left-0 right-0 z-20 pointer-events-auto" style={{ top: 56 }}>
+            <div className="absolute left-0 right-0 z-20 pointer-events-auto px-5" style={{ top: 56 }}>
               <KinesisBar
                 points={data.points}
                 activeEnergyFilter={activeEnergyFilter}
@@ -187,6 +191,8 @@ export function EnergeiaSchema({ startDate, endDate, selectedUsers }: EnergeiaSc
               personColorMap={personColorMap}
               camera={cameraRef.current ?? undefined}
               canvasRef={canvasContainerRef}
+              legendHoveredId={legendHoveredId}
+              onLegendHover={setLegendHoveredId}
             />
           )}
         </div>

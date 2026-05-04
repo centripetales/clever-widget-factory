@@ -22,8 +22,10 @@ interface TacticalLegendProps {
   canvasHeight?: number;
   /** When true, renders only the HUD SVG overlay (no bubble pills) */
   hudOnly?: boolean;
-  /** Externally controlled hovered ID — used when hudOnly=true */
+  /** Externally controlled hovered ID — shared between pills and HUD overlay */
   hoveredId?: string | null;
+  /** Callback when hover changes — used in full mode to lift state up */
+  onHoverChange?: (id: string | null) => void;
 }
 
 function projectToScreen(
@@ -78,8 +80,11 @@ function buildEntries(
  * TacticalLegend — bubble legend with HUD vector lines on hover.
  *
  * Two modes:
- * - Normal (hudOnly=false): renders bubble pills + HUD SVG overlay
- * - HUD-only (hudOnly=true): renders only the SVG overlay, driven by external hoveredId
+ * - Normal (hudOnly=false): renders bubble pills. Hover state is lifted to parent via onHoverChange.
+ * - HUD-only (hudOnly=true): renders only the SVG overlay inside the canvas, driven by hoveredId.
+ *
+ * The parent (EnergeiaSchema) owns hoveredId and passes it to both instances so the
+ * HUD lines always reflect what the user is hovering in the legend.
  */
 export function TacticalLegend({
   colorMode,
@@ -90,12 +95,12 @@ export function TacticalLegend({
   canvasRef,
   canvasHeight = 560,
   hudOnly = false,
-  hoveredId: externalHoveredId,
+  hoveredId = null,
+  onHoverChange,
 }: TacticalLegendProps) {
-  const [internalHoveredId, setInternalHoveredId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const legendRef = useRef<HTMLDivElement>(null);
 
-  const hoveredId = hudOnly ? (externalHoveredId ?? null) : internalHoveredId;
   const entries = buildEntries(colorMode, points, clusters, personColorMap);
 
   const getHudLines = useCallback((): { x1: number; y1: number; x2: number; y2: number; color: string }[] => {
@@ -105,12 +110,12 @@ export function TacticalLegend({
     const canvasRect = canvasEl.getBoundingClientRect();
     const canvasWidth = canvasRect.width;
 
-    // Find the bubble element to get its screen position
-    // In hudOnly mode the bubble is in EnergeiaControls (outside canvas), so we use a fixed anchor
+    // Default anchor: bottom-left of canvas
     let legendX = canvasWidth * 0.12;
     let legendY = canvasHeight * 0.88;
 
-    if (!hudOnly && legendRef.current) {
+    // If the pill element is in the DOM, use its actual position relative to the canvas
+    if (legendRef.current) {
       const bubbleEl = legendRef.current.querySelector(`[data-id="${hoveredId}"]`) as HTMLElement | null;
       if (bubbleEl) {
         const bubbleRect = bubbleEl.getBoundingClientRect();
@@ -138,14 +143,14 @@ export function TacticalLegend({
     }
 
     return lines;
-  }, [hoveredId, camera, canvasRef, points, colorMode, entries, canvasHeight, hudOnly]);
+  }, [hoveredId, camera, canvasRef, points, colorMode, entries, canvasHeight]);
 
   if (entries.length === 0 && !hudOnly) return null;
 
   const hudLines = getHudLines();
 
+  // HUD-only mode: SVG overlay inside the canvas container
   if (hudOnly) {
-    // Only render the SVG overlay
     if (hudLines.length === 0) return null;
     return (
       <svg
@@ -170,63 +175,48 @@ export function TacticalLegend({
     );
   }
 
-  // Full mode: bubbles + HUD overlay
+  // Full mode: bubble pills only — HUD lines are drawn by the hudOnly instance in EnergeiaMap
   return (
-    <div className="relative">
-      {/* HUD SVG — positioned relative to canvas */}
-      {hudLines.length > 0 && canvasRef?.current && (
-        <svg
-          className="absolute pointer-events-none z-10"
-          style={{
-            position: 'fixed',
-            top: canvasRef.current.getBoundingClientRect().top,
-            left: canvasRef.current.getBoundingClientRect().left,
-            width: canvasRef.current.getBoundingClientRect().width,
-            height: canvasHeight,
-          }}
-        >
-          {hudLines.map((line, i) => (
-            <line
-              key={i}
-              x1={line.x1} y1={line.y1}
-              x2={line.x2} y2={line.y2}
-              stroke={line.color}
-              strokeWidth="0.75"
-              strokeOpacity="0.4"
-              strokeDasharray="3 5"
-            />
-          ))}
-          {hudLines.map((line, i) => (
-            <circle key={`dot-${i}`} cx={line.x2} cy={line.y2} r="2.5" fill={line.color} opacity="0.7" />
-          ))}
-        </svg>
-      )}
-
-      {/* Bubble pills */}
-      <div ref={legendRef} className="flex flex-wrap gap-1.5 max-w-[280px]">
-        {entries.map(entry => (
+    <div ref={legendRef} className="flex flex-wrap gap-1.5 max-w-[280px]">
+      {entries.map(entry => {
+        const isHovered = hoveredId === entry.id;
+        const isExpanded = expandedId === entry.id;
+        const showFull = isHovered || isExpanded;
+        return (
           <button
             key={entry.id}
             type="button"
             data-id={entry.id}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-medium transition-all duration-150 cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-medium transition-all duration-200 cursor-pointer"
             style={{
-              border: `1px solid ${internalHoveredId === entry.id ? entry.color : `${entry.color}40`}`,
-              backgroundColor: internalHoveredId === entry.id ? `${entry.color}18` : `${entry.color}08`,
-              color: internalHoveredId === entry.id ? '#fff' : '#9ca3af',
-              boxShadow: internalHoveredId === entry.id ? `0 0 10px ${entry.color}50` : 'none',
+              border: `1px solid ${isHovered || isExpanded ? entry.color : `${entry.color}40`}`,
+              backgroundColor: isHovered || isExpanded ? `${entry.color}18` : `${entry.color}08`,
+              color: isHovered || isExpanded ? '#fff' : '#9ca3af',
+              boxShadow: isHovered || isExpanded ? `0 0 10px ${entry.color}50` : 'none',
+              maxWidth: showFull ? '280px' : '160px',
             }}
-            onMouseEnter={() => setInternalHoveredId(entry.id)}
-            onMouseLeave={() => setInternalHoveredId(null)}
+            onMouseEnter={() => onHoverChange?.(entry.id)}
+            onMouseLeave={() => onHoverChange?.(null)}
+            onClick={() => setExpandedId(prev => prev === entry.id ? null : entry.id)}
           >
             <span
               className="w-2 h-2 rounded-full flex-shrink-0"
               style={{ backgroundColor: entry.color, boxShadow: `0 0 4px ${entry.color}` }}
             />
-            <span className="truncate max-w-[120px]">{entry.label}</span>
+            <span
+              className="text-left"
+              style={{
+                whiteSpace: showFull ? 'normal' : 'nowrap',
+                overflow: showFull ? 'visible' : 'hidden',
+                textOverflow: showFull ? 'unset' : 'ellipsis',
+                maxWidth: showFull ? 'none' : '120px',
+              }}
+            >
+              {entry.label}
+            </span>
           </button>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }

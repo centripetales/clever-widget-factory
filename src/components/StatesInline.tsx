@@ -220,6 +220,18 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
           title: 'Observation updated',
           description: 'Your observation has been updated successfully.'
         });
+
+        // Reset form and clean up preview URLs after update
+        photosSnapshot.forEach(p => {
+          if (!p.isExisting && p.previewUrl && p.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(p.previewUrl);
+          }
+        });
+        setStateText('');
+        setPhotos([]);
+        setShowAddForm(false);
+        setEditingStateId(null);
+        return;
       } else {
         // Create new observation with uploaded photos
         const data: CreateObservationData = {
@@ -237,48 +249,52 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
           title: 'Observation saved',
           description: 'Your observation has been saved successfully.'
         });
+
+        // Clean up blob preview URLs before resetting form
+        photosSnapshot.forEach(p => {
+          if (!p.isExisting && p.previewUrl && p.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(p.previewUrl);
+          }
+        });
+
+        // Reset form immediately — do NOT block on verification
+        setStateText('');
+        setPhotos([]);
+        setEditingStateId(null);
+        setShowAddForm(false);
+        setSelectedObjectiveIds(new Set());
         
-        // Trigger verification if objectives were selected
+        // Trigger verification in the background if objectives were selected
         if (selectedObjectiveIds.size > 0 && savedObservation?.id && user?.userId) {
-          try {
-            const results = await verificationMutation.mutateAsync({
+          // Capture values before form reset clears them
+          const objectiveIds = Array.from(selectedObjectiveIds);
+          verificationMutation.mutate(
+            {
               actionId: entity_id,
               observationId: savedObservation.id,
-              selfAssessedObjectiveIds: Array.from(selectedObjectiveIds),
+              selfAssessedObjectiveIds: objectiveIds,
               userId: user.userId,
-            });
-            setVerificationResults(results);
-            // Don't reset form yet — show verification results
-            photosSnapshot.forEach(p => {
-              if (!p.isExisting && p.previewUrl && p.previewUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(p.previewUrl);
-              }
-            });
-            setStateText('');
-            setPhotos([]);
-            setEditingStateId(null);
-            // Keep showAddForm true to display results
-            return;
-          } catch (verifyError) {
-            console.error('Failed to verify observation:', verifyError);
-            toast({
-              title: 'Verification unavailable',
-              description: 'Observation saved, but skill verification could not be completed. You can try again later.',
-            });
-          }
+            },
+            {
+              onSuccess: (results) => {
+                setVerificationResults(results);
+                // Re-open the form area to display verification results
+                setShowAddForm(true);
+              },
+              onError: (verifyError) => {
+                console.error('Failed to verify observation:', verifyError);
+                toast({
+                  title: 'Verification unavailable',
+                  description: 'Observation saved, but skill verification could not be completed. You can try again later.',
+                });
+              },
+            }
+          );
         }
-      }
 
-      // Reset form and clean up preview URLs (only for new photos with blob URLs)
-      photosSnapshot.forEach(p => {
-        if (!p.isExisting && p.previewUrl && p.previewUrl.startsWith('blob:')) {
-          URL.revokeObjectURL(p.previewUrl);
-        }
-      });
-      setStateText('');
-      setPhotos([]);
-      setShowAddForm(false);
-      setEditingStateId(null);
+        // Return early — form is already reset above
+        return;
+      }
       
     } catch (error) {
       console.error('Failed to save observation:', error);
@@ -535,6 +551,15 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
           <Plus className="h-4 w-4 mr-2" />
           Add Observation
         </Button>
+      )}
+
+      {/* States List */}
+      {/* Non-blocking verification indicator — shown while background verification is in progress */}
+      {verificationMutation.isPending && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground px-1">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>Verifying skill demonstration in the background…</span>
+        </div>
       )}
 
       {/* States List */}

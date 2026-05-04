@@ -35,11 +35,12 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const { toast } = useToast();
 
-  // Subscribe to parts cache (populated by useCombinedAssets) without triggering a fetch.
-  // enabled:false prevents any network request; we only read what's already cached.
+  // Subscribe to parts cache. If empty, trigger a fetch so the selector works
+  // even when opened without visiting Combined Assets first.
   const { data: allParts = [] } = useQuery<any[]>({
     ...partsQueryConfig,
-    enabled: false,
+    enabled: true,
+    staleTime: 5 * 60 * 1000, // 5 minutes
   });
   const loading = false;
 

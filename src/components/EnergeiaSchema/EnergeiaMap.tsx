@@ -26,6 +26,7 @@ interface EnergeiaMapProps {
   personColorMap?: Map<string, string>;
   onCamera?: (cam: THREE.Camera) => void;
   canvasContainerRef?: React.RefObject<HTMLDivElement>;
+  legendHoveredId?: string | null;
 }
 
 const CANVAS_HEIGHT = 560;
@@ -42,15 +43,16 @@ export function EnergeiaMap({
   personColorMap,
   onCamera: onCameraProp,
   canvasContainerRef: externalCanvasRef,
+  legendHoveredId,
 }: EnergeiaMapProps) {
   const [hoveredPoint, setHoveredPoint] = useState<ActionPoint | null>(null);
   const [hoveredCluster, setHoveredCluster] = useState<ClusterInfo | null>(null);
-  const cameraRef = useRef<THREE.Camera | null>(null);
+  const [camera, setCamera] = useState<THREE.Camera | null>(null);
   const internalCanvasRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = externalCanvasRef ?? internalCanvasRef;
 
   const handleCamera = useCallback((cam: THREE.Camera) => {
-    cameraRef.current = cam;
+    setCamera(cam);
     onCameraProp?.(cam);
   }, [onCameraProp]);
 
@@ -102,10 +104,11 @@ export function EnergeiaMap({
           points={filteredPoints}
           clusters={clusters}
           personColorMap={personColorMap}
-          camera={cameraRef.current ?? undefined}
+          camera={camera ?? undefined}
           canvasRef={canvasContainerRef}
           canvasHeight={CANVAS_HEIGHT}
           hudOnly
+          hoveredId={legendHoveredId}
         />
 
         {/* Energy triangle — only in energy_type mode */}
