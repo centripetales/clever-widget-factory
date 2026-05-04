@@ -39,11 +39,14 @@ export const useToolsData = (showRemovedItems: boolean = false) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Subscribe to tools cache (populated by useCombinedAssets) without triggering a fetch.
-  // enabled:false prevents any network request; we only read what's already cached.
+  // Subscribe to tools cache. If the cache is already populated (e.g. user visited
+  // Combined Assets), use it directly. If empty, trigger a fetch so the selector works
+  // even when opened without visiting Combined Assets first.
   const { data: toolsData = [] } = useQuery<Tool[]>({
     ...toolsQueryConfig,
-    enabled: false,
+    // Enable fetching when cache is empty so AssetSelector always has data
+    enabled: true,
+    staleTime: 5 * 60 * 1000, // 5 minutes — don't refetch if recently loaded
   });
 
   // Filter out removed items if needed

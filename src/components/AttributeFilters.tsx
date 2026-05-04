@@ -97,57 +97,57 @@ export function AttributeFilters({
         </CardTitle>
       </CardHeader>
       {!collapsed && (
-      <CardContent className="space-y-6">
-        {/* Date Filters */}
-        <div className="space-y-3">
-          <Label className="flex items-center gap-2 text-sm font-medium">
-            <CalendarDays className="h-4 w-4" />
-            Time Range
-          </Label>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="startDate" className="text-xs text-muted-foreground">
-                Start Date
-              </Label>
-              <Input
-                id="startDate"
-                type="date"
-                value={startDate}
-                onChange={(e) => onStartDateChange(e.target.value)}
-                className="text-sm"
-              />
-            </div>
-            <div>
-              <Label htmlFor="endDate" className="text-xs text-muted-foreground">
-                End Date
-              </Label>
-              <Input
-                id="endDate"
-                type="date"
-                value={endDate}
-                onChange={(e) => onEndDateChange(e.target.value)}
-                className="text-sm"
-              />
+      <CardContent>
+        {/* Horizontal layout: date range | user selection | apply button */}
+        <div className="flex flex-col md:flex-row md:items-start gap-6">
+          {/* Date Filters */}
+          <div className="space-y-3 md:w-64 shrink-0">
+            <Label className="flex items-center gap-2 text-sm font-medium">
+              <CalendarDays className="h-4 w-4" />
+              Time Range
+            </Label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="startDate" className="text-xs text-muted-foreground">
+                  Start Date
+                </Label>
+                <Input
+                  id="startDate"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => onStartDateChange(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+              <div>
+                <Label htmlFor="endDate" className="text-xs text-muted-foreground">
+                  End Date
+                </Label>
+                <Input
+                  id="endDate"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => onEndDateChange(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* User Selection */}
-        <div className="space-y-3">
-          <Label className="flex items-center gap-2 text-sm font-medium">
-            <Users className="h-4 w-4" />
-            Select People ({selectedUsers.length} selected)
-          </Label>
-          
-          <div className="space-y-2">
-            <Input
-              placeholder="Search users..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="text-sm"
-            />
+          {/* User Selection */}
+          <div className="space-y-3 flex-1 min-w-0">
+            <Label className="flex items-center gap-2 text-sm font-medium">
+              <Users className="h-4 w-4" />
+              Select People ({selectedUsers.length} selected)
+            </Label>
             
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Search users..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="text-sm w-48"
+              />
               <Button
                 variant="outline"
                 size="sm"
@@ -165,37 +165,42 @@ export function AttributeFilters({
                 Clear All
               </Button>
             </div>
+
+            <div className="max-h-28 overflow-y-auto border rounded-md p-2">
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                {filteredUsers.map(user => (
+                  <div key={user.userId} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={user.userId}
+                      checked={selectedUsers.includes(user.userId)}
+                      onCheckedChange={() => handleUserToggle(user.userId)}
+                    />
+                    <Label
+                      htmlFor={user.userId}
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      {user.userName}
+                      <span className="text-xs text-muted-foreground ml-1">
+                        ({user.userRole})
+                      </span>
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div className="max-h-40 overflow-y-auto space-y-2 border rounded-md p-2">
-            {filteredUsers.map(user => (
-              <div key={user.userId} className="flex items-center space-x-2">
-                <Checkbox
-                  id={user.userId}
-                  checked={selectedUsers.includes(user.userId)}
-                  onCheckedChange={() => handleUserToggle(user.userId)}
-                />
-                <Label
-                  htmlFor={user.userId}
-                  className="text-sm font-normal cursor-pointer flex-1"
-                >
-                  {user.userName}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    ({user.userRole})
-                  </span>
-                </Label>
-              </div>
-            ))}
+          {/* Apply Button */}
+          <div className="md:pt-7 shrink-0">
+            <Button 
+              onClick={onApplyFilters}
+              size="sm"
+              className="w-full md:w-auto"
+            >
+              Apply Filters
+            </Button>
           </div>
         </div>
-
-        <Button 
-          onClick={onApplyFilters} 
-          className="w-full"
-          size="sm"
-        >
-          Apply Filters
-        </Button>
       </CardContent>
       )}
     </Card>

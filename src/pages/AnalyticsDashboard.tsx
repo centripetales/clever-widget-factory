@@ -162,8 +162,8 @@ export default function AnalyticsDashboard() {
   // Components will show loading states individually while data fetches in background
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-gray-50 p-4 overflow-x-hidden">
+      <div className="max-w-7xl mx-auto space-y-6 w-full">
         {/* Header */}
         <Card>
           <CardHeader>
@@ -219,103 +219,98 @@ export default function AnalyticsDashboard() {
           </Card>
         </div>
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Filters Sidebar */}
-          <div className="lg:col-span-1">
-            <AttributeFilters
-              userAnalytics={allUserAnalytics}
-              selectedUsers={selectedUsers}
-              onSelectedUsersChange={setSelectedUsers}
-              startDate={startDate}
-              endDate={endDate}
-              onStartDateChange={setStartDate}
-              onEndDateChange={setEndDate}
-              onApplyFilters={handleApplyFilters}
-              collapsed={filtersCollapsed}
-              onToggleCollapsed={() => setFiltersCollapsed(!filtersCollapsed)}
+        {/* Filters — full width, affects all charts below */}
+        <AttributeFilters
+          userAnalytics={allUserAnalytics}
+          selectedUsers={selectedUsers}
+          onSelectedUsersChange={setSelectedUsers}
+          startDate={startDate}
+          endDate={endDate}
+          onStartDateChange={setStartDate}
+          onEndDateChange={setEndDate}
+          onApplyFilters={handleApplyFilters}
+          collapsed={filtersCollapsed}
+          onToggleCollapsed={() => setFiltersCollapsed(!filtersCollapsed)}
+          organizationMembers={organizationMembers}
+        />
+
+        {/* Charts — full width */}
+        <div className="space-y-6">
+          {/* Radar Chart */}
+          {radarSelectedUsers.length > 0 ? (
+            <AttributeRadarChart
+              actionAnalytics={actionAnalytics}
+              issueAnalytics={selectedIssueAnalytics}
+              selectedUsers={radarSelectedUsers}
               organizationMembers={organizationMembers}
             />
-          </div>
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <div className="text-muted-foreground">
+                  <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <h3 className="text-lg font-medium mb-2">No Users Selected</h3>
+                  <p>Select users from the filters to view their strategic attributes comparison.</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Charts and Actions */}
-          <div className="lg:col-span-3 space-y-6">
-            {/* Radar Chart */}
-            {radarSelectedUsers.length > 0 ? (
-              <AttributeRadarChart
-                actionAnalytics={actionAnalytics}
-                issueAnalytics={selectedIssueAnalytics}
-                selectedUsers={radarSelectedUsers}
-                organizationMembers={organizationMembers}
-              />
-            ) : (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <div className="text-muted-foreground">
-                    <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <h3 className="text-lg font-medium mb-2">No Users Selected</h3>
-                    <p>Select users from the filters to view their strategic attributes comparison.</p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+          {/* Scored Actions List */}
+          <ScoredActionsList scoredActions={scoredActions} isLoading={isLoadingScoredActions} />
 
-            {/* Scored Actions List */}
-            <ScoredActionsList scoredActions={scoredActions} isLoading={isLoadingScoredActions} />
+          {/* Proactive vs Reactive Chart */}
+          <ProactiveVsReactiveChart
+            data={proactiveVsReactiveData}
+            isLoading={isLoadingProactiveData}
+            onDayClick={getDayActions}
+          />
 
-            {/* Proactive vs Reactive Chart */}
-            <ProactiveVsReactiveChart
-              data={proactiveVsReactiveData}
-              isLoading={isLoadingProactiveData}
-              onDayClick={getDayActions}
-            />
-
-            {/* Inventory Tracking: toggle between stacked chart and heatmap */}
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">Inventory Tracking View</div>
-              <div className="flex items-center gap-2">
-                <Button variant={showHeatmap ? 'outline' : 'default'} size="sm" onClick={() => setShowHeatmap(false)}>
-                  Chart
-                </Button>
-                <Button variant={showHeatmap ? 'default' : 'outline'} size="sm" onClick={() => setShowHeatmap(true)}>
-                  Heatmap
-                </Button>
-              </div>
+          {/* Inventory Tracking: toggle between stacked chart and heatmap */}
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-muted-foreground">Inventory Tracking View</div>
+            <div className="flex items-center gap-2">
+              <Button variant={showHeatmap ? 'outline' : 'default'} size="sm" onClick={() => setShowHeatmap(false)}>
+                Chart
+              </Button>
+              <Button variant={showHeatmap ? 'default' : 'outline'} size="sm" onClick={() => setShowHeatmap(true)}>
+                Heatmap
+              </Button>
             </div>
-            {showHeatmap ? (
-              <InventoryUsageHeatmap
-                data={heatmapData}
-                isLoading={isLoadingHeatmap}
-                days={heatmapDays}
-                onCellClick={(cell) => {
-                  const params = new URLSearchParams({ date: cell.dayKey, users: cell.personId });
-                  navigate(`/combined-assets?view=stock&${params.toString()}`);
-                }}
-              />
-            ) : (
-              <InventoryTrackingChart data={inventoryTrackingData} isLoading={isLoadingInventoryTracking} />
-            )}
-
-            {/* Action Updates (stacked bar) */}
-            <ActionUpdatesChart
-              startDate={effectiveStartDate}
-              endDate={effectiveEndDate}
-              selectedUsers={radarSelectedUsers}
-            />
-
-            {/* Observations (stacked bar) */}
-            <ObservationsChart
-              startDate={effectiveStartDate}
-              endDate={effectiveEndDate}
-              selectedUsers={radarSelectedUsers}
-            />
-
-            <EnergeiaSchema
-              startDate={effectiveStartDate}
-              endDate={effectiveEndDate}
-              selectedUsers={radarSelectedUsers}
-            />
           </div>
+          {showHeatmap ? (
+            <InventoryUsageHeatmap
+              data={heatmapData}
+              isLoading={isLoadingHeatmap}
+              days={heatmapDays}
+              onCellClick={(cell) => {
+                const params = new URLSearchParams({ date: cell.dayKey, users: cell.personId });
+                navigate(`/combined-assets?view=stock&${params.toString()}`);
+              }}
+            />
+          ) : (
+            <InventoryTrackingChart data={inventoryTrackingData} isLoading={isLoadingInventoryTracking} />
+          )}
+
+          {/* Action Updates (stacked bar) */}
+          <ActionUpdatesChart
+            startDate={effectiveStartDate}
+            endDate={effectiveEndDate}
+            selectedUsers={radarSelectedUsers}
+          />
+
+          {/* Observations (stacked bar) */}
+          <ObservationsChart
+            startDate={effectiveStartDate}
+            endDate={effectiveEndDate}
+            selectedUsers={radarSelectedUsers}
+          />
+
+          <EnergeiaSchema
+            startDate={effectiveStartDate}
+            endDate={effectiveEndDate}
+            selectedUsers={radarSelectedUsers}
+          />
         </div>
       </div>
     </div>

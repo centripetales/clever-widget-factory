@@ -1621,7 +1621,7 @@ export function UnifiedActionDialog({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex gap-3 pt-4">
+          <div className="flex flex-wrap gap-3 pt-4 min-w-0">
             {!isCreating && action?.id && (
               <Button
                 variant="outline"
@@ -1636,7 +1636,7 @@ export function UnifiedActionDialog({
             <Button
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="flex-1"
+              className="flex-1 min-w-0"
             >
               Cancel
             </Button>
@@ -1644,7 +1644,7 @@ export function UnifiedActionDialog({
               <Button
                 onClick={handleReadyForReview}
                 disabled={isCompleting || isSubmitting}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="flex-1 min-w-0 bg-emerald-600 hover:bg-emerald-700 text-white"
               >
                 <CheckCircle className="h-4 w-4 mr-2" />
                 {isCompleting ? 'Marking Complete...' : 'Done'}
@@ -1653,7 +1653,7 @@ export function UnifiedActionDialog({
             <Button
               onClick={handleSubmit}
               disabled={isSubmitting || isUploading || isLocalUploading}
-              className="flex-1"
+              className="flex-1 min-w-0"
             >
               {isSubmitting ? (isCreating ? 'Creating...' : 'Saving...') : (isCreating ? 'Create Action' : 'Save Changes')}
             </Button>

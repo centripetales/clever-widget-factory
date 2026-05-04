@@ -508,12 +508,13 @@ describe('useStateMutations', () => {
       await result.current.createState(data);
 
       await waitFor(() => {
-        // Should invalidate filtered states cache
+        // Should invalidate filtered states cache (scoped to the specific entity)
         expect(invalidateSpy).toHaveBeenCalledWith({
           queryKey: ['states', 'action', 'action-1'],
         });
-        // Should invalidate all states cache
-        expect(invalidateSpy).toHaveBeenCalledWith({
+        // Should NOT invalidate the broad ['states'] key — this was the bug.
+        // Broad invalidation caused a cascade of refetches across all useStates queries.
+        expect(invalidateSpy).not.toHaveBeenCalledWith({
           queryKey: ['states'],
         });
       });
@@ -540,6 +541,179 @@ describe('useStateMutations', () => {
         expect(invalidateSpy).toHaveBeenCalledWith({
           queryKey: ['states'],
         });
+      });
+    });
+
+    // PRESERVATION TESTS (Task 2)
+    // These tests encode the BASELINE behavior that must be preserved after the fix.
+    // They MUST PASS on unfixed code (confirms baseline) and MUST PASS after the fix (confirms no regression).
+    //
+    // Validates: Requirements 3.1, 3.5, 3.6
+
+    it('[PRESERVATION] createState should always invalidate (or update) the filtered cache key for any entity_type/entity_id combination', async () => {
+      // Property: for any entity_type/entity_id filter combination, after createState succeeds,
+      // the filtered cache key statesQueryKey(filters) is always invalidated or updated.
+      // This is the baseline behavior to preserve — the observation must become visible in the UI.
+      const filterCombinations = [
+        { entity_type: 'action', entity_id: 'action-1' },
+        { entity_type: 'action', entity_id: 'action-abc' },
+        { entity_type: 'part', entity_id: 'part-42' },
+        { entity_type: 'tool', entity_id: 'tool-99' },
+        { entity_type: 'issue', entity_id: 'issue-7' },
+      ];
+
+      for (const filters of filterCombinations) {
+        // Fresh queryClient for each combination
+        const localQueryClient = new QueryClient({
+          defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        });
+        const localWrapper = ({ children }: { children: React.ReactNode }) => (
+          <QueryClientProvider client={localQueryClient}>{children}</QueryClientProvider>
+        );
+
+        const mockState = {
+          id: `state-${filters.entity_id}`,
+          observation_text: 'Test observation',
+          photos: [],
+          links: [{ entity_type: filters.entity_type, entity_id: filters.entity_id }],
+        };
+        vi.mocked(stateService.createState).mockResolvedValue(mockState as any);
+
+        const invalidateSpy = vi.spyOn(localQueryClient, 'invalidateQueries');
+
+        const { result } = renderHook(
+          () => useStateMutations(filters),
+          { wrapper: localWrapper }
+        );
+
+        const data: CreateObservationData = {
+          state_text: 'Test observation',
+          photos: [],
+          links: [{ entity_type: filters.entity_type, entity_id: filters.entity_id }],
+        };
+
+        await result.current.createState(data);
+
+        await waitFor(() => {
+          // The filtered cache key MUST be invalidated (or updated) after createState
+          // This ensures the new observation becomes visible in the UI for the specific entity
+          const filteredKeyInvalidated = invalidateSpy.mock.calls.some(
+            call => JSON.stringify(call[0]) === JSON.stringify({ queryKey: ['states', filters.entity_type, filters.entity_id] })
+          );
+          const filteredCacheUpdated = localQueryClient.getQueryData<any[]>(
+            ['states', filters.entity_type, filters.entity_id]
+          ) !== undefined;
+
+          // Either the key was invalidated OR the cache was directly updated (optimistic)
+          expect(filteredKeyInvalidated || filteredCacheUpdated).toBe(true);
+        });
+      }
+    });
+
+    it('[PRESERVATION] deleteState should always invalidate BOTH filtered AND broad statesQueryKey()', async () => {
+      // Property: deleteState must continue to invalidate both the scoped and broad cache keys.
+      // This behavior is UNCHANGED by the fix — only createState's broad invalidation is removed.
+      vi.mocked(stateService.deleteState).mockResolvedValue(undefined);
+
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      const { result } = renderHook(
+        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        { wrapper }
+      );
+
+      await result.current.deleteState('state-to-delete');
+
+      await waitFor(() => {
+        // Filtered key MUST be invalidated
+        expect(invalidateSpy).toHaveBeenCalledWith({
+          queryKey: ['states', 'action', 'action-1'],
+        });
+        // Broad key MUST ALSO be invalidated (delete behavior is unchanged)
+        expect(invalidateSpy).toHaveBeenCalledWith({
+          queryKey: ['states'],
+        });
+      });
+    });
+
+    // BUG CONDITION EXPLORATION TEST (Task 1)
+    // This test encodes the EXPECTED (fixed) behavior.
+    // It MUST FAIL on unfixed code — failure confirms the bug exists.
+    // After the fix is implemented (Task 3), this test MUST PASS.
+    //
+    // Bug condition: createState with filters set
+    //   - invalidates the broad ['states'] key (causes cascade refetch) ← BUG
+    //   - does NOT update the filtered cache optimistically (no onMutate) ← BUG
+    //
+    // Counterexamples on unfixed code:
+    //   1. invalidateQueries IS called with { queryKey: ['states'] } on every create
+    //   2. filtered cache ['states','action','action-1'] is NOT updated until server responds
+    //
+    // Validates: Requirements 1.2, 1.3
+    it('[BUG CONDITION] createState should NOT invalidate broad statesQueryKey() and should update filtered cache optimistically', async () => {
+      const mockState = {
+        id: 'state-server-1',
+        observation_text: 'New observation',
+        photos: [],
+        links: [{ entity_type: 'action', entity_id: 'action-1' }],
+      };
+
+      // Use a delayed mock so we can inspect the cache mid-flight
+      let resolveCreate: (value: typeof mockState) => void;
+      const createPromise = new Promise<typeof mockState>((resolve) => {
+        resolveCreate = resolve;
+      });
+      vi.mocked(stateService.createState).mockReturnValue(createPromise as any);
+
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      // Pre-populate the filtered cache with an existing observation
+      const existingState = {
+        id: 'state-existing',
+        observation_text: 'Existing observation',
+        photos: [],
+        links: [],
+        captured_at: '2024-01-01T00:00:00Z',
+      };
+      queryClient.setQueryData(['states', 'action', 'action-1'], [existingState]);
+
+      const { result } = renderHook(
+        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        { wrapper }
+      );
+
+      const data: CreateObservationData = {
+        state_text: 'New observation',
+        photos: [],
+        links: [{ entity_type: 'action', entity_id: 'action-1' }],
+      };
+
+      // Fire the create (don't await — we want to inspect mid-flight)
+      const createCall = result.current.createState(data);
+
+      // ASSERTION 1: Filtered cache should be updated optimistically BEFORE server responds
+      // (i.e., onMutate should have prepended a provisional observation)
+      await waitFor(() => {
+        const filteredStates = queryClient.getQueryData<any[]>(['states', 'action', 'action-1']);
+        // After optimistic update, the new observation should appear in the filtered cache
+        // before the server responds. The provisional item has id starting with 'optimistic-'.
+        const hasOptimisticEntry = filteredStates?.some(s => s.id?.startsWith('optimistic-'));
+        expect(hasOptimisticEntry).toBe(true);
+      });
+
+      // Resolve the server response
+      resolveCreate!(mockState as any);
+      await createCall;
+
+      // ASSERTION 2: The broad ['states'] key should NOT be invalidated
+      // (only the scoped ['states', 'action', 'action-1'] key should be invalidated)
+      expect(invalidateSpy).not.toHaveBeenCalledWith({
+        queryKey: ['states'],
+      });
+
+      // ASSERTION 3: The filtered key SHOULD be invalidated (to refresh with real server id)
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ['states', 'action', 'action-1'],
       });
     });
   });
