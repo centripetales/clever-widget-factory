@@ -43,7 +43,9 @@ import {
   Flag,
   Copy,
   Sparkles,
-  Search
+  Search,
+  Maximize2,
+  Minimize2
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useAuth } from "@/hooks/useCognitoAuth";
@@ -265,6 +267,7 @@ export function UnifiedActionDialog({
   const [isInImplementationMode, setIsInImplementationMode] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
+  const [isMaxwellExpanded, setIsMaxwellExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLocalUploading, setIsLocalUploading] = useState(false);
   const uploadCompletedTimeRef = useRef<number>(0);
@@ -1180,12 +1183,14 @@ export function UnifiedActionDialog({
             className={`grid transition-all duration-300 ease-in-out ${isMaxwellOpen && !isCreating && action?.id ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
           >
             <div className="overflow-hidden">
-              <div className="rounded-xl border overflow-hidden" style={{ height: '420px' }}>
+              <div className="rounded-xl border overflow-hidden" style={{ height: isMaxwellExpanded ? 'calc(90vh - 140px)' : '600px' }}>
                 <MaxwellInlinePanel
                   context={maxwellContext}
                   onClose={() => onMaxwellOpenChange?.(false)}
                   className="h-full rounded-none border-0"
                   hideHeader
+                  isExpanded={isMaxwellExpanded}
+                  onExpandToggle={() => setIsMaxwellExpanded(v => !v)}
                 />
               </div>
             </div>

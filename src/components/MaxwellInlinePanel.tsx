@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, KeyboardEvent } from 'react';
-import { X, Send, RefreshCw, Loader2, Copy, Check, Code } from 'lucide-react';
+import { X, Send, RefreshCw, Loader2, Copy, Check, Code, Maximize2, Minimize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage } from '@/hooks/useMaxwell';
@@ -36,6 +36,10 @@ export interface MaxwellInlinePanelProps {
   hideHeader?: boolean;
   /** Hide the starter question prompts */
   hidePrompts?: boolean;
+  /** Whether the panel is currently in expanded/maximized mode */
+  isExpanded?: boolean;
+  /** Callback to toggle expanded mode */
+  onExpandToggle?: () => void;
 }
 
 function MessageBubble({ message }: { message: MaxwellMessage }) {
@@ -130,7 +134,7 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
  * MaxwellInlinePanel — renders inline inside any container (no portal, no fixed positioning).
  * Safe to use inside Radix dialogs, sheets, or any other overlay.
  */
-export function MaxwellInlinePanel({ context, onClose, className, hideHeader = false, hidePrompts = false }: MaxwellInlinePanelProps) {
+export function MaxwellInlinePanel({ context, onClose, className, hideHeader = false, hidePrompts = false, isExpanded = false, onExpandToggle }: MaxwellInlinePanelProps) {
   const { saveConversation, clearConversation } = useMaxwellStorage();
   const [input, setInput] = useState('');
   const [copiedAll, setCopiedAll] = useState(false);
@@ -234,6 +238,16 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
                 </button>
               </>
             )}
+            {onExpandToggle && (
+              <button
+                onClick={onExpandToggle}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+                aria-label={isExpanded ? 'Collapse Maxwell' : 'Expand Maxwell'}
+                title={isExpanded ? 'Collapse' : 'Expand'}
+              >
+                {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </button>
+            )}
             <button
               onClick={onClose}
               className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
@@ -245,22 +259,36 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
         </div>
       )}
 
-      {hideHeader && messages.length > 0 && (
+      {hideHeader && (
         <div className="flex items-center justify-end gap-1 px-2 pt-1 flex-shrink-0">
-          <button
-            onClick={handleCopyAll}
-            className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
-            title="Copy conversation"
-          >
-            {copiedAll ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            onClick={handleClear}
-            className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
-            title="Clear conversation"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
+          {messages.length > 0 && (
+            <>
+              <button
+                onClick={handleCopyAll}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+                title="Copy conversation"
+              >
+                {copiedAll ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                onClick={handleClear}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+                title="Clear conversation"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+          {onExpandToggle && (
+            <button
+              onClick={onExpandToggle}
+              className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              aria-label={isExpanded ? 'Collapse Maxwell' : 'Expand Maxwell'}
+              title={isExpanded ? 'Collapse' : 'Expand'}
+            >
+              {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+          )}
         </div>
       )}
 

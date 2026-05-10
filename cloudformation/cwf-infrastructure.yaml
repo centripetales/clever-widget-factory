@@ -8,6 +8,14 @@ Parameters:
     Description: PostgreSQL database password
     Default: 'CWF_Dev_2025!'
 
+  CentripetalesCertificateArn:
+    Type: String
+    Description: ACM certificate ARN for HTTPS on the centripetales.com CloudFront distribution (must be in us-east-1)
+
+  StargazerFarmCertificateArn:
+    Type: String
+    Description: ACM certificate ARN for HTTPS on the stargazer-farm.com CloudFront distribution (must be in us-east-1)
+
 Resources:
   # ==================== VPC & NETWORKING ====================
   
@@ -368,6 +376,132 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
 
+  # ==================== S3 STATIC WEBSITE BUCKETS ====================
+
+  CentripetalesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: centripetales-bucket
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      Tags:
+        - Key: Name
+          Value: centripetales-bucket
+
+  CentripetalesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CentripetalesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${CentripetalesBucket.Arn}/*'
+
+  StargazerFarmBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: stargazer-farm-bucket
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      Tags:
+        - Key: Name
+          Value: stargazer-farm-bucket
+
+  StargazerFarmBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StargazerFarmBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${StargazerFarmBucket.Arn}/*'
+
+  # ==================== CLOUDFRONT DISTRIBUTIONS ====================
+
+  CentripetalesDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - centripetales.com
+        Origins:
+          - Id: CentripetalesBucketOrigin
+            DomainName: !Sub 'centripetales-bucket.s3-website-${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: CentripetalesBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized managed policy
+          AllowedMethods:
+            - GET
+            - HEAD
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CentripetalesCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        HttpVersion: http2
+      Tags:
+        - Key: Name
+          Value: centripetales-distribution
+
+  StargazerFarmDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - stargazer-farm.com
+        Origins:
+          - Id: StargazerFarmBucketOrigin
+            DomainName: !Sub 'stargazer-farm-bucket.s3-website-${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: StargazerFarmBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized managed policy
+          AllowedMethods:
+            - GET
+            - HEAD
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref StargazerFarmCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        HttpVersion: http2
+      Tags:
+        - Key: Name
+          Value: stargazer-farm-distribution
+
 Outputs:
   VPCId:
     Description: VPC ID
@@ -392,3 +526,19 @@ Outputs:
   EmbeddingsQueueUrl:
     Description: SQS Queue URL for embeddings
     Value: !Ref EmbeddingsQueue
+
+  CentripetalesDistributionId:
+    Description: CloudFront distribution ID for centripetales.com
+    Value: !Ref CentripetalesDistribution
+
+  CentripetalesDomainName:
+    Description: CloudFront domain name for centripetales.com
+    Value: !GetAtt CentripetalesDistribution.DomainName
+
+  StargazerFarmDistributionId:
+    Description: CloudFront distribution ID for stargazer-farm.com
+    Value: !Ref StargazerFarmDistribution
+
+  StargazerFarmDomainName:
+    Description: CloudFront domain name for stargazer-farm.com
+    Value: !GetAtt StargazerFarmDistribution.DomainName
