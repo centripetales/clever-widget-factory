@@ -11,14 +11,10 @@ import { useToast } from '@/hooks/use-toast';
 import { useOrganizationId } from '@/hooks/useOrganizationId';
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { APP_VERSION, getBrowserInfo } from '@/lib/version';
-import { ExternalLink, Info, AlertTriangle, Plus, Camera, X } from 'lucide-react';
+import { ExternalLink, Info, Camera, X } from 'lucide-react';
 import { TOOL_CONDITION_OPTIONS } from '@/lib/constants';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { useToolIssues } from '@/hooks/useGenericIssues';
-import { IssueCard } from '@/components/IssueCard';
-import { IssueResolutionDialog } from '@/components/IssueResolutionDialog';
-import { useImageUpload } from '@/hooks/useImageUpload';
-import type { Tool } from '@/hooks/tools/useToolsData';
+import { useImageUpload } from '@/hooks/useImageUpload';import type { Tool } from '@/hooks/tools/useToolsData';
 
 const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -37,7 +33,6 @@ type CheckoutRecord = {
 };
 
 type CheckInForm = {
-  tool_issues: string;
   notes: string;
   reflection: string;
   hours_used: string;
@@ -67,22 +62,16 @@ export function ToolCheckInDialog({ tool, open, onOpenChange, onSuccess }: ToolC
     checkin_reason: ''
   });
   const [showValidation, setShowValidation] = useState(false);
-  const [selectedIssueForResolution, setSelectedIssueForResolution] = useState<any>(null);
-  const [isResolutionDialogOpen, setIsResolutionDialogOpen] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState<File[]>([]);
   const [uploadedPhotoUrls, setUploadedPhotoUrls] = useState<string[]>([]);
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
-  const [showNewIssueForm, setShowNewIssueForm] = useState(false);
   
-  // Use the new issues hook
-  const { issues, isLoading: isLoadingIssues, fetchIssues, createIssuesFromText } = useToolIssues(tool?.id || null);
 
   useEffect(() => {
     if (tool && open) {
       fetchCheckout();
       // Reset form and initialize known issues
       setForm({
-        tool_issues: '',
         notes: '',
         reflection: '',
         hours_used: '',
@@ -213,7 +202,6 @@ export function ToolCheckInDialog({ tool, open, onOpenChange, onSuccess }: ToolC
         checkout_id: checkout.id,
         tool_id: checkout.tool_id,
         user_id: user?.id,
-        problems_reported: form.tool_issues || null,
         notes: form.notes || null,
         sop_best_practices: form.reflection,
         what_did_you_do: form.reflection,
@@ -234,24 +222,6 @@ export function ToolCheckInDialog({ tool, open, onOpenChange, onSuccess }: ToolC
       await apiService.post('/checkins', checkinData);
 
       await apiService.put(`/checkouts/${checkout.id}`, { is_returned: true });
-
-      if (form.tool_issues.trim()) {
-        try {
-          await apiService.post('/issues', {
-            context_type: 'tool',
-            context_id: tool.id,
-            reported_by: user?.userId,
-            description: form.tool_issues.trim(),
-            issue_type: 'general',
-            status: 'active',
-            related_checkout_id: checkout.id,
-            report_photo_urls: uploadedPhotoUrls.length > 0 ? uploadedPhotoUrls : [],
-            workflow_status: 'reported'
-          });
-        } catch (issueError) {
-          console.error('Error creating issue from check-in:', issueError);
-        }
-      }
 
       const locationLabel = tool.legacy_storage_vicinity
         ? tool.storage_location
@@ -360,141 +330,6 @@ export function ToolCheckInDialog({ tool, open, onOpenChange, onSuccess }: ToolC
 
         <TooltipProvider>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Current Active Issues */}
-            {issues.length > 0 && (
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="h-4 w-4 text-orange-500" />
-                  <Label>Current Active Issues ({issues.length})</Label>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="button" className="touch-manipulation">
-                        <Info className="h-4 w-4 text-muted-foreground" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" align="center" className="max-w-xs">
-                      <p>Mark issues as resolved with photo evidence and root cause analysis, or remove if incorrectly reported</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {issues.map((issue) => (
-                    <IssueCard
-                      key={issue.id}
-                      issue={issue as any}
-                      onResolve={(issue) => {
-                        setSelectedIssueForResolution(issue);
-                        setIsResolutionDialogOpen(true);
-                      }}
-                      onRefresh={fetchIssues}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* New Issues Section */}
-            <div>
-              {!showNewIssueForm ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowNewIssueForm(true)}
-                  className="w-full"
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Report New Issue
-                </Button>
-              ) : (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Plus className="h-4 w-4 text-green-600" />
-                      <Label htmlFor="tool_issues">Report New Issues</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button type="button" className="touch-manipulation">
-                            <Info className="h-4 w-4 text-muted-foreground" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" align="center" className="max-w-xs">
-                          <p>Report new problems discovered during use. Each line will become a separate tracked issue.</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setShowNewIssueForm(false);
-                        setForm(prev => ({ ...prev, tool_issues: '' }));
-                      }}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  
-                  <div className="bg-muted p-4 rounded-lg space-y-3">
-                    <p className="text-sm">
-                      Describe any issues discovered during tool use. Each separate issue should be described clearly.
-                    </p>
-                    
-                    <div className="space-y-2">
-                      <Textarea
-                        id="tool_issues"
-                        value={form.tool_issues}
-                        onChange={(e) => setForm(prev => ({ ...prev, tool_issues: e.target.value }))}
-                        placeholder="Describe any problems, damage, or issues found during use..."
-                        rows={3}
-                      />
-                    </div>
-
-                    {/* Photo Upload */}
-                    <div className="space-y-2">
-                      <Label htmlFor="issuePhotos">Upload Photos of Issues (Optional)</Label>
-                      <div className="space-y-3">
-                        {uploadedPhotoUrls.length > 0 && (
-                          <div className="grid grid-cols-3 gap-2">
-                            {uploadedPhotoUrls.map((url, index) => (
-                              <div key={index} className="relative">
-                                <img 
-                                  src={url} 
-                                  alt={`Issue photo ${index + 1}`} 
-                                  className="w-full h-20 object-cover rounded-lg"
-                                />
-                                <Button
-                                  type="button"
-                                  variant="destructive"
-                                  size="sm"
-                                  className="absolute -top-2 -right-2 h-5 w-5 p-0"
-                                  onClick={() => removePhoto(index)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        <Input
-                          id="issuePhotos"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          onChange={handlePhotoUpload}
-                          disabled={isUploadingImages}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Document any damage, wear, or problems with photos (optional)
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
             {tool.has_motor && (
               <div>
                 <Label htmlFor="hours_used">Hours Used</Label>
@@ -636,17 +471,6 @@ export function ToolCheckInDialog({ tool, open, onOpenChange, onSuccess }: ToolC
           </form>
         </TooltipProvider>
       </DialogContent>
-      
-      {/* Issue Resolution Dialog */}
-      <IssueResolutionDialog
-        issue={selectedIssueForResolution}
-        open={isResolutionDialogOpen}
-        onOpenChange={setIsResolutionDialogOpen}
-        onSuccess={() => {
-          fetchIssues();
-          setSelectedIssueForResolution(null);
-        }}
-      />
     </Dialog>
   );
 }

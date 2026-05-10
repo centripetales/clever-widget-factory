@@ -7,7 +7,6 @@ import {
   actionsQueryKey,
   completedActionsQueryKey,
   allActionsQueryKey,
-  issuesQueryKey,
   missionsQueryKey,
   explorationsQueryKey,
   experiencesQueryKey,
@@ -52,8 +51,7 @@ export function useCacheInvalidation() {
           break;
 
         case 'issue':
-          // issuesQueryKey() produces ['issues', ...filters] — invalidate any key starting with 'issues'
-          queryClient.invalidateQueries({ queryKey: [issuesQueryKey()[0]] });
+          // Issue system removed — no-op, issues no longer tracked in cache
           break;
 
         case 'mission':

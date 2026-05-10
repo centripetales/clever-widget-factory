@@ -23,14 +23,12 @@ export interface BaseAction {
   // Parent relationship fields - only one should be set
   mission_id?: string | null;
   asset_id?: string | null;
-  linked_issue_id?: string | null;
   
   // Additional optional fields
   required_tools?: string[];
   required_tool_serial_numbers?: string[];
   required_stock?: { part_id: string; quantity: number; part_name: string; }[];
   attachments?: string[];
-  issue_reference?: string | null;
   scoring_data?: any;
   plan_commitment?: boolean | null;
   policy_agreed_at?: string | null;
@@ -87,7 +85,7 @@ export interface Profile {
 }
 
 export interface ActionCreationContext {
-  type: 'mission' | 'issue' | 'asset';
+  type: 'mission' | 'asset';
   parentId?: string;
   parentTitle?: string;
   prefilledData?: Partial<BaseAction>;
@@ -112,25 +110,17 @@ export const createMissionAction = (missionId: string): Partial<BaseAction> => (
 });
 
 export const createIssueAction = (
-  issueId: string, 
-  issueDescription?: string, 
-  toolId?: string
+  _issueId: string,
+  _issueDescription?: string,
+  _toolId?: string
 ): Partial<BaseAction> => ({
-  linked_issue_id: issueId,
+  // Issue system removed - returns empty action
   status: 'not_started',
   title: '',
-  description: issueDescription || '',
-  expected_state: '',
-  state_text: issueDescription || '', // Logical field mapping
-  policy: '',
-  policy_text: '', // Logical field mapping
-  summary_policy_text: '',
-  assigned_to: null,
-  participants: [],
-  required_tools: toolId ? [toolId] : [],
+  description: '',
+  required_tools: [],
   required_stock: [],
   attachments: [],
-  issue_reference: issueDescription ? `Issue: ${issueDescription.split('\n')[0]}` : null
 });
 
 export const createAssetAction = (assetId: string): Partial<BaseAction> => ({
@@ -172,15 +162,13 @@ export const validateActionRelationship = (action: Partial<BaseAction>): boolean
   const relationships = [
     action.mission_id,
     action.asset_id,
-    action.linked_issue_id
   ].filter(Boolean);
   
-  return relationships.length <= 1; // Exactly zero or one parent relationship
+  return relationships.length <= 1;
 };
 
 export const getActionTypeFromAction = (action: BaseAction): ActionCreationContext['type'] => {
   if (action.mission_id) return 'mission';
-  if (action.linked_issue_id) return 'issue';
   return 'asset';
 };
 

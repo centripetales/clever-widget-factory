@@ -219,11 +219,6 @@ export function UnifiedActionDialog({
         queryClient.invalidateQueries({ queryKey: ['tools'] });
       }
       
-      // Also invalidate issue-specific actions cache if this action is linked to an issue
-      if (variables.linked_issue_id) {
-        queryClient.invalidateQueries({ queryKey: ['issue_actions', variables.linked_issue_id] });
-      }
-      
       // Show appropriate toast message based on action status
       const isCompleting = variables.status === 'completed' || updatedAction?.status === 'completed';
       toast({
@@ -472,9 +467,6 @@ export function UnifiedActionDialog({
       return action?.title || 'Edit Action';
     }
     
-    if (context?.type === 'issue') {
-      return 'Create Action from Issue';
-    }
     if (context?.type === 'mission') {
       return 'Create Project Action';
     }
@@ -485,7 +477,7 @@ export function UnifiedActionDialog({
   };
 
   const showIssueReference = () => {
-    return formData.linked_issue_id || formData.issue_reference;
+    return false; // Issue system removed
   };
 
   // Helper to check if there are implementation updates
@@ -989,8 +981,6 @@ export function UnifiedActionDialog({
         attachments: Array.isArray(formData.attachments) ? formData.attachments : [],
         mission_id: formData.mission_id || null,
         asset_id: formData.asset_id || null,
-        linked_issue_id: formData.linked_issue_id || null,
-        issue_reference: formData.issue_reference || null,
         status: actionStatus,
         plan_commitment: formData.plan_commitment || false,
         policy_agreed_at: formData.policy_agreed_at || null,
@@ -1684,7 +1674,6 @@ export function UnifiedActionDialog({
                   mission_id: missionId || null,
                   // Clear other parent relationships when linking to mission
                   asset_id: missionId ? null : prev.asset_id,
-                  linked_issue_id: missionId ? null : prev.linked_issue_id
                 }));
                 // Close dialog after selection
                 if (missionId) {

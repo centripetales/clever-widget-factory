@@ -15,7 +15,6 @@ import {
   actionsQueryKey,
   completedActionsQueryKey,
   allActionsQueryKey,
-  issuesQueryKey,
   missionsQueryKey,
   partsOrdersQueryKey,
   explorationsQueryKey,
@@ -396,20 +395,6 @@ function updateCacheFromResponse(endpoint: string, method: string, responseData:
       );
       globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) => 
         old ? old.filter(item => item.id !== actionId) : undefined
-      );
-    }
-  } else if (endpoint.includes('/issues')) {
-    if (method === 'POST') {
-      if (optimisticId) {
-        globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => 
-          old.map(item => item.id === optimisticId ? data : item)
-        );
-      } else {
-        globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => [...old, data]);
-      }
-    } else if (method === 'PUT') {
-      globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => 
-        old.map(item => item.id === data.id ? data : item)
       );
     }
   } else if (endpoint.includes('/missions')) {

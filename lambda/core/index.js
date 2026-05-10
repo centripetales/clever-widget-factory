@@ -274,6 +274,12 @@ exports.handler = async (event) => {
           for (const field of changedFields) {
             const oldValue = currentTool[field];
             const newValue = body[field];
+            // Deduplicate: skip if an identical history entry exists within the last 5 minutes
+            // (prevents duplicate entries from rapid saves or concurrent requests)
+            const dedupeCheck = await queryJSON(
+              `SELECT id FROM asset_history WHERE asset_id = '${toolId}' AND field_changed = '${field}' AND new_value = ${formatSqlValue(newValue)} AND changed_at > NOW() - INTERVAL '5 minutes' LIMIT 1`
+            ).catch(() => []);
+            if (dedupeCheck.length > 0) continue;
             const historySql = `INSERT INTO asset_history (asset_id, change_type, field_changed, old_value, new_value, changed_by, organization_id, changed_at) VALUES ('${toolId}', 'updated', '${field}', ${formatSqlValue(oldValue)}, ${formatSqlValue(newValue)}, '${userId}', '${organizationId}', NOW())`;
             await queryJSON(historySql).catch(e => console.error('History log error:', e));
           }

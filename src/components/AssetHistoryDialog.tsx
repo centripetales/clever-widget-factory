@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { History, Edit, Plus, AlertTriangle, Clock, LogOut, LogIn, Loader2, ExternalLink, Zap, Target, Camera, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useToolHistory, HistoryEntry, AssetHistoryEntry, CheckoutHistory, IssueHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
+import { useToolHistory, HistoryEntry, AssetHistoryEntry, CheckoutHistory, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
@@ -20,10 +20,6 @@ const isAssetHistory = (entry: HistoryEntry): entry is AssetHistoryEntry => {
 
 const isCheckoutHistory = (entry: HistoryEntry): entry is CheckoutHistory => {
   return 'checkout_date' in entry && 'is_returned' in entry;
-};
-
-const isIssueHistory = (entry: HistoryEntry): entry is IssueHistoryEntry => {
-  return 'issue_id' in entry && 'old_status' in entry && 'new_status' in entry;
 };
 
 const isObservation = (entry: HistoryEntry): entry is ObservationHistoryEntry => {
@@ -166,8 +162,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
       }
     } else if (isCheckoutHistory(entry)) {
       return entry.is_returned ? <LogIn className="h-4 w-4 text-green-600" /> : <LogOut className="h-4 w-4 text-blue-600" />;
-    } else if (isIssueHistory(entry)) {
-      return <AlertTriangle className="h-4 w-4 text-red-600" />;
     } else if (isObservation(entry)) {
       return <Camera className="h-4 w-4 text-blue-600" />;
     }
@@ -192,16 +186,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
       }
     } else if (isCheckoutHistory(entry)) {
       return entry.is_returned ? 'Tool returned' : 'Tool checked out';
-    } else if (isIssueHistory(entry)) {
-      if (entry.old_status && entry.new_status && entry.old_status !== entry.new_status) {
-        return `Issue ${entry.old_status} → ${entry.new_status}`;
-      }
-      if (entry.issue_description) {
-        return entry.issue_description.length > 100 
-          ? entry.issue_description.substring(0, 100) + '...' 
-          : entry.issue_description;
-      }
-      return entry.issue_type ? `${entry.issue_type} issue reported` : 'Issue reported';
     } else if (isObservation(entry)) {
       return '';
     }
@@ -216,8 +200,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
              entry.change_type === 'updated' ? 'Updated' : entry.change_type;
     } else if (isCheckoutHistory(entry)) {
       return entry.is_returned ? 'Returned' : 'Checked Out';
-    } else if (isIssueHistory(entry)) {
-      return entry.issue_type ? `Issue: ${entry.issue_type}` : `Issue: ${entry.new_status}`;
     } else if (isObservation(entry)) {
       return 'Observation';
     }
@@ -438,112 +420,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                               onClick={(e) => e.stopPropagation()}
                             >
                               View Action
-                              <ExternalLink className="h-3 w-3" />
-                            </Link>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Issue display section */}
-                      {isIssueHistory(entry) && (
-                        <div className={`text-sm border p-3 rounded mt-2 ${
-                          entry.new_status === 'resolved' 
-                            ? 'bg-green-50 border-green-200' 
-                            : entry.new_status === 'removed'
-                            ? 'bg-gray-50 border-gray-200'
-                            : 'bg-red-50 border-red-200'
-                        }`}>
-                          <div className="flex items-center gap-2 mb-2 flex-wrap">
-                            <AlertTriangle className={`h-4 w-4 ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-600' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-600'
-                                : 'text-red-600'
-                            }`} />
-                            <span className={`font-medium ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-900' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-900'
-                                : 'text-red-900'
-                            }`}>Issue Details:</span>
-                            {entry.issue_type && (
-                              <Badge variant="outline" className="text-xs">
-                                {entry.issue_type}
-                              </Badge>
-                            )}
-                            <Badge 
-                              variant={
-                                entry.new_status === 'resolved' 
-                                  ? 'default' 
-                                  : entry.new_status === 'removed'
-                                  ? 'secondary'
-                                  : 'destructive'
-                              } 
-                              className="text-xs"
-                            >
-                              {entry.new_status}
-                            </Badge>
-                          </div>
-                          {entry.issue_description && (
-                            <div className={`mb-2 ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-800' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-800'
-                                : 'text-red-800'
-                            }`}>
-                              <p className="font-medium mb-1">Description:</p>
-                              <p>{entry.issue_description}</p>
-                            </div>
-                          )}
-                          {/* Show damage assessment if available */}
-                          {entry.damage_assessment && (
-                            <div className={`mb-2 ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-800' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-800'
-                                : 'text-red-800'
-                            }`}>
-                              <p className="font-medium mb-1">Damage Assessment:</p>
-                              <p>{entry.damage_assessment}</p>
-                            </div>
-                          )}
-                          {entry.old_status && entry.new_status && entry.old_status !== entry.new_status && (
-                            <p className={`text-sm mb-1 ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-700' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-700'
-                                : 'text-red-700'
-                            }`}>
-                              Status changed: <span className="font-medium">{entry.old_status}</span> → <span className="font-medium">{entry.new_status}</span>
-                            </p>
-                          )}
-                          {entry.notes && (
-                            <p className={`text-sm mt-1 ${
-                              entry.new_status === 'resolved' 
-                                ? 'text-green-700' 
-                                : entry.new_status === 'removed'
-                                ? 'text-gray-700'
-                                : 'text-red-700'
-                            }`}>{entry.notes}</p>
-                          )}
-                          {entry.issue_id && (
-                            <Link
-                              to={`/issues?issue=${entry.issue_id}`}
-                              className={`underline flex items-center gap-1 mt-2 text-sm ${
-                                entry.new_status === 'resolved' 
-                                  ? 'text-green-600 hover:text-green-800' 
-                                  : entry.new_status === 'removed'
-                                  ? 'text-gray-600 hover:text-gray-800'
-                                  : 'text-red-600 hover:text-red-800'
-                              }`}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              View Issue
                               <ExternalLink className="h-3 w-3" />
                             </Link>
                           )}

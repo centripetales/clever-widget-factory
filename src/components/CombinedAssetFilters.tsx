@@ -17,8 +17,6 @@ interface CombinedAssetFiltersProps {
   setSearchDescriptions: (show: boolean) => void;
   showMyCheckedOut: boolean;
   setShowMyCheckedOut: (show: boolean) => void;
-  showWithIssues: boolean;
-  setShowWithIssues: (show: boolean) => void;
   showLowStock: boolean;
   setShowLowStock: (show: boolean) => void;
   showOnlyAssets: boolean;
@@ -42,8 +40,6 @@ export const CombinedAssetFilters = ({
   setSearchDescriptions,
   showMyCheckedOut,
   setShowMyCheckedOut,
-  showWithIssues,
-  setShowWithIssues,
   showLowStock,
   setShowLowStock,
   showOnlyAssets,
@@ -130,26 +126,6 @@ export const CombinedAssetFilters = ({
               </TooltipTrigger>
               <TooltipContent>
                 <p>Show only assets currently checked out to me</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="with-issues"
-                    checked={showWithIssues}
-                    onCheckedChange={setShowWithIssues}
-                  />
-                  <Label htmlFor="with-issues" className="text-sm">
-                    With Issues
-                  </Label>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Show only items that have reported issues</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

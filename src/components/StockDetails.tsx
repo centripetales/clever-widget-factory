@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
-import { IssueCard } from "@/components/IssueCard";
 import { InventoryHistoryDialog } from "@/components/InventoryHistoryDialog";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
@@ -12,20 +11,13 @@ import { getThumbnailUrl } from '@/lib/imageUtils';
 
 interface StockDetailsProps {
   stock: CombinedAsset;
-  issues: any[];
   onBack: () => void;
-  onResolveIssue: (issue: any) => void;
-  onEditIssue?: (issue: any) => void;
   onRefresh?: () => void;
 }
 
 export const StockDetails = ({
   stock,
-  issues,
   onBack,
-  onResolveIssue,
-  onEditIssue,
-  onRefresh
 }: StockDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
   
@@ -66,9 +58,8 @@ export const StockDetails = ({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <Tabs defaultValue="details" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="issues">Issues</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
             
@@ -112,26 +103,6 @@ export const StockDetails = ({
                   )}
                 </CardContent>
               </Card>
-            </TabsContent>
-
-            <TabsContent value="issues" className="space-y-4">
-              <div className="space-y-4">
-                {issues.map((issue) => (
-                  <IssueCard
-                    key={issue.id}
-                    issue={issue}
-                    onResolve={() => onResolveIssue(issue)}
-                    onEdit={onEditIssue ? () => onEditIssue(issue) : undefined}
-                    onRefresh={onRefresh || (() => {})}
-                  />
-                ))}
-                
-                {issues.length === 0 && (
-                  <p className="text-center text-muted-foreground py-8">
-                    No issues reported.
-                  </p>
-                )}
-              </div>
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">

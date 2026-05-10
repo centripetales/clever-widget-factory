@@ -4,14 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Tool } from "@/hooks/tools/useToolsData";
-import { CheckoutHistory, HistoryEntry, IssueHistoryEntry, AssetHistoryEntry } from "@/hooks/tools/useToolHistory";
+import { CheckoutHistory, HistoryEntry, AssetHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { getThumbnailUrl } from '@/lib/imageUtils';
-
-import { AlertTriangle, Bug, Shield, Wrench, Clock } from "lucide-react";
-import { getIssueTypeIconName } from "@/lib/issueTypeUtils";
 
 interface ToolDetailsProps {
   tool: Tool;
@@ -32,30 +29,13 @@ export const ToolDetails = ({
     return (record as AssetHistoryEntry).type === 'asset_change';
   };
 
-  const isIssueHistory = (record: HistoryEntry): record is IssueHistoryEntry => {
-    return record.type === 'issue_change';
-  };
-
   const isCreationHistory = (record: HistoryEntry): record is CheckoutHistory => {
-    return record.type !== 'issue_change' && (record as CheckoutHistory).checkin?.checkin_reason === 'asset_created';
+    return (record as AssetHistoryEntry).type !== 'asset_change' && (record as CheckoutHistory).checkin?.checkin_reason === 'asset_created';
   };
 
   const isCheckoutHistory = (record: HistoryEntry): record is CheckoutHistory => {
-    return record.type !== 'issue_change' && 
-           (record as AssetHistoryEntry).type !== 'asset_change' && 
+    return (record as AssetHistoryEntry).type !== 'asset_change' && 
            (record as CheckoutHistory).checkin?.checkin_reason !== 'asset_created';
-  };
-
-  // Issue type utilities imported from centralized location
-
-  const getChangeTypeLabel = (changeType: string) => {
-    switch (changeType) {
-      case 'created': return 'Issue Reported';
-      case 'updated': return 'Issue Updated';
-      case 'resolved': return 'Issue Resolved';
-      case 'removed': return 'Issue Removed';
-      default: return 'Issue Changed';
-    }
   };
 
   return (
@@ -333,52 +313,6 @@ export const ToolDetails = ({
                                 </p>
                               )}
                             </div>
-                          )}
-                        </>
-                      ) : isIssueHistory(record) ? (
-                        // Issue History
-                        <>
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex items-start gap-2">
-                              {(() => {
-                                const iconName = getIssueTypeIconName(record.issue_type || 'maintenance', 'tool');
-                                const IconComponent = iconName === 'AlertTriangle' ? AlertTriangle : 
-                                                      iconName === 'Clock' ? Clock : AlertTriangle;
-                                return <IconComponent className="h-4 w-4 mt-0.5 text-muted-foreground" />;
-                              })()}
-                              <div>
-                                <p className="font-medium">{record.user_name}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {new Date(record.changed_at).toLocaleDateString()} {new Date(record.changed_at).toLocaleTimeString()}
-                                </p>
-                              </div>
-                            </div>
-                            <Badge variant="outline" className="capitalize">
-                              {record.issue_type?.replace('_', ' ')}
-                            </Badge>
-                          </div>
-                          
-                          {record.issue_description && (
-                            <p className="text-sm mb-2">
-                              <span className="font-medium">Issue:</span> {record.issue_description}
-                            </p>
-                          )}
-                          
-                          {record.field_changed && (
-                            <p className="text-sm mb-2">
-                              <span className="font-medium">Field Changed:</span> {record.field_changed}
-                              {record.old_value && record.new_value && (
-                                <span className="text-muted-foreground">
-                                  {' '}({record.old_value} → {record.new_value})
-                                </span>
-                              )}
-                            </p>
-                          )}
-                          
-                          {record.notes && (
-                            <p className="text-sm text-muted-foreground">
-                              {record.notes}
-                            </p>
                           )}
                         </>
                       ) : null}

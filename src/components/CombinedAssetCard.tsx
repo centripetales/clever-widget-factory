@@ -57,8 +57,6 @@ interface CombinedAssetCardProps {
   onRemove: (asset: CombinedAsset) => void;
   onCheckout?: (asset: CombinedAsset) => void;
   onCheckin?: (asset: CombinedAsset) => void;
-  onReportIssue?: (asset: CombinedAsset) => void;
-  onManageIssues?: (asset: CombinedAsset) => void;
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
   onAskMaxwell?: (asset: CombinedAsset) => void;
@@ -99,7 +97,6 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     type: prevAsset.type !== nextAsset.type,
     status: prevAsset.status !== nextAsset.status,
     current_quantity: prevAsset.current_quantity !== nextAsset.current_quantity,
-    has_issues: prevAsset.has_issues !== nextAsset.has_issues,
     accountable_person_name: prevAsset.accountable_person_name !== nextAsset.accountable_person_name,
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
     updated_at: prevAsset.updated_at !== nextAsset.updated_at
@@ -146,8 +143,6 @@ export const CombinedAssetCard = memo(({
   onRemove,
   onCheckout,
   onCheckin,
-  onReportIssue,
-  onManageIssues,
   onAddQuantity,
   onUseQuantity,
   onAskMaxwell,
@@ -194,7 +189,7 @@ export const CombinedAssetCard = memo(({
 
   const getIconColor = () => {
     if (asset.type === 'asset') {
-      return asset.has_issues ? "text-red-600" : "text-blue-600";
+      return "text-blue-600";
     }
     return "text-green-600";
   };
@@ -205,7 +200,7 @@ export const CombinedAssetCard = memo(({
   
   const iconColor = useMemo(() => {
     return getIconColor();
-  }, [asset.type, asset.has_issues]);
+  }, [asset.type]);
 
   return (
     <Card className="relative hover:shadow-md transition-shadow cursor-pointer flex flex-col min-h-[280px] md:min-h-[320px]" onClick={() => onView(asset)}>
@@ -569,33 +564,6 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              
-              {(asset.type === 'asset' || asset.type === 'stock') && onManageIssues && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className={`w-12 px-2 ${
-                          asset.has_issues 
-                            ? "text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300" 
-                            : ""
-                        }`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onManageIssues(asset);
-                        }}
-                      >
-                        <AlertTriangle className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Manage Issues</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
               
               {isAdmin && (
                 <TooltipProvider>
