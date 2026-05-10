@@ -43,9 +43,7 @@ import {
   Flag,
   Copy,
   Sparkles,
-  Search,
-  Maximize2,
-  Minimize2
+  Search
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useAuth } from "@/hooks/useCognitoAuth";
@@ -71,7 +69,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { SkillProfilePanel } from "@/components/SkillProfilePanel";
 import { CapabilityAssessment } from "@/components/CapabilityAssessment";
 
-interface UnifiedActionDialogProps {
+export interface ActionFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   actionId?: string;
@@ -84,7 +82,10 @@ interface UnifiedActionDialogProps {
   maxwellContext?: EntityContext | null;
 }
 
-export function UnifiedActionDialog({
+// Alias for backward compatibility
+type UnifiedActionDialogProps = ActionFormProps;
+
+export function ActionForm({
   open,
   onOpenChange,
   actionId,
@@ -95,7 +96,7 @@ export function UnifiedActionDialog({
   isMaxwellOpen = false,
   onMaxwellOpenChange,
   maxwellContext = null,
-}: UnifiedActionDialogProps) {
+}: ActionFormProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   
@@ -120,7 +121,7 @@ export function UnifiedActionDialog({
     queryKey: ['action', actionId || ''],
     queryFn: () => { throw new Error('cache-only'); },
     enabled: false,
-    select: (a) => a,
+    select: (a) => (a && a.id) ? a : undefined,
     placeholderData: (prev) => prev,
   });
   const action = unresolvedMatch || completedMatch || singleMatch;
@@ -262,7 +263,28 @@ export function UnifiedActionDialog({
   const [isInImplementationMode, setIsInImplementationMode] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
-  const [isMaxwellExpanded, setIsMaxwellExpanded] = useState(false);
+  // Internal Maxwell state — used when props are not provided (page mode)
+  const [isMaxwellOpenInternal, setIsMaxwellOpenInternal] = useState(false);
+  const [maxwellContextInternal, setMaxwellContextInternal] = useState<EntityContext | null>(null);
+  // Resolve: use prop if provided (dialog mode), otherwise use internal state (page mode)
+  const maxwellOpen = onMaxwellOpenChange ? isMaxwellOpen : isMaxwellOpenInternal;
+  const maxwellCtx = onMaxwellOpenChange ? maxwellContext : maxwellContextInternal;
+  const handleMaxwellOpenChange = (open: boolean) => {
+    if (onMaxwellOpenChange) {
+      onMaxwellOpenChange(open);
+    } else {
+      setIsMaxwellOpenInternal(open);
+      if (open && action) {
+        setMaxwellContextInternal({
+          entityId: action.id,
+          entityType: 'action',
+          entityName: action.title || 'Untitled Action',
+          policy: action.policy || '',
+          implementation: '',
+        });
+      }
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLocalUploading, setIsLocalUploading] = useState(false);
   const uploadCompletedTimeRef = useRef<number>(0);
@@ -1009,58 +1031,46 @@ export function UnifiedActionDialog({
   const borderStyle = getActionBorderStyle(borderStyleInput, derivedObservationCount);
 
 
+  /**
+   * CRITICAL: Prevent closing during file upload.
+   *
+   * This prevents a regression where closing during upload caused unwanted
+   * navigation to /actions on mobile devices.
+   *
+   * DO NOT REMOVE THIS CHECK without:
+   * 1. Understanding the mobile upload flow
+   * 2. Testing on real mobile devices
+   * 3. Ensuring navigation doesn't occur during upload
+   * 4. Updating the test in UnifiedActionDialog.upload.test.tsx
+   *
+   * See: src/components/__tests__/UnifiedActionDialog.upload.test.tsx
+   */
+  const handleCloseRequest = (newOpen: boolean) => {
+    if (!newOpen && (isUploading || isLocalUploading)) {
+      toast({
+        title: "Upload in progress",
+        description: "Please wait for the upload to complete before closing.",
+        variant: "default",
+        duration: 3000
+      });
+      return;
+    }
+    // Clear attachment files when closing
+    if (!newOpen) {
+      setAttachmentFiles(new Map());
+    }
+    onOpenChange(newOpen);
+  };
+
   return (
-    <Dialog 
-      open={open} 
-      onOpenChange={(newOpen) => {
-        /**
-         * CRITICAL: Prevent dialog from closing during file upload
-         * 
-         * This prevents a regression where closing the dialog during upload
-         * caused unwanted navigation to /actions page on mobile devices.
-         * 
-         * Problem: On mobile, when the dialog closed during upload, the
-         * onOpenChange handler in Actions.tsx would navigate to /actions,
-         * causing the page to reload and losing the upload progress.
-         * 
-         * Solution: Block dialog close when isUploading is true, showing
-         * a toast message instead. This ensures uploads complete before
-         * the dialog can be closed.
-         * 
-         * DO NOT REMOVE THIS CHECK without:
-         * 1. Understanding the mobile upload flow
-         * 2. Testing on real mobile devices
-         * 3. Ensuring navigation doesn't occur during upload
-         * 4. Updating the test in UnifiedActionDialog.upload.test.tsx
-         * 
-         * See: src/components/__tests__/UnifiedActionDialog.upload.test.tsx
-         */
-        if (!newOpen && (isUploading || isLocalUploading)) {
-          toast({
-            title: "Upload in progress",
-            description: "Please wait for the upload to complete before closing.",
-            variant: "default",
-            duration: 3000
-          });
-          return;
-        }
-        
-        // Clear attachment files when closing dialog
-        if (!newOpen) {
-          setAttachmentFiles(new Map());
-        }
-        
-        onOpenChange(newOpen);
-      }}
-    >
-      <DialogContent 
+    <>
+      <div
         className={cn(
-          "max-w-lg sm:max-w-2xl lg:max-w-4xl max-h-[90vh] overflow-y-auto p-3 sm:p-6",
-          borderStyle.borderColor
+          "space-y-4 sm:space-y-6",
         )}
       >
-        <DialogHeader>
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* Header row: title + action buttons */}
+        <div className="flex items-center gap-2 min-w-0 flex-1">
             {!isCreating && action?.id ? (
               isTitleEditing ? (
                 <Input
@@ -1074,15 +1084,15 @@ export function UnifiedActionDialog({
                 />
               ) : (
                 <div
-                  className="min-w-0 cursor-pointer"
+                  className="min-w-0 cursor-pointer flex-1"
                   onClick={() => setIsTitleEditing(true)}
                   title="Edit title"
                 >
-                  <DialogTitle className="truncate">{formData.title || action?.title || 'Untitled'}</DialogTitle>
+                  <h2 className="text-lg font-semibold truncate">{formData.title || action?.title || 'Untitled'}</h2>
                 </div>
               )
             ) : (
-              <DialogTitle>{getDialogTitle()}</DialogTitle>
+              <h2 className="text-lg font-semibold flex-1">{getDialogTitle()}</h2>
             )}
             <div className="flex items-center gap-2">
               {!isCreating && action?.id && (
@@ -1117,8 +1127,8 @@ export function UnifiedActionDialog({
                   variant="ghost"
                   size="sm"
                   type="button"
-                  onClick={() => onMaxwellOpenChange?.(!isMaxwellOpen)}
-                  className={`h-8 w-8 p-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 text-primary' : ''}`}
+                  onClick={() => handleMaxwellOpenChange(!maxwellOpen)}
+                  className={`h-8 w-8 p-0 [&_svg]:size-auto ${maxwellOpen ? 'bg-primary/10 text-primary' : ''}`}
                   title="Ask Maxwell"
                 >
                   <PrismIcon size={28} />
@@ -1126,12 +1136,7 @@ export function UnifiedActionDialog({
               )}
             </div>
           </div>
-          {isCreating && (
-            <DialogDescription className="sr-only">Create a new action</DialogDescription>
-          )}
-        </DialogHeader>
         
-        <div className="space-y-4 sm:space-y-6">
           {/* Issue Reference Display */}
           {showIssueReference() && (
             <div className="bg-muted p-3 rounded-lg">
@@ -1170,17 +1175,15 @@ export function UnifiedActionDialog({
 
           {/* Maxwell panel — animated expand above title */}
           <div
-            className={`grid transition-all duration-300 ease-in-out ${isMaxwellOpen && !isCreating && action?.id ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+            className={`grid transition-all duration-300 ease-in-out ${maxwellOpen && !isCreating && action?.id ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
           >
             <div className="overflow-hidden">
-              <div className="rounded-xl border overflow-hidden" style={{ height: isMaxwellExpanded ? 'calc(90vh - 140px)' : '600px' }}>
+              <div className="rounded-xl border overflow-hidden" style={{ height: '600px' }}>
                 <MaxwellInlinePanel
-                  context={maxwellContext}
-                  onClose={() => onMaxwellOpenChange?.(false)}
+                  context={maxwellCtx}
+                  onClose={() => handleMaxwellOpenChange(false)}
                   className="h-full rounded-none border-0"
                   hideHeader
-                  isExpanded={isMaxwellExpanded}
-                  onExpandToggle={() => setIsMaxwellExpanded(v => !v)}
                 />
               </div>
             </div>
@@ -1292,12 +1295,12 @@ export function UnifiedActionDialog({
           {/* Duration tracking now uses objective data like image metadata */}
 
           {/* Skill Profile Panel — only for existing actions */}
-          {!isCreating && action?.id && (
+          {!isCreating && action?.id && typeof action.id === 'string' && action.id.length > 0 && (
             <SkillProfilePanel action={action} userId={user?.id || ''} organizationId={organizationId} />
           )}
 
-          {/* Growth Checklist Radar Chart — only for existing actions */}
-          {!isCreating && action?.id && (
+          {/* Growth Checklist Radar Chart — only for existing actions with a valid ID */}
+          {!isCreating && action?.id && typeof action.id === 'string' && action.id.length > 0 && (
             <CapabilityAssessment action={{
               ...action,
               assigned_to: formData.assigned_to || action.assigned_to,
@@ -1630,7 +1633,7 @@ export function UnifiedActionDialog({
             )}
             <Button
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleCloseRequest(false)}
               className="flex-1 min-w-0"
             >
               Cancel
@@ -1653,8 +1656,7 @@ export function UnifiedActionDialog({
               {isSubmitting ? (isCreating ? 'Creating...' : 'Saving...') : (isCreating ? 'Create Action' : 'Save Changes')}
             </Button>
           </div>
-        </div>
-      </DialogContent>
+      </div>
 
       {/* Mission Selection Dialog */}
       <Dialog open={showMissionDialog} onOpenChange={setShowMissionDialog}>
@@ -1693,7 +1695,28 @@ export function UnifiedActionDialog({
           </div>
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
 
+/**
+ * UnifiedActionDialog — wraps ActionForm in a Dialog for use as a modal.
+ * Kept for backward compatibility with SimpleMissionForm and other callers.
+ */
+export function UnifiedActionDialog(props: UnifiedActionDialogProps) {
+  const { open, onOpenChange } = props;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+    >
+      <DialogContent
+        className={cn(
+          "max-w-lg sm:max-w-2xl lg:max-w-4xl max-h-[90vh] overflow-y-auto p-3 sm:p-6",
+        )}
+      >
+        <ActionForm {...props} />
+      </DialogContent>
     </Dialog>
   );
 }

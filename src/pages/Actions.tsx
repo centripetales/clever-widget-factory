@@ -11,29 +11,23 @@ import { toast } from '@/hooks/use-toast';
 import { useEnabledMembers } from '@/hooks/useOrganizationMembers';
 import { offlineQueryConfig } from '@/lib/queryConfig';
 import { Bolt, Plus, Filter, Search, CheckCircle, AlertTriangle, ArrowLeft, X, SearchCheck, Info } from 'lucide-react';
-import { UnifiedActionDialog } from '@/components/UnifiedActionDialog';
 import { ActionScoreDialog } from '@/components/ActionScoreDialog';
 import { ActionListItemCard } from '@/components/ActionListItemCard';
 import { useActionScores, ActionScore } from '@/hooks/useActionScores';
 import { BaseAction } from '@/types/actions';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/lib/apiService';
-import { actionsQueryKey, completedActionsQueryKey, actionQueryKey } from '@/lib/queryKeys';
-import { EntityContext } from '@/hooks/useEntityContext';
+import { actionsQueryKey, completedActionsQueryKey } from '@/lib/queryKeys';
 
 // Using unified BaseAction interface from types/actions.ts
 
 export default function Actions() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { actionId } = useParams<{ actionId?: string }>();
 
   const [activeTab, setActiveTab] = useState('unresolved');
   const [searchTerm, setSearchTerm] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('me');
-  const [editingActionId, setEditingActionId] = useState<string | null>(null);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
   const [showScoreDialog, setShowScoreDialog] = useState(false);
   const [isSemanticSearch, setIsSemanticSearch] = useState(false);
   const [semanticResults, setSemanticResults] = useState<string[]>([]);
@@ -50,8 +44,6 @@ export default function Actions() {
     return profile?.favorite_color || '#6B7280';
   };
   const [existingScore, setExistingScore] = useState<ActionScore | null>(null);
-  const [isMaxwellOpen, setIsMaxwellOpen] = useState(false);
-  const [maxwellContext, setMaxwellContext] = useState<EntityContext | null>(null);
 
   const { getScoreForAction } = useActionScores();
 
@@ -63,12 +55,6 @@ export default function Actions() {
   const fetchCompletedActions = async (): Promise<BaseAction[]> => {
     const result = await apiService.get('/actions?status=completed');
     return result.data || [];
-  };
-
-  const fetchSingleAction = async (id: string): Promise<BaseAction | null> => {
-    const result = await apiService.get(`/actions?id=${id}`);
-    const actions = result.data || [];
-    return actions[0] || null;
   };
 
   const queryClient = useQueryClient();
@@ -92,57 +78,7 @@ export default function Actions() {
     refetchOnReconnect: false,
   });
 
-  // If we have an actionId in URL, check both caches first, then fetch only if needed
-  const hasActionIdInUrl = !!actionId;
-  const targetActionId = actionId || '';
-  
-  const cachedAction = targetActionId 
-    ? unresolvedActions.find(a => a.id === targetActionId) || completedActions.find(a => a.id === targetActionId)
-    : undefined;
-  
-  // Only fetch single action if we have an actionId AND it's not in either cache
-  const { data: singleAction, isLoading: singleActionLoading } = useQuery({
-    queryKey: actionQueryKey(targetActionId),
-    queryFn: () => fetchSingleAction(targetActionId),
-    enabled: hasActionIdInUrl && !!targetActionId && !cachedAction,
-    ...offlineQueryConfig,
-  });
-  
-  // Update the appropriate cache when single action is fetched
-  useEffect(() => {
-    if (singleAction) {
-      const targetKey = singleAction.status === 'completed' ? completedActionsQueryKey() : actionsQueryKey();
-      queryClient.setQueryData<BaseAction[]>(targetKey, (old) => {
-        if (!old) return [singleAction];
-        const existingIndex = old.findIndex((a: BaseAction) => a.id === singleAction.id);
-        if (existingIndex >= 0) {
-          const updated = [...old];
-          updated[existingIndex] = singleAction;
-          return updated;
-        }
-        return [...old, singleAction];
-      });
-    }
-  }, [singleAction, queryClient]);
-  
-  const singleActionData = cachedAction || singleAction;
-
-  // Combine all actions for lookups (dialog, maxwell context, etc.)
-  const allActions = useMemo(() => {
-    const combined = [...unresolvedActions, ...completedActions];
-    // Merge single action if it's not in either list
-    if (hasActionIdInUrl && singleActionData) {
-      const exists = combined.some(a => a.id === singleActionData.id);
-      if (!exists) {
-        combined.push(singleActionData);
-      }
-    }
-    return combined;
-  }, [unresolvedActions, completedActions, hasActionIdInUrl, singleActionData]);
-
-  const loading = hasActionIdInUrl && isEditDialogOpen 
-    ? (!cachedAction && singleActionLoading) 
-    : unresolvedLoading;
+  const loading = unresolvedLoading;
 
   // Handle tab change - trigger completed fetch on first visit
   const handleTabChange = (value: string) => {
@@ -152,23 +88,16 @@ export default function Actions() {
     }
   };
 
-  const handleEditAction = async (action: BaseAction) => {
+  const handleEditAction = (action: BaseAction) => {
     navigate(`/actions/${action.id}`);
-    setEditingActionId(action.id);
-    setIsCreating(false);
-    setIsEditDialogOpen(true);
   };
 
   const handleSaveAction = async () => {
-    setIsEditDialogOpen(false);
-    setEditingActionId(null);
-    setIsCreating(false);
+    // No-op: navigation is handled by ActionPage after save
   };
 
   const handleCreateAction = () => {
-    setEditingActionId(null);
-    setIsCreating(true);
-    setIsEditDialogOpen(true);
+    navigate('/actions/new');
   };
 
   const handleScoreAction = async (action: BaseAction, e: React.MouseEvent) => {
@@ -241,16 +170,6 @@ export default function Actions() {
     setIsSemanticSearch(false);
     setSemanticResults([]);
   };
-
-  // Handle URL parameters for direct action links
-  useEffect(() => {
-    const urlActionId = actionId;
-    if (urlActionId && !isEditDialogOpen && editingActionId === null && !isCreating) {
-      setEditingActionId(urlActionId);
-      setIsEditDialogOpen(true);
-      setIsCreating(false);
-    }
-  }, [actionId]);
 
   // Reset assignee filter if the selected assignee is not in active profiles
   useEffect(() => {
@@ -555,41 +474,6 @@ export default function Actions() {
           )}
          </TabsContent>
        </Tabs>
-
-       {/* Action Dialog */}
-        <UnifiedActionDialog
-          open={isEditDialogOpen}
-          onOpenChange={(open) => {
-            setIsEditDialogOpen(open);
-            if (!open) {
-              setEditingActionId(null);
-              setIsCreating(false);
-              setIsMaxwellOpen(false);
-              navigate('/actions');
-            }
-          }}
-          actionId={editingActionId || undefined}
-          onActionSaved={handleSaveAction}
-          profiles={profiles}
-          isCreating={isCreating}
-          isMaxwellOpen={isMaxwellOpen}
-          maxwellContext={maxwellContext}
-          onMaxwellOpenChange={(open) => {
-            if (open && editingActionId) {
-              const action = allActions.find(a => a.id === editingActionId);
-              if (action) {
-                setMaxwellContext({
-                  entityId: action.id,
-                  entityType: 'action',
-                  entityName: action.title || 'Untitled Action',
-                  policy: action.policy || '',
-                  implementation: (action as any).observations || '',
-                });
-              }
-            }
-            setIsMaxwellOpen(open);
-          }}
-       />
 
        {/* Score Dialog */}
        {scoringAction && (

@@ -124,13 +124,20 @@ export function useLearningObjectives(
   return useQuery({
     queryKey: learningObjectivesQueryKey(actionId!, userId!),
     queryFn: async () => {
-      const result = await apiService.get<{ data: LearningObjectivesResponse }>(
-        `/learning/${actionId}/${userId}/objectives`
-      );
-      return result.data;
+      try {
+        const result = await apiService.get<{ data: LearningObjectivesResponse }>(
+          `/learning/${actionId}/${userId}/objectives`
+        );
+        return result.data;
+      } catch (err: any) {
+        // 404 means no objectives exist yet — treat as empty, not an error
+        if (err?.status === 404 || err?.message?.includes('404')) return null;
+        throw err;
+      }
     },
     enabled: !!(actionId && userId),
     staleTime: 60_000,
+    retry: false,
   });
 }
 

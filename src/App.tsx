@@ -40,6 +40,7 @@ import CheckIn from "./pages/CheckIn";
 import Missions from "./pages/Missions";
 import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
+import ActionPage from "./pages/ActionPage";
 import Explorations from "./pages/Explorations";
 import Audit from "./pages/Audit";
 import AuditTool from "./pages/AuditTool";
@@ -212,10 +213,26 @@ function AppContent() {
           }
         />
         <Route
-          path="/actions/:actionId?"
+          path="/actions"
           element={
             <ProtectedRoute>
               <Actions />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions/new"
+          element={
+            <ProtectedRoute>
+              <ActionPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions/:actionId"
+          element={
+            <ProtectedRoute>
+              <ActionPage />
             </ProtectedRoute>
           }
         />

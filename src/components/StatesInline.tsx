@@ -639,11 +639,11 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       <div className="mt-2 space-y-1">
                         {state.photos.map((photo, idx) => 
                           photo.photo_description ? (
-                            <p key={photo.id} className="text-xs text-muted-foreground">
+                            <p key={photo.id || idx} className="text-xs text-muted-foreground">
                               📷 {state.photos.length > 1 ? `${idx + 1}. ` : ''}{photo.photo_description}
                             </p>
                           ) : null
-                        )}
+                        ).filter(Boolean)}
                       </div>
                     )}
                   </div>
