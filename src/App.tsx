@@ -36,7 +36,6 @@ import Dashboard from "./pages/Dashboard";
 import InventorySummary from "./pages/InventorySummary";
 import CombinedAssets from "./pages/CombinedAssets";
 import AddObservation from "./pages/AddObservation";
-import CheckIn from "./pages/CheckIn";
 import Missions from "./pages/Missions";
 import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
@@ -185,14 +184,6 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <InventorySummary />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/checkin"
-          element={
-            <ProtectedRoute>
-              <CheckIn />
             </ProtectedRoute>
           }
         />

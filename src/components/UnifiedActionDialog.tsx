@@ -56,7 +56,6 @@ import { MultiParticipantSelector } from './MultiParticipantSelector';
 import { MissionSelector } from './MissionSelector';
 import { cn, sanitizeRichText, getActionBorderStyle } from "@/lib/utils";
 import { BaseAction, Profile, ActionCreationContext } from "@/types/actions";
-import { autoCheckinToolsForAction, activatePlannedCheckoutsIfNeeded } from '@/lib/autoToolCheckout';
 import { generateActionUrl, copyToClipboard } from "@/lib/urlUtils";
 import { useStates } from "@/hooks/useStates";
 import { parseLearningTakeawayStateText, buildCopyContextText } from "@/lib/learningUtils";
@@ -573,17 +572,6 @@ export function ActionForm({
       
       // Use the mutation to ensure cache is properly updated
       await saveActionMutation.mutateAsync(actionData);
-
-      // Auto-checkin tools
-      try {
-        await autoCheckinToolsForAction({
-          actionId: action.id,
-          checkinReason: 'Action completed',
-          notes: 'Auto-checked in when action was completed'
-        });
-      } catch (checkinError) {
-        console.error('Auto-checkin failed:', checkinError);
-      }
 
       // The mutation's onSuccess handler will update the cache with the completed status,
       // show toast, call onActionSaved, and close the dialog
@@ -1323,80 +1311,6 @@ export function ActionForm({
                         policy_agreed_by: checked ? user?.id : null,
                         status: checked ? 'in_progress' : 'not_started'
                       });
-                      
-                      // Create checkouts from required_tools when plan is committed
-                      if (action?.id && checked && formData.required_tools && Array.isArray(formData.required_tools) && formData.required_tools.length > 0) {
-                        try {
-                          // Get current user info
-                          const userId = user?.id || '00000000-0000-0000-0000-000000000000';
-                          const userFullName = resolveUserFullName();
-
-                          // Create active checkouts for all tools in required_tools
-                          for (const toolId of formData.required_tools) {
-                            if (!toolId) {
-                              console.warn('Skipping checkout creation: toolId is missing');
-                              continue;
-                            }
-                            
-                            try {
-                              await apiService.post('/checkouts', {
-                                tool_id: toolId,
-                                user_id: userId,
-                                user_name: userFullName,
-                                action_id: action.id,
-                                is_returned: false,
-                                checkout_date: new Date().toISOString()
-                              });
-                              // Update tool status to checked_out
-                              await apiService.put(`/tools/${toolId}`, { status: 'checked_out' });
-                            } catch (error: any) {
-                              // Ignore if tool already has active checkout
-                              const errorMessage = typeof error.message === 'string' ? error.message : String(error.message || '');
-                              const errorData = error.error || {};
-                              const errorDataStr = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
-                              
-                              // Check for various error conditions
-                              const isActiveCheckoutError = 
-                                errorMessage.includes('active checkout') ||
-                                errorMessage.includes('idx_unique_active_checkout_per_tool') ||
-                                errorMessage.includes('duplicate key') ||
-                                errorDataStr.includes('active checkout') ||
-                                errorDataStr.includes('idx_unique_active_checkout_per_tool') ||
-                                errorDataStr.includes('duplicate key') ||
-                                error?.status === 409;
-                              
-                              if (!isActiveCheckoutError) {
-                                console.error(`Error creating checkout for tool ${toolId}:`, {
-                                  error,
-                                  errorMessage,
-                                  errorData,
-                                  toolId,
-                                  userId,
-                                  userFullName,
-                                  actionId: action.id
-                                });
-                                // Show toast for unexpected errors
-                                toast({
-                                  title: "Error",
-                                  description: `Failed to create checkout for tool. ${errorMessage}`,
-                                  variant: "destructive"
-                                });
-                              }
-                            }
-                          }
-                        } catch (error) {
-                          console.error('Error creating checkouts from required_tools:', error);
-                        }
-                      }
-                      
-                      // Also activate any existing planned checkouts
-                      if (action?.id && checked) {
-                        try {
-                          await activatePlannedCheckoutsIfNeeded(action.id, organizationId ?? undefined);
-                        } catch (error) {
-                          console.error('Error activating checkouts:', error);
-                        }
-                      }
                     }}
                   />
                   <Label 

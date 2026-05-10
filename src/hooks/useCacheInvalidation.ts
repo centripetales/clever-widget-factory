@@ -69,10 +69,8 @@ export function useCacheInvalidation() {
 
         case 'checkout':
         case 'checkin':
-          // Checkouts/checkins change tool status (is_checked_out, checked_out_to, etc.)
-          // so we need to invalidate both the tools cache and the checkouts cache.
+          // Checkout system deprecated — just invalidate tools cache
           queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
-          queryClient.invalidateQueries({ queryKey: ['checkouts'] });
           break;
 
         case 'state':

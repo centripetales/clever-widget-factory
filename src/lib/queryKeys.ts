@@ -12,10 +12,7 @@ export const explorationByActionIdQueryKey = (actionId: string) => ['exploration
 export const toolsQueryKey = () => ['tools'];
 export const partsQueryKey = () => ['parts'];
 
-export const checkoutsQueryKey = (isReturned?: boolean) => [
-  'checkouts',
-  isReturned === false ? 'active' : isReturned === true ? 'returned' : 'all'
-];
+// Checkouts query key removed — checkout system deprecated
 
 export const actionScoresQueryKey = (start?: string, end?: string) => [
   'action_scores',

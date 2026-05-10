@@ -13,8 +13,6 @@ interface CombinedAssetGridProps {
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
-  onCheckout: (asset: CombinedAsset) => void;
-  onCheckin: (asset: CombinedAsset) => void;
   onAddObservation?: (asset: CombinedAsset) => void;
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
@@ -36,8 +34,6 @@ export const CombinedAssetGrid = ({
   onView,
   onEdit,
   onRemove,
-  onCheckout,
-  onCheckin,
   onAddObservation,
   onAddQuantity,
   onUseQuantity,
@@ -78,8 +74,6 @@ export const CombinedAssetGrid = ({
           onView={onView}
           onEdit={onEdit}
           onRemove={onRemove}
-          onCheckout={onCheckout}
-          onCheckin={onCheckin}
           onAddObservation={onAddObservation}
           onAddQuantity={onAddQuantity}
           onUseQuantity={onUseQuantity}
@@ -88,7 +82,7 @@ export const CombinedAssetGrid = ({
         />
       </div>
     );
-  }, [assets, canEdit, isAdmin, currentUserId, currentUserEmail, onView, onEdit, onRemove, onCheckout, onCheckin, onAddObservation, onAddQuantity, onUseQuantity, onAskMaxwell, userNameMap, areaItemCounts]);
+  }, [assets, canEdit, isAdmin, currentUserId, currentUserEmail, onView, onEdit, onRemove, onAddObservation, onAddQuantity, onUseQuantity, onAskMaxwell, userNameMap, areaItemCounts]);
 
   if (assets.length === 0) {
     return (

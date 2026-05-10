@@ -15,8 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { CombinedAssetFilters } from "./CombinedAssetFilters";
 import { CombinedAssetGrid } from "./CombinedAssetGrid";
 import { CombinedAssetDialog } from "./CombinedAssetDialog";
-import { ToolCheckoutDialog } from "./ToolCheckoutDialog";
-import { ToolCheckInDialog } from "./ToolCheckInDialog";
 import { ToolRemovalDialog } from "./tools/ToolRemovalDialog";
 import { EditToolForm } from "./tools/forms/EditToolForm";
 
@@ -70,8 +68,6 @@ export const CombinedAssetsContainer = () => {
   const [showRemovedItems, setShowRemovedItems] = useState(false);
   const [searchDescriptions, setSearchDescriptions] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [showCheckoutDialog, setShowCheckoutDialog] = useState(false);
-  const [showCheckinDialog, setShowCheckinDialog] = useState(false);
   const [showRemovalDialog, setShowRemovalDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showViewDialog, setShowViewDialog] = useState(false);
@@ -391,16 +387,6 @@ export const CombinedAssetsContainer = () => {
   const handleRemove = useCallback((asset: CombinedAsset) => {
     setSelectedAssetId(asset.id);
     setShowRemovalDialog(true);
-  }, []);
-
-  const handleCheckout = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowCheckoutDialog(true);
-  }, []);
-
-  const handleCheckin = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowCheckinDialog(true);
   }, []);
 
   const handleAskMaxwell = useCallback((asset: CombinedAsset) => {
@@ -724,8 +710,6 @@ export const CombinedAssetsContainer = () => {
             onView={handleShowAssetDetails}
             onEdit={handleEdit}
             onRemove={handleRemove}
-            onCheckout={handleCheckout}
-            onCheckin={handleCheckin}
             onAddObservation={handleAddObservation}
             onAddQuantity={handleAddQuantity}
             onUseQuantity={handleUseQuantity}
@@ -750,38 +734,6 @@ export const CombinedAssetsContainer = () => {
         onSubmit={handleCreateAsset}
         initialName={searchTerm}
       />
-
-      {/* Checkout Dialog */}
-      {selectedAsset && selectedAsset.type === 'asset' && (
-        <ToolCheckoutDialog
-          open={showCheckoutDialog}
-          onOpenChange={() => {
-            setShowCheckoutDialog(false);
-            setSelectedAssetId(null);
-          }}
-          tool={selectedAsset as any}
-          onSuccess={() => {
-            setShowCheckoutDialog(false);
-            setSelectedAssetId(null);
-          }}
-        />
-      )}
-
-      {/* Check-in Dialog */}
-      {selectedAsset && selectedAsset.type === 'asset' && (
-        <ToolCheckInDialog
-          open={showCheckinDialog}
-          onOpenChange={() => {
-            setShowCheckinDialog(false);
-            setSelectedAssetId(null);
-          }}
-          tool={selectedAsset as any}
-          onSuccess={() => {
-            setShowCheckinDialog(false);
-            setSelectedAssetId(null);
-          }}
-        />
-      )}
 
       {/* Removal Dialogs */}
       {selectedAsset && selectedAsset.type === 'asset' && (

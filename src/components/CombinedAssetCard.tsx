@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, LogOut, LogIn, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
 import { AssetHistoryDialog } from "./AssetHistoryDialog";
@@ -55,8 +55,6 @@ interface CombinedAssetCardProps {
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
-  onCheckout?: (asset: CombinedAsset) => void;
-  onCheckin?: (asset: CombinedAsset) => void;
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
   onAskMaxwell?: (asset: CombinedAsset) => void;
@@ -141,8 +139,6 @@ export const CombinedAssetCard = memo(({
   onView,
   onEdit,
   onRemove,
-  onCheckout,
-  onCheckin,
   onAddQuantity,
   onUseQuantity,
   onAskMaxwell,
@@ -352,51 +348,6 @@ export const CombinedAssetCard = memo(({
 
         <div className="flex gap-2 mt-2 mt-auto pt-2" onClick={(e) => e.stopPropagation()}>
           {/* Asset-specific buttons */}
-          {asset.type === 'asset' && !asset.is_checked_out && !checkoutInfo && onCheckout && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-12 px-2"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCheckout(asset);
-                    }}
-                  >
-                    <LogOut className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Checkout</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-
-          {asset.type === 'asset' && checkoutInfo && onCheckin && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-12 px-2 text-orange-600 border-orange-600 hover:bg-orange-50 hover:border-orange-700"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCheckin(asset);
-                    }}
-                  >
-                    <LogIn className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Check In</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
 
           {/* Asset History Button - Always show for assets */}
           {asset.type === 'asset' && (

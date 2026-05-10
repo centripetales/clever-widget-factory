@@ -89,7 +89,7 @@ export interface AssetHistoryEntry {
   action_status?: string;
 }
 
-export type HistoryEntry = CheckoutHistory | IssueHistoryEntry | ObservationHistoryEntry | AssetHistoryEntry;
+export type HistoryEntry = ObservationHistoryEntry | AssetHistoryEntry;
 
 export const useToolHistory = () => {
   const [toolHistory, setToolHistory] = useState<HistoryEntry[]>([]);
