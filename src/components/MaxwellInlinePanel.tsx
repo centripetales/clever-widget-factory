@@ -7,6 +7,7 @@ import { useMaxwellStorage } from '@/hooks/useMaxwellStorage';
 import { EntityContext } from '@/hooks/useEntityContext';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
+import { copyToClipboard, copyConversationRich } from '@/lib/urlUtils';
 
 const STARTER_QUESTIONS: Record<string, string[]> = {
   action: [
@@ -45,14 +46,14 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
   const [showTrace, setShowTrace] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(message.content);
+    await copyToClipboard(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleCopyTrace = async () => {
     if (message.trace) {
-      await navigator.clipboard.writeText(JSON.stringify(message.trace, null, 2));
+      await copyToClipboard(JSON.stringify(message.trace, null, 2));
       setCopiedTrace(true);
       setTimeout(() => setCopiedTrace(false), 2000);
     }
@@ -184,8 +185,7 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
   };
 
   const handleCopyAll = async () => {
-    const text = messages.map(m => `${m.role === 'user' ? 'You' : 'Maxwell'}: ${m.content}`).join('\n\n');
-    await navigator.clipboard.writeText(text);
+    await copyConversationRich(messages);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   };

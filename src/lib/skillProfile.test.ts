@@ -24,6 +24,7 @@ function isValidSkillProfile(profile: unknown): boolean {
     if (!axis || typeof axis !== 'object') return false;
     if (typeof axis.key !== 'string' || !(axis.key as string).trim()) return false;
     if (typeof axis.label !== 'string' || !(axis.label as string).trim()) return false;
+    if (typeof axis.description !== 'string' || !(axis.description as string).trim()) return false;
     if (typeof axis.required_level !== 'number') return false;
     if ((axis.required_level as number) < 0.0 || (axis.required_level as number) > 1.0) return false;
   }
@@ -91,10 +92,10 @@ function hasInsufficientContext(ctx: ActionContext): boolean {
 const validProfile = {
   narrative: 'This action requires understanding of concrete chemistry, physical stamina for mixing and pouring, and precision in measuring water-to-cement ratios.',
   axes: [
-    { key: 'chemistry_understanding', label: 'Chemistry Understanding', required_level: 0.7 },
-    { key: 'physical_technique', label: 'Physical Technique', required_level: 0.8 },
-    { key: 'equipment_operation', label: 'Equipment Operation', required_level: 0.6 },
-    { key: 'safety_awareness', label: 'Safety Awareness', required_level: 0.9 },
+    { key: 'chemistry_understanding', label: 'Chemistry Understanding', description: 'Understanding of how cement hydration works and why water-to-cement ratio matters for strength.', required_level: 0.7 },
+    { key: 'physical_technique', label: 'Physical Technique', description: 'Ability to mix and pour concrete with consistent motion to avoid air pockets and uneven curing.', required_level: 0.8 },
+    { key: 'equipment_operation', label: 'Equipment Operation', description: 'Competence with mixers, screeds, and finishing tools to achieve a level, smooth surface.', required_level: 0.6 },
+    { key: 'safety_awareness', label: 'Safety Awareness', description: 'Knowledge of PPE requirements and hazards such as alkaline burns from wet concrete.', required_level: 0.9 },
   ],
   generated_at: '2025-01-15T10:30:00Z',
 };
@@ -102,12 +103,12 @@ const validProfile = {
 const validProfileSixAxes = {
   narrative: 'Complex action requiring multiple skill dimensions.',
   axes: [
-    { key: 'a', label: 'A', required_level: 0.1 },
-    { key: 'b', label: 'B', required_level: 0.2 },
-    { key: 'c', label: 'C', required_level: 0.3 },
-    { key: 'd', label: 'D', required_level: 0.4 },
-    { key: 'e', label: 'E', required_level: 0.5 },
-    { key: 'f', label: 'F', required_level: 0.6 },
+    { key: 'a', label: 'A', description: 'Core concept for axis A and why it matters for this action.', required_level: 0.1 },
+    { key: 'b', label: 'B', description: 'Core concept for axis B and why it matters for this action.', required_level: 0.2 },
+    { key: 'c', label: 'C', description: 'Core concept for axis C and why it matters for this action.', required_level: 0.3 },
+    { key: 'd', label: 'D', description: 'Core concept for axis D and why it matters for this action.', required_level: 0.4 },
+    { key: 'e', label: 'E', description: 'Core concept for axis E and why it matters for this action.', required_level: 0.5 },
+    { key: 'f', label: 'F', description: 'Core concept for axis F and why it matters for this action.', required_level: 0.6 },
   ],
   generated_at: '2025-01-15T10:30:00Z',
 };
@@ -128,7 +129,7 @@ describe('Skill Profile Validation (isValidSkillProfile)', () => {
       ...validProfile,
       axes: [
         ...validProfile.axes,
-        { key: 'quality_assessment', label: 'Quality Assessment', required_level: 0.5 },
+        { key: 'quality_assessment', label: 'Quality Assessment', description: 'Ability to assess the quality of the finished concrete surface against project specifications.', required_level: 0.5 },
       ],
     };
     expect(isValidSkillProfile(fiveAxes)).toBe(true);
@@ -170,7 +171,7 @@ describe('Skill Profile Validation (isValidSkillProfile)', () => {
   it('rejects more than 6 axes', () => {
     const sevenAxes = [
       ...validProfileSixAxes.axes,
-      { key: 'g', label: 'G', required_level: 0.7 },
+      { key: 'g', label: 'G', description: 'Core concept for axis G.', required_level: 0.7 },
     ];
     expect(isValidSkillProfile({ ...validProfileSixAxes, axes: sevenAxes })).toBe(false);
   });
@@ -182,6 +183,27 @@ describe('Skill Profile Validation (isValidSkillProfile)', () => {
 
   it('rejects axes with empty label', () => {
     const badAxes = validProfile.axes.map((a, i) => (i === 0 ? { ...a, label: '' } : a));
+    expect(isValidSkillProfile({ ...validProfile, axes: badAxes })).toBe(false);
+  });
+
+  it('rejects axes with empty description', () => {
+    const badAxes = validProfile.axes.map((a, i) => (i === 0 ? { ...a, description: '' } : a));
+    expect(isValidSkillProfile({ ...validProfile, axes: badAxes })).toBe(false);
+  });
+
+  it('rejects axes with whitespace-only description', () => {
+    const badAxes = validProfile.axes.map((a, i) => (i === 0 ? { ...a, description: '   ' } : a));
+    expect(isValidSkillProfile({ ...validProfile, axes: badAxes })).toBe(false);
+  });
+
+  it('rejects axes with missing description', () => {
+    const badAxes = validProfile.axes.map((a, i) => {
+      if (i === 0) {
+        const { description, ...rest } = a;
+        return rest;
+      }
+      return a;
+    });
     expect(isValidSkillProfile({ ...validProfile, axes: badAxes })).toBe(false);
   });
 

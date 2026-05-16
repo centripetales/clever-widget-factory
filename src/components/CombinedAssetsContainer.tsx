@@ -132,7 +132,7 @@ export const CombinedAssetsContainer = () => {
   }, []);
   
   // Tool history for view dialog
-  const { toolHistory, currentCheckout, fetchToolHistory } = useToolHistory();
+  const { toolHistory, fetchToolHistory } = useToolHistory();
 
   // Fetch pending orders for stock items using TanStack Query for caching
   const fetchPartsOrders = async () => {
@@ -618,7 +618,6 @@ export const CombinedAssetsContainer = () => {
         <ToolDetails
           tool={selectedAssetForDetails as any}
           toolHistory={toolHistory}
-          currentCheckout={null} // TODO: Add current checkout logic if needed
           onBack={handleBackToAssets}
         />
       );
@@ -959,7 +958,6 @@ export const CombinedAssetsContainer = () => {
               <ToolDetails
                 tool={selectedAsset as any}
                 toolHistory={toolHistory}
-                currentCheckout={currentCheckout}
                 onBack={() => {
                   setShowViewDialog(false);
                   setSelectedAssetId(null);

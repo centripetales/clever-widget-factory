@@ -318,11 +318,11 @@ The `'${safeOrgId}'::uuid` cast on `organization_id` comparisons is harmless and
 1. **Deploy DB migration** — adds `action_id`/`axis_key` columns, migrates `skill_axis` data, changes `entity_id` to `uuid`
 2. **Deploy updated `cwf-common-nodejs` layer** (version 25) — removes retired `axisUtils` functions
 3. **Deploy `cwf-embeddings-processor`** — accepts `action_id`/`axis_key` from SQS messages
-4. **Deploy `cwf-skill-profile`** — writes new fields, uses `action_id`-based delete query
+4. **Deploy `cwf-skill-profile-lambda`** — writes new fields, uses `action_id`-based delete query
 5. **Deploy `cwf-capability`** — uses `action_id + axis_key` for all `skill_axis` lookups
 6. **Deploy `cwf-maxwell-unified-search`** — removes `::uuid` casts (now unnecessary)
 
-> **Note on layer deployment**: Deploying a new `cwf-common-nodejs` layer version requires updating the layer ARN on every Lambda that uses it, or selectively updating only the Lambdas affected by the `axisUtils` change (`cwf-skill-profile`, `cwf-capability`). The tasks phase will specify the exact approach.
+> **Note on layer deployment**: Deploying a new `cwf-common-nodejs` layer version requires updating the layer ARN on every Lambda that uses it, or selectively updating only the Lambdas affected by the `axisUtils` change (`cwf-skill-profile-lambda`, `cwf-capability`). The tasks phase will specify the exact approach.
 
 ---
 

@@ -3,7 +3,7 @@ const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const fs = require('fs');
 const path = require('path');
 
-const client = new BedrockAgentRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+const client = new BedrockAgentRuntimeClient({ region: process.env.BEDROCK_REGION });
 
 const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;

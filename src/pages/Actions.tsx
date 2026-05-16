@@ -207,9 +207,7 @@ export default function Actions() {
                action.description?.toLowerCase().includes(searchLower) ||
                stripHtmlAndSearch(action.policy) ||
                stripHtmlAndSearch((action as any).observations) ||
-               action.issue_reference?.toLowerCase().includes(searchLower) ||
                action.asset?.name?.toLowerCase().includes(searchLower) ||
-               action.issue_tool?.name?.toLowerCase().includes(searchLower) ||
                action.mission?.title?.toLowerCase().includes(searchLower);
       });
     }

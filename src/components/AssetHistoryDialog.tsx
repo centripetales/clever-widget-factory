@@ -3,9 +3,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { History, Edit, Plus, AlertTriangle, Clock, LogOut, LogIn, Loader2, ExternalLink, Zap, Target, Camera, Trash2 } from "lucide-react";
+import { History, Edit, Plus, AlertTriangle, Loader2, ExternalLink, Zap, Camera, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useToolHistory, HistoryEntry, AssetHistoryEntry, CheckoutHistory, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
+import { useToolHistory, HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
@@ -16,10 +16,6 @@ import { PrismIcon } from "@/components/icons/PrismIcon";
 // Type guard functions
 const isAssetHistory = (entry: HistoryEntry): entry is AssetHistoryEntry => {
   return 'change_type' in entry && 'changed_at' in entry && 'changed_by' in entry;
-};
-
-const isCheckoutHistory = (entry: HistoryEntry): entry is CheckoutHistory => {
-  return 'checkout_date' in entry && 'is_returned' in entry;
 };
 
 const isObservation = (entry: HistoryEntry): entry is ObservationHistoryEntry => {
@@ -160,8 +156,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
         default:
           return <History className="h-4 w-4 text-gray-600" />;
       }
-    } else if (isCheckoutHistory(entry)) {
-      return entry.is_returned ? <LogIn className="h-4 w-4 text-green-600" /> : <LogOut className="h-4 w-4 text-blue-600" />;
     } else if (isObservation(entry)) {
       return <Camera className="h-4 w-4 text-blue-600" />;
     }
@@ -184,8 +178,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
         default:
           return 'Asset modified';
       }
-    } else if (isCheckoutHistory(entry)) {
-      return entry.is_returned ? 'Tool returned' : 'Tool checked out';
     } else if (isObservation(entry)) {
       return '';
     }
@@ -198,8 +190,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
              entry.change_type === 'status_change' ? 'Status Changed' :
              entry.change_type === 'action_created' ? 'Action' :
              entry.change_type === 'updated' ? 'Updated' : entry.change_type;
-    } else if (isCheckoutHistory(entry)) {
-      return entry.is_returned ? 'Returned' : 'Checked Out';
     } else if (isObservation(entry)) {
       return 'Observation';
     }
@@ -207,9 +197,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
   };
 
   const getChangeDate = (entry: HistoryEntry) => {
-    if (isCheckoutHistory(entry)) {
-      return entry.checkout_date || entry.created_at;
-    } else if (isObservation(entry)) {
+    if (isObservation(entry)) {
       return entry.observed_at;
     }
     return entry.changed_at;
@@ -285,9 +273,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">
-                            {isCheckoutHistory(entry) 
-                              ? (entry.user_display_name || <span className="text-red-600">ERROR: User not found</span>)
-                              : isObservation(entry)
+                            {isObservation(entry)
                               ? entry.observed_by_name
                               : (entry.user_name || 'System')
                             }
@@ -319,46 +305,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                         {getChangeDescription(entry)}
                       </p>
                       
-                      {/* Checkout context: Action link or intended usage */}
-                      {isCheckoutHistory(entry) && (
-                        <>
-                          {/* Show action link if action_id exists */}
-                          {entry.action_id && entry.action_title && (
-                            <div className="text-sm bg-blue-50 border border-blue-200 p-2 rounded mt-2 mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-blue-900">Action:</span>
-                                <Link
-                                  to={`/actions/${entry.action_id}`}
-                                  className="text-blue-600 hover:text-blue-800 underline flex items-center gap-1"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {entry.action_title}
-                                  <ExternalLink className="h-3 w-3" />
-                                </Link>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* Show intended usage if no action_id but intended_usage exists */}
-                          {!entry.action_id && entry.intended_usage && (
-                            <div className="text-sm bg-gray-50 border border-gray-200 p-2 rounded mt-2 mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-gray-900">Intended Usage:</span>
-                                <span className="text-gray-700">{entry.intended_usage}</span>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* Show notes if present */}
-                          {entry.notes && (
-                            <div className="text-sm bg-muted p-2 rounded mt-2 mb-2">
-                              <span className="font-medium">Notes:</span>{' '}
-                              <span className="text-muted-foreground">{entry.notes}</span>
-                            </div>
-                          )}
-                        </>
-                      )}
-                      
                       {isAssetHistory(entry) && entry.field_changed && entry.old_value !== undefined && entry.new_value !== undefined && (
                         <div className="text-sm bg-muted p-2 rounded">
                           <span className="font-medium">{entry.field_changed}:</span>{' '}
@@ -372,18 +318,6 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                         <p className="text-sm text-muted-foreground mt-2">
                           {entry.notes}
                         </p>
-                      )}
-
-                      {isCheckoutHistory(entry) && entry.checkin && (
-                        <div className="text-sm bg-muted p-2 rounded mt-2">
-                          <p><span className="font-medium">Hours used:</span> {entry.checkin.hours_used || 'N/A'}</p>
-                          {entry.checkin.problems_reported && (
-                            <p><span className="font-medium">Problems reported:</span> {entry.checkin.problems_reported}</p>
-                          )}
-                          {entry.checkin.notes && (
-                            <p><span className="font-medium">Notes:</span> {entry.checkin.notes}</p>
-                          )}
-                        </div>
                       )}
 
                       {/* Action display section */}

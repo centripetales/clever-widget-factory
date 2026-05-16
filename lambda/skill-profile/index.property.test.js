@@ -26,21 +26,15 @@ const arbUuid = fc.uuid();
 const arbAxisKey = fc.stringMatching(/^[a-z][a-z0-9_]{2,30}$/);
 
 // ── Property 8: Axis embedding source composition ───────────────────
-// **Validates: Requirements 4.2**
+// **Validates: Requirements 2.1, 2.2, 2.4, 4.2**
+//
+// New behavior (learning-focus-redesign):
+//   - When description is present and non-empty, it is the SOLE embedding source.
+//   - When description is absent/empty, falls back to label + narrative.
 
 describe('Property 8: Axis embedding source composition', () => {
-  it('composed source always contains the label', () => {
-    fc.assert(
-      fc.property(arbLabel, arbDescription, arbNarrative, (label, description, narrative) => {
-        const axis = { label, description: description ?? undefined };
-        const source = composeAxisEmbeddingSource(axis, narrative ?? undefined);
-        return source.includes(label);
-      }),
-      { numRuns: 100 }
-    );
-  });
-
-  it('composed source contains the description when description is non-empty', () => {
+  it('when description is present, composed source equals description exactly (sole source)', () => {
+    // Feature: learning-focus-redesign, Property 1: description sole source
     fc.assert(
       fc.property(
         arbLabel,
@@ -49,21 +43,33 @@ describe('Property 8: Axis embedding source composition', () => {
         (label, description, narrative) => {
           const axis = { label, description };
           const source = composeAxisEmbeddingSource(axis, narrative ?? undefined);
-          return source.includes(description);
+          return source === description;
         }
       ),
       { numRuns: 100 }
     );
   });
 
-  it('composed source contains the narrative when narrative is non-empty', () => {
+  it('when description is absent, composed source contains the label', () => {
+    // Feature: learning-focus-redesign, Property 2: fallback when description absent
+    fc.assert(
+      fc.property(arbLabel, arbNarrative, (label, narrative) => {
+        const axis = { label }; // no description
+        const source = composeAxisEmbeddingSource(axis, narrative ?? undefined);
+        return source.includes(label);
+      }),
+      { numRuns: 100 }
+    );
+  });
+
+  it('when description is absent, composed source contains the narrative when narrative is non-empty', () => {
+    // Feature: learning-focus-redesign, Property 2: fallback when description absent
     fc.assert(
       fc.property(
         arbLabel,
-        arbDescription,
         fc.string({ minLength: 1, maxLength: 500 }).filter(s => s.trim().length > 0),
-        (label, description, narrative) => {
-          const axis = { label, description: description ?? undefined };
+        (label, narrative) => {
+          const axis = { label }; // no description
           const source = composeAxisEmbeddingSource(axis, narrative);
           return source.includes(narrative);
         }

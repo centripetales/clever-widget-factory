@@ -516,9 +516,13 @@ exports.handler = async (event) => {
     if (httpMethod === 'DELETE' && path.match(/\/parts\/[^/]+$/)) {
       const partId = path.split('/').pop();
       
+      // Delete dependent records first to avoid FK constraint violations
+      await queryJSON(`DELETE FROM parts_history WHERE part_id::text = '${escapeLiteral(partId)}'`);
+      await queryJSON(`DELETE FROM parts_orders WHERE part_id::text = '${escapeLiteral(partId)}'`);
+      
       const sql = `
         DELETE FROM parts 
-        WHERE id = '${escapeLiteral(partId)}'
+        WHERE id::text = '${escapeLiteral(partId)}'
         RETURNING *;
       `;
       

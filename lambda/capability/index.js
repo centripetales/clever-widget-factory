@@ -9,7 +9,7 @@ const { determineEvidenceTypeEnriched } = require('./capabilityUtils');
 const { composeCapabilityProfileStateText, parseCapabilityProfileStateText, computeEvidenceHash, determineCacheAction } = require('./cacheUtils');
 const { composeAxisEmbeddingSource } = require('/opt/nodejs/axisUtils');
 
-const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION });
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
@@ -42,27 +42,26 @@ exports.handler = async (event) => {
   }
 
   try {
-    // GET /api/capability/:actionId/organization — Organization capability assessment
-    // GET /api/capability/:actionId/:userId — Individual capability assessment
-    // Note: organization route is checked first since "organization" occupies the :userId position
+    // GET /api/capability/:actionId              — Individual capability (userId from auth context)
+    // GET /api/capability/:actionId?force=true   — Force rescore
     if (httpMethod === 'GET' && path.startsWith('/api/capability/')) {
       const segments = path.replace('/api/capability/', '').split('/');
       const actionId = segments[0];
-      const secondSegment = segments[1];
 
-      if (!actionId || !secondSegment) {
-        return error('Invalid path. Expected /api/capability/:actionId/:userId or /api/capability/:actionId/organization', 400);
+      if (!actionId) {
+        return error('Invalid path. Expected /api/capability/:actionId', 400);
       }
 
       const queryParams = event.queryStringParameters || {};
       const forceRescore = queryParams.force === 'true';
 
-      if (secondSegment === 'organization') {
-        return await handleOrganizationCapability(actionId, organizationId, forceRescore);
-      } else {
-        const userId = secondSegment;
-        return await handleIndividualCapability(actionId, userId, organizationId, forceRescore);
+      // userId always comes from auth context — the logged-in user is always the subject
+      const userId = authContext.user_id;
+      if (!userId) {
+        return error('User identity not found in auth context', 401);
       }
+
+      return await handleIndividualCapability(actionId, userId, organizationId, forceRescore);
     }
 
     return error('Not found', 404);
@@ -263,17 +262,20 @@ async function handlePerAxisCapability(db, actionId, userId, organizationId, ski
 
   for (const axis of skillProfile.axes) {
     try {
-      // Per-axis vector search: find top evidence_limit states most similar to this axis embedding
-      // INNER JOIN state_links restricts to learning-objective-linked states only (Req 3.1, 3.5)
+      // Per-axis vector search: find top evidence_limit states most similar to this axis embedding.
+      // captured_by is the sole eligibility criterion — all user-authored states are included
+      // regardless of action assignment or state_links. Prefix exclusions are explicit to match
+      // the same pool used by fetchEvidenceStateIds for cache hash computation.
       const axisSearchResult = await db.query(
         `SELECT ue.entity_id, ue.embedding_source, s.state_text,
                 (1 - (ue.embedding <=> (SELECT embedding FROM unified_embeddings WHERE entity_type = 'skill_axis' AND action_id = $1 AND axis_key = $2 LIMIT 1))) as similarity
          FROM unified_embeddings ue
-         INNER JOIN states s ON s.id::text = ue.entity_id
-         INNER JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = 'learning_objective'
+         INNER JOIN states s ON s.id = ue.entity_id
          WHERE ue.entity_type = 'state'
            AND ue.organization_id = '${orgIdSafe}'
            AND s.captured_by = '${userIdSafe}'
+           AND s.state_text NOT LIKE '[capability_profile]%'
+           AND s.state_text NOT LIKE '[learning_objective]%'
          ORDER BY similarity DESC
          LIMIT ${aiConfig.evidence_limit}`,
         [actionId, axis.key]
@@ -414,7 +416,7 @@ async function callBedrockForPerAxisCapability(skillProfile, perAxisEvidence, us
   const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
 
   const axesDescription = skillProfile.axes.map(a =>
-    `- ${a.key} ("${a.label}"): required level ${a.required_level}`
+    `- ${a.key} ("${a.label}"): required level ${a.required_level}${a.description ? `\n  Concept: ${a.description}` : ''}`
   ).join('\n');
 
   // Build per-axis evidence sections
@@ -628,7 +630,7 @@ async function handleOrganizationCapability(actionId, organizationId, forceResco
           `SELECT ue.entity_id, ue.embedding_source, s.state_text,
                   (1 - (ue.embedding <=> (SELECT embedding FROM unified_embeddings WHERE entity_type = 'skill_axis' AND action_id = $1 AND axis_key = $2 LIMIT 1))) as similarity
            FROM unified_embeddings ue
-           INNER JOIN states s ON s.id::text = ue.entity_id
+           INNER JOIN states s ON s.id = ue.entity_id
            INNER JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = 'learning_objective'
            WHERE ue.entity_type = 'state'
              AND ue.organization_id = '${orgIdSafe}'

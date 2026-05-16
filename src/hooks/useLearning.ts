@@ -114,16 +114,19 @@ export interface EvaluationStatusResponse {
 /**
  * Query hook to fetch learning objectives for a user on an action.
  * GET /api/learning/:actionId/:userId/objectives
- * Enabled only when both actionId and userId are truthy.
- * Requirements: 3.5.1
+ * Only fires when both actionId and userId are non-empty strings.
  */
 export function useLearningObjectives(
   actionId: string | undefined,
   userId: string | undefined
 ) {
   return useQuery({
-    queryKey: learningObjectivesQueryKey(actionId!, userId!),
+    queryKey: ['learning_objectives', actionId ?? '', userId ?? ''],
     queryFn: async () => {
+      // Double-guard: enabled should prevent this, but never call with undefined
+      if (!actionId || !userId) {
+        throw new Error('useLearningObjectives: actionId and userId are required');
+      }
       try {
         const result = await apiService.get<{ data: LearningObjectivesResponse }>(
           `/learning/${actionId}/${userId}/objectives`
@@ -144,7 +147,6 @@ export function useLearningObjectives(
 /**
  * Mutation hook to generate quiz questions for selected learning objectives.
  * POST /api/learning/:actionId/quiz/generate
- * Requirements: 4.1
  */
 export function useQuizGeneration() {
   return useMutation({
@@ -166,7 +168,6 @@ export function useQuizGeneration() {
  * Mutation hook to verify an observation against learning objectives.
  * POST /api/learning/:actionId/verify
  * On success, invalidates the learning objectives query cache.
- * Requirements: 9.3
  */
 export function useObservationVerification() {
   const queryClient = useQueryClient();
@@ -181,7 +182,6 @@ export function useObservationVerification() {
       return result.data;
     },
     onSuccess: (_data, variables) => {
-      // Invalidate learning objectives cache so progress updates are reflected
       queryClient.invalidateQueries({
         queryKey: learningObjectivesQueryKey(variables.actionId, variables.userId),
       });
@@ -196,7 +196,6 @@ export function useObservationVerification() {
  * Mutation hook to trigger async evaluation of an open-form response.
  * POST /api/learning/:actionId/quiz/evaluate
  * Returns 202 Accepted — evaluation runs asynchronously.
- * Requirements: 3.1, 7.6
  */
 export function useQuizEvaluation() {
   return useMutation({
@@ -217,8 +216,7 @@ export function useQuizEvaluation() {
 /**
  * Query hook to poll evaluation status for one or more knowledge states.
  * GET /api/learning/:actionId/:userId/evaluation-status?stateIds=...
- * Polling is disabled by default; enabled when stateIds are provided.
- * Requirements: 7.6, 8.1
+ * Only fires when actionId, userId, and stateIds are all present.
  */
 export function useEvaluationStatus(
   actionId: string | undefined,
@@ -227,8 +225,12 @@ export function useEvaluationStatus(
   refetchInterval: number | false = false
 ) {
   return useQuery({
-    queryKey: evaluationStatusQueryKey(actionId!, userId!, stateIds),
+    queryKey: ['evaluation_status', actionId ?? '', userId ?? '', ...stateIds.sort()],
     queryFn: async () => {
+      // Double-guard: never call with undefined
+      if (!actionId || !userId) {
+        throw new Error('useEvaluationStatus: actionId and userId are required');
+      }
       const params = new URLSearchParams();
       params.set('stateIds', stateIds.join(','));
       const result = await apiService.get<{ data: EvaluationStatusResponse }>(

@@ -32,7 +32,7 @@ const path = require('path');
 
 // --- Bedrock Agent configuration ---
 const bedrockClient = new BedrockAgentRuntimeClient({
-  region: process.env.BEDROCK_REGION || 'us-west-2',
+  region: process.env.BEDROCK_REGION,
 });
 const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;

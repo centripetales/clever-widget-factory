@@ -1,41 +1,35 @@
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Tool } from "@/hooks/tools/useToolsData";
-import { CheckoutHistory, HistoryEntry, AssetHistoryEntry } from "@/hooks/tools/useToolHistory";
+import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { getThumbnailUrl } from '@/lib/imageUtils';
+import { Link } from "react-router-dom";
 
 interface ToolDetailsProps {
   tool: Tool;
   toolHistory: HistoryEntry[];
-  currentCheckout: { user_name: string } | null;
   onBack: () => void;
 }
 
 export const ToolDetails = ({
   tool,
   toolHistory,
-  currentCheckout,
   onBack
 }: ToolDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
-  
+
   const isAssetHistory = (record: HistoryEntry): record is AssetHistoryEntry => {
     return (record as AssetHistoryEntry).type === 'asset_change';
   };
 
-  const isCreationHistory = (record: HistoryEntry): record is CheckoutHistory => {
-    return (record as AssetHistoryEntry).type !== 'asset_change' && (record as CheckoutHistory).checkin?.checkin_reason === 'asset_created';
-  };
-
-  const isCheckoutHistory = (record: HistoryEntry): record is CheckoutHistory => {
-    return (record as AssetHistoryEntry).type !== 'asset_change' && 
-           (record as CheckoutHistory).checkin?.checkin_reason !== 'asset_created';
+  const isObservation = (record: HistoryEntry): record is ObservationHistoryEntry => {
+    return (record as ObservationHistoryEntry).type === 'observation';
   };
 
   return (
@@ -49,11 +43,6 @@ export const ToolDetails = ({
           <h1 className="text-2xl font-bold">{tool.name}</h1>
           <div className="flex items-center gap-2 mt-1">
             <ToolStatusBadge status={tool.status} />
-            {currentCheckout && (
-              <Badge variant="secondary">
-                Checked out by: {currentCheckout.user_name}
-              </Badge>
-            )}
           </div>
         </div>
         <Button
@@ -73,7 +62,7 @@ export const ToolDetails = ({
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="details" className="space-y-4">
               <Card>
                 <CardHeader>
@@ -112,9 +101,9 @@ export const ToolDetails = ({
                   {tool.manual_url && (
                     <div>
                       <span className="font-medium">Manual:</span>{' '}
-                      <a 
-                        href={tool.manual_url} 
-                        target="_blank" 
+                      <a
+                        href={tool.manual_url}
+                        target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary hover:underline"
                       >
@@ -126,21 +115,22 @@ export const ToolDetails = ({
               </Card>
             </TabsContent>
 
-
-
             <TabsContent value="history" className="space-y-4">
               <div className="space-y-4">
                 {toolHistory.map((record) => (
                   <Card key={record.id}>
                     <CardContent className="p-4">
                       {isAssetHistory(record) ? (
-                        // Asset History
                         <>
                           <div className="flex justify-between items-start mb-2">
                             <div className="flex items-start gap-2">
-                              <div className="h-4 w-4 mt-0.5 rounded-full bg-blue-100 flex items-center justify-center">
-                                <div className="h-2 w-2 rounded-full bg-blue-600"></div>
-                              </div>
+                              {record.change_type === 'action_created' ? (
+                                <Zap className="h-4 w-4 mt-0.5 text-purple-600" />
+                              ) : (
+                                <div className="h-4 w-4 mt-0.5 rounded-full bg-blue-100 flex items-center justify-center">
+                                  <div className="h-2 w-2 rounded-full bg-blue-600" />
+                                </div>
+                              )}
                               <div>
                                 <p className="font-medium">{record.user_name}</p>
                                 <p className="text-sm text-muted-foreground">
@@ -150,18 +140,32 @@ export const ToolDetails = ({
                             </div>
                             <Badge variant="outline" className="capitalize">
                               {record.change_type === 'created' ? 'Created' :
+                               record.change_type === 'action_created' ? 'Action' :
                                record.change_type === 'status_change' ? 'Status Changed' :
                                record.change_type === 'updated' ? 'Updated' : record.change_type}
                             </Badge>
                           </div>
-                          
-                          {record.change_type === 'created' && record.notes && (
-                            <p className="text-sm mb-2">
-                              <span className="font-medium">Details:</span> {record.notes}
-                            </p>
+
+                          {record.change_type === 'action_created' && record.action_title && (
+                            <div className="text-sm bg-purple-50 border border-purple-200 p-3 rounded mt-2">
+                              <p className="font-medium text-purple-900 mb-1">Action:</p>
+                              {record.action_id ? (
+                                <Link
+                                  to={`/actions/${record.action_id}`}
+                                  className="text-purple-600 hover:text-purple-800 underline"
+                                >
+                                  {record.action_title}
+                                </Link>
+                              ) : (
+                                <p className="text-purple-800">{record.action_title}</p>
+                              )}
+                              {record.action_status && (
+                                <Badge variant="outline" className="mt-1 text-xs">{record.action_status}</Badge>
+                              )}
+                            </div>
                           )}
-                          
-                          {record.field_changed && (
+
+                          {record.change_type !== 'action_created' && record.field_changed && (
                             <p className="text-sm mb-2">
                               <span className="font-medium">Field Changed:</span> {record.field_changed}
                               {record.old_value && record.new_value && (
@@ -171,155 +175,31 @@ export const ToolDetails = ({
                               )}
                             </p>
                           )}
-                          
-                          {record.notes && record.change_type !== 'created' && (
-                            <p className="text-sm text-muted-foreground">
-                              {record.notes}
-                            </p>
+
+                          {record.notes && record.change_type !== 'created' && record.change_type !== 'action_created' && (
+                            <p className="text-sm text-muted-foreground">{record.notes}</p>
                           )}
                         </>
-                      ) : isCreationHistory(record) ? (
-                        // Asset Creation Event
+                      ) : isObservation(record) ? (
                         <>
-                          <div className="mb-2">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300">
-                                Asset Created
-                              </Badge>
-                            </div>
-                            <p className="font-medium mt-2">{record.user_name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              Created on{' '}
-                              {(() => {
-                                const dateToUse = record.checkin?.checkin_date || record.created_at;
-                                return new Date(dateToUse).toLocaleDateString('en-US', {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric'
-                                }) + ' at ' + new Date(dateToUse).toLocaleTimeString('en-US', {
-                                  hour: 'numeric',
-                                  minute: '2-digit',
-                                  hour12: true
-                                });
-                              })()}
-                            </p>
-                          </div>
-                          
-                          {record.notes && (
-                            <div className="mt-3 p-3 bg-green-50 rounded-md text-sm">
-                              <p className="font-medium mb-1 text-green-800">Creation Details:</p>
-                              <p className="text-green-700">{record.notes}</p>
-                            </div>
-                          )}
-                        </>
-                      ) : isCheckoutHistory(record) ? (
-                        // Checkout/Check-in History
-                        <>
-                          <div className="mb-2">
+                          <div className="flex justify-between items-start mb-2">
                             <div>
-                              <p className="font-medium">{record.user_name}</p>
+                              <p className="font-medium">{record.observed_by_name}</p>
                               <p className="text-sm text-muted-foreground">
-                                {record.type === 'checkin' ? 'Check-in' : 'Checkout'} on{' '}
-                                {(() => {
-                                  const dateToUse = record.type === 'checkin' && record.checkin?.checkin_date 
-                                    ? record.checkin.checkin_date 
-                                    : (record.checkout_date || record.created_at);
-                                  return new Date(dateToUse).toLocaleDateString('en-US', {
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric'
-                                  }) + ' at ' + new Date(dateToUse).toLocaleTimeString('en-US', {
-                                    hour: 'numeric',
-                                    minute: '2-digit',
-                                    hour12: true
-                                  });
-                                })()}
+                                {new Date(record.observed_at).toLocaleDateString()} {new Date(record.observed_at).toLocaleTimeString()}
                               </p>
                             </div>
+                            <Badge variant="outline">Observation</Badge>
                           </div>
-                          
-                          {record.intended_usage && (
-                            <p className="text-sm mb-2">
-                              <span className="font-medium">Intended Usage:</span>{' '}
-                              {record.action_id ? (
-                                <a 
-                                  href={`/actions/${record.action_id}`}
-                                  className="text-blue-600 hover:text-blue-800 underline"
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  {record.intended_usage}
-                                </a>
-                              ) : (
-                                record.intended_usage
-                              )}
-                            </p>
-                          )}
-                          
-                          {/* Notes removed from checkout display per new guidance */}
-
-                          {record.checkin && (
-                            <div className="mt-3 p-3 bg-muted rounded-md text-sm">
-                              <p className="font-medium mb-1">Check-in Details:</p>
-                              {/* Combined: Check-in timestamp and duration */}
-                              {record.checkin.checkin_date && (
-                                <p className="mb-1">
-                                  <span className="font-medium">Check In at:</span>{' '}
-                                  {(() => {
-                                    const end = new Date(record.checkin!.checkin_date);
-                                    const tsStr = end.toLocaleDateString('en-US', {
-                                      year: 'numeric',
-                                      month: 'short',
-                                      day: 'numeric'
-                                    }) + ' at ' + end.toLocaleTimeString('en-US', {
-                                      hour: 'numeric',
-                                      minute: '2-digit',
-                                      hour12: true
-                                    });
-                                    if (!record.checkout_date) return tsStr;
-                                    const start = new Date(record.checkout_date as string);
-                                    const ms = Math.max(0, end.getTime() - start.getTime());
-                                    const minutes = Math.floor(ms / 60000);
-                                    const days = Math.floor(minutes / (60 * 24));
-                                    const hours = Math.floor((minutes % (60 * 24)) / 60);
-                                    const mins = minutes % 60;
-                                    const parts: string[] = [];
-                                    if (days) parts.push(`${days} day${days === 1 ? '' : 's'}`);
-                                    if (hours) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
-                                    if (mins) parts.push(`${mins} minute${mins === 1 ? '' : 's'}`);
-                                    const duration = parts.join(', ');
-                                    return duration ? `${tsStr} after ${duration}` : tsStr;
-                                  })()}
-                                </p>
-                              )}
-                              {record.checkin.checkin_reason && (
-                                <p className="mb-1">
-                                  <span className="font-medium">Reason:</span> {record.checkin.checkin_reason}
-                                </p>
-                              )}
-                              {record.checkin.problems_reported && (
-                                <p className="mb-1">
-                                  <span className="font-medium">Problems:</span> {record.checkin.problems_reported}
-                                </p>
-                              )}
-                              {record.checkin.hours_used && (
-                                <p className="mb-1">
-                                  <span className="font-medium">Hours Used:</span> {record.checkin.hours_used}
-                                </p>
-                              )}
-                              {record.checkin.what_did_you_do && (
-                                <p className="mb-1">
-                                  <span className="font-medium">Work Done:</span> {record.checkin.what_did_you_do}
-                                </p>
-                              )}
-                            </div>
+                          {record.observation_text && (
+                            <p className="text-sm">{record.observation_text}</p>
                           )}
                         </>
                       ) : null}
                     </CardContent>
                   </Card>
                 ))}
-                
+
                 {toolHistory.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">
                     No history available.

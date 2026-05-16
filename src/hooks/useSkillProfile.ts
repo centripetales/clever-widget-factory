@@ -7,6 +7,7 @@ import { actionsQueryKey } from '@/lib/queryKeys';
 export interface SkillAxis {
   key: string;
   label: string;
+  description: string;
   required_level: number;
 }
 
@@ -56,7 +57,7 @@ export function useGenerateSkillProfile() {
       return result.data;
     },
     onError: (error) => {
-      console.error('Failed to generate skill profile:', error);
+      console.error('Failed to generate skill profile:', (error as any)?.message || String(error));
     },
   });
 }

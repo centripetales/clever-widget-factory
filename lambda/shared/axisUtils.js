@@ -5,16 +5,20 @@
 
 /**
  * Compose the embedding source text for a single skill axis.
- * Joins the axis label, optional description, and optional narrative with '. ' separator.
+ * When `axis.description` is present and non-empty, it is returned as the sole
+ * embedding source (the description already incorporates label context and growth
+ * intent). When `description` is absent or whitespace-only, falls back to the
+ * legacy behaviour: label joined with narrative (if present).
  * @param {{ label: string, description?: string }} axis
  * @param {string} [narrative]
  * @returns {string}
  */
 function composeAxisEmbeddingSource(axis, narrative) {
-  const parts = [axis.label];
-  if (axis.description) parts.push(axis.description);
-  if (narrative) parts.push(narrative);
-  return parts.join('. ');
+  if (axis.description && axis.description.trim()) {
+    return axis.description;
+  }
+  // Fallback: legacy behavior for profiles without description
+  return [axis.label, narrative].filter(Boolean).join('. ');
 }
 
 module.exports = {

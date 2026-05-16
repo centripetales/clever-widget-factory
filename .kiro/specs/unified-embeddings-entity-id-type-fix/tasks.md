@@ -133,8 +133,8 @@
     - Remove any remaining references to `composeAxisEntityId` or `parseAxisEntityId`
     - _Requirements: 2.2_
 
-  - [x] 7.4 Deploy `cwf-skill-profile` Lambda
-    - Run: `./scripts/deploy/deploy-lambda-with-layer.sh skill-profile cwf-skill-profile`
+  - [x] 7.4 Deploy `cwf-skill-profile-lambda` Lambda
+    - Run: `./scripts/deploy/deploy-lambda-with-layer.sh skill-profile cwf-skill-profile-lambda`
     - _Requirements: 2.2, 3.3_
 
 - [x] 8. Phase 2, Step 5 — Update `lambda/capability/index.js`

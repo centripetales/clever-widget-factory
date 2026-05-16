@@ -39,14 +39,17 @@ const { composeProfileSkillStateText, parseProfileSkillStateText } = (() => {
 })();
 
 describe('composeAxisEmbeddingSource', () => {
+  // New behavior (learning-focus-redesign): description is the SOLE source when present.
+  // Fallback to label + narrative only when description is absent/empty.
+
   it('returns label only when no description or narrative', () => {
     const axis = { label: 'Water Chemistry Testing' };
     expect(composeAxisEmbeddingSource(axis)).toBe('Water Chemistry Testing');
   });
 
-  it('returns label + description when description is provided', () => {
+  it('returns description as sole source when description is provided (ignores label)', () => {
     const axis = { label: 'Water Chemistry Testing', description: 'Testing water quality parameters' };
-    expect(composeAxisEmbeddingSource(axis)).toBe('Water Chemistry Testing. Testing water quality parameters');
+    expect(composeAxisEmbeddingSource(axis)).toBe('Testing water quality parameters');
   });
 
   it('returns label + narrative when narrative is provided but no description', () => {
@@ -57,23 +60,21 @@ describe('composeAxisEmbeddingSource', () => {
     );
   });
 
-  it('returns label + description + narrative when all are provided', () => {
+  it('returns description as sole source when description and narrative are both provided', () => {
     const axis = { label: 'Water Chemistry Testing', description: 'Testing water quality parameters' };
     const narrative = 'This action requires understanding of water chemistry.';
-    expect(composeAxisEmbeddingSource(axis, narrative)).toBe(
-      'Water Chemistry Testing. Testing water quality parameters. This action requires understanding of water chemistry.'
-    );
+    expect(composeAxisEmbeddingSource(axis, narrative)).toBe('Testing water quality parameters');
   });
 
-  it('skips empty description', () => {
+  it('falls back to label + narrative when description is empty', () => {
     const axis = { label: 'Safety Protocols', description: '' };
     const narrative = 'Safety is critical.';
     expect(composeAxisEmbeddingSource(axis, narrative)).toBe('Safety Protocols. Safety is critical.');
   });
 
-  it('skips empty narrative', () => {
+  it('returns description as sole source when narrative is empty but description is present', () => {
     const axis = { label: 'Safety Protocols', description: 'Following safety rules' };
-    expect(composeAxisEmbeddingSource(axis, '')).toBe('Safety Protocols. Following safety rules');
+    expect(composeAxisEmbeddingSource(axis, '')).toBe('Following safety rules');
   });
 
   it('skips null/undefined description and narrative', () => {

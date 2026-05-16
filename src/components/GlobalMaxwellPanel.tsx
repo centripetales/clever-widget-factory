@@ -10,6 +10,7 @@ import { useMaxwellRecordHighlight } from '@/contexts/MaxwellRecordHighlightCont
 import { useEntityContext } from '@/hooks/useEntityContext';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
+import { copyConversationRich } from '@/lib/urlUtils';
 
 const STARTER_QUESTIONS_ACTION = [
   'Summarize what has happened so far and given our policy and observations what are next steps',
@@ -265,10 +266,7 @@ export function GlobalMaxwellPanel({
       : STARTER_QUESTIONS_ASSET;
 
   const handleCopyAll = async () => {
-    const conversationText = messages
-      .map((msg) => `${msg.role === 'user' ? 'You' : 'Maxwell'}: ${msg.content}`)
-      .join('\n\n');
-    await navigator.clipboard.writeText(conversationText);
+    await copyConversationRich(messages);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   };
