@@ -15,7 +15,7 @@ interface WebSocketMessage {
 
 export interface UseWebSocketReturn {
   status: ConnectionStatus;
-  sendMessage: (type: string, payload: Record<string, unknown>) => void;
+  sendMessage: (type: string, payload: Record<string, unknown>) => boolean;
   subscribe: (type: string, handler: MessageHandler) => () => void;
   connectionId: string | null;
 }
@@ -298,10 +298,10 @@ export function useWebSocket(): UseWebSocketReturn {
     };
   }, []);
 
-  const sendMessage = useCallback((type: string, payload: Record<string, unknown>) => {
+  const sendMessage = useCallback((type: string, payload: Record<string, unknown>): boolean => {
     if (!singletonWs || singletonWs.readyState !== WebSocket.OPEN) {
       console.warn('[useWebSocket] Cannot send message, WebSocket is not connected');
-      return;
+      return false;
     }
 
     const message: WebSocketMessage = {
@@ -311,6 +311,7 @@ export function useWebSocket(): UseWebSocketReturn {
     };
 
     singletonWs.send(JSON.stringify(message));
+    return true;
   }, []);
 
   const subscribe = useCallback((type: string, handler: MessageHandler): (() => void) => {

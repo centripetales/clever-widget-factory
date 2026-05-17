@@ -38,7 +38,7 @@ const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
 
 // --- Prompt loading (same pattern as lambda/maxwell-chat/index.js) ---
-const PROMPT_SET = process.env.PROMPT_SET || 'sonnet46';
+const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
 console.log(`[MAXWELL-WORKER] Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
 
@@ -75,6 +75,21 @@ function detectPromptMode(message) {
 function buildInstructionPrefix(message) {
   const modePrompt = detectPromptMode(message);
   return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
+}
+
+function normalizeContextText(value, maxLength = 900) {
+  if (!value) return '';
+  const text = String(value)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text;
 }
 
 /**
@@ -165,11 +180,13 @@ exports.handler = async (event) => {
   let enhancedMessage = buildInstructionPrefix(message);
   if (sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
     const contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
-    if (sessionAttributes.policy) {
-      contextParts.push(`Description: ${sessionAttributes.policy}`);
+    const policyText = normalizeContextText(sessionAttributes.policy);
+    if (policyText) {
+      contextParts.push(`Description: ${policyText}`);
     }
-    if (sessionAttributes.implementation) {
-      contextParts.push(`Observations summary: ${sessionAttributes.implementation}`);
+    const implementationText = normalizeContextText(sessionAttributes.implementation, 600);
+    if (implementationText) {
+      contextParts.push(`Observations summary: ${implementationText}`);
     }
     enhancedMessage += `[Context: ${contextParts.join('. ')}] `;
   }
@@ -179,6 +196,8 @@ exports.handler = async (event) => {
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
     ...sessionAttributes,
+    policy: normalizeContextText(sessionAttributes.policy),
+    implementation: normalizeContextText(sessionAttributes.implementation, 600),
     organization_id: organizationId,
     current_date: new Date().toISOString().split('T')[0],
   };
@@ -205,13 +224,16 @@ exports.handler = async (event) => {
   });
 
   try {
+    const t0 = Date.now();
     const response = await bedrockClient.send(command);
     const returnedSessionId = response.sessionId;
 
     let reply = '';
     const traceEvents = [];
+    let firstChunkTime = null;
 
     for await (const chunk of response.completion) {
+      if (!firstChunkTime) firstChunkTime = Date.now();
       // Forward trace events as progress indicators
       if (chunk.trace) {
         traceEvents.push(chunk.trace);
@@ -237,6 +259,9 @@ exports.handler = async (event) => {
         }
       }
     }
+
+    const tEnd = Date.now();
+    console.log(`[METRICS] Maxwell Worker - Total Time: ${tEnd - t0}ms, Time to first chunk: ${firstChunkTime ? firstChunkTime - t0 : 'N/A'}ms, Trace steps: ${traceEvents.length}`);
 
     // Send the final complete response
     // Note: trace events are already sent individually as maxwell:progress messages.

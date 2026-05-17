@@ -2,10 +2,10 @@
 set -e
 
 # Deploy Lambda with layer support
-# Usage: ./deploy-lambda-with-layer.sh <lambda-dir> <function-name> [layer-arn]
+# Usage: ./deploy-lambda-with-layer.sh <lambda-dir> <function-name> [layer-arn] [timeout-seconds]
 
 if [ -z "$1" ] || [ -z "$2" ]; then
-  echo "Usage: $0 <lambda-dir> <function-name> [layer-arn]"
+  echo "Usage: $0 <lambda-dir> <function-name> [layer-arn] [timeout-seconds]"
   echo "Example: $0 action-scoring cwf-action-scoring"
   exit 1
 fi
@@ -13,6 +13,7 @@ fi
 LAMBDA_DIR="$1"
 FUNCTION_NAME="$2"
 LAYER_ARN="${3:-arn:aws:lambda:us-west-2:131745734428:layer:cwf-common-nodejs:26}"
+TIMEOUT_SECONDS="${4:-30}"
 REGION="us-west-2"
 ROLE_ARN="arn:aws:iam::131745734428:role/lambda-execution-role"
 
@@ -108,7 +109,7 @@ print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
   aws lambda update-function-configuration \
     --function-name "$FUNCTION_NAME" \
     --layers "$LAYER_ARN" \
-    --timeout 30 \
+    --timeout "$TIMEOUT_SECONDS" \
     --memory-size 512 \
     --environment "Variables=$ENV_VARS" \
     --region "$REGION" >/dev/null
@@ -137,7 +138,7 @@ else
     --handler index.handler \
     --zip-file fileb://function.zip \
     --layers "$LAYER_ARN" \
-    --timeout 30 \
+    --timeout "$TIMEOUT_SECONDS" \
     --memory-size 512 \
     --environment "Variables=$ENV_VARS" \
     --region "$REGION" >/dev/null

@@ -164,3 +164,37 @@ onError: (err, variables, context) => {
 ## Reference Implementation
 
 See `src/hooks/useActionMutations.ts` for the canonical example of this pattern.
+
+## Environment Variables & Configuration
+
+### Rule: No Implicit Fallbacks
+
+**Do not use inline fallbacks for environment variables or critical configuration unless there is a strong, documented business case.**
+
+```typescript
+// ❌ BAD: Implicit fallback hides configuration errors
+const PROMPT_SET = process.env.PROMPT_SET || 'haiku';
+
+// ✅ GOOD: Fail fast if configuration is missing
+if (!process.env.PROMPT_SET) {
+  throw new Error('PROMPT_SET environment variable is required');
+}
+const PROMPT_SET = process.env.PROMPT_SET;
+```
+
+**Why?**
+Using fallbacks (like `|| 'default'`) masks configuration errors. If an environment variable is accidentally omitted during deployment, the system will silently fall back to a default value, leading to confusing bugs in production that are extremely difficult to track down. Always enforce explicit configuration.
+
+## Code Quality & Continuous Improvement
+
+### Rule: Proactive Refactoring (The "See Something, Say Something" Rule)
+
+**As we navigate and write code, we must constantly evaluate the existing code against industry best practices.**
+
+If you encounter code that is a "hack", an anti-pattern, or simply does not make sense:
+1. **Check for comments:** Is there a comment explaining *why* it was done this way? (e.g., a known upstream bug, a temporary workaround).
+2. **Flag it:** If there is no explanatory comment, bring it to attention immediately.
+3. **Refactor:** Consider proposing a refactor to bring the code up to best practices before moving on.
+
+**Why?**
+Technical debt accumulates silently. By proactively flagging uncommented hacks as we work, we ensure the codebase continuously improves and stays aligned with best practices, rather than letting anti-patterns rot in the background.

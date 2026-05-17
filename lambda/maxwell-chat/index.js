@@ -9,8 +9,7 @@ const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
 
 // Load prompt fragments once at cold start
-// PROMPT_SET env var selects the prompt directory: "sonnet46" (default), "haiku", etc.
-const PROMPT_SET = process.env.PROMPT_SET || 'sonnet46';
+const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
 console.log(`Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
 
@@ -46,6 +45,21 @@ function detectPromptMode(message) {
 function buildInstructionPrefix(message) {
   const modePrompt = detectPromptMode(message);
   return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
+}
+
+function normalizeContextText(value, maxLength = 900) {
+  if (!value) return '';
+  const text = String(value)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text;
 }
 
 exports.handler = async (event) => {
@@ -100,11 +114,13 @@ exports.handler = async (event) => {
   let enhancedMessage = buildInstructionPrefix(message);
   if (sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
     let contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
-    if (sessionAttributes.policy) {
-      contextParts.push(`Description: ${sessionAttributes.policy}`);
+    const policyText = normalizeContextText(sessionAttributes.policy);
+    if (policyText) {
+      contextParts.push(`Description: ${policyText}`);
     }
-    if (sessionAttributes.implementation) {
-      contextParts.push(`Observations summary: ${sessionAttributes.implementation}`);
+    const implementationText = normalizeContextText(sessionAttributes.implementation, 600);
+    if (implementationText) {
+      contextParts.push(`Observations summary: ${implementationText}`);
     }
     enhancedMessage += `[Context: ${contextParts.join('. ')}] `;
   }
@@ -128,6 +144,8 @@ exports.handler = async (event) => {
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
     ...sessionAttributes,
+    policy: normalizeContextText(sessionAttributes.policy),
+    implementation: normalizeContextText(sessionAttributes.implementation, 600),
     organization_id: authContext.organization_id,
     current_date: new Date().toISOString().split('T')[0],
   };
@@ -154,14 +172,17 @@ exports.handler = async (event) => {
   });
 
   try {
+    const t0 = Date.now();
     const response = await client.send(command);
     const returnedSessionId = response.sessionId;
 
     // Collect streamed chunks and trace events
     let reply = '';
     const traceEvents = [];
+    let firstChunkTime = null;
     
     for await (const chunk of response.completion) {
+      if (!firstChunkTime) firstChunkTime = Date.now();
       if (chunk.chunk?.bytes) {
         reply += new TextDecoder().decode(chunk.chunk.bytes);
       }
@@ -169,6 +190,9 @@ exports.handler = async (event) => {
         traceEvents.push(chunk.trace);
       }
     }
+    
+    const tEnd = Date.now();
+    console.log(`[METRICS] Maxwell Chat API - Total Time: ${tEnd - t0}ms, Time to first chunk: ${firstChunkTime ? firstChunkTime - t0 : 'N/A'}ms, Trace steps: ${traceEvents.length}`);
 
     return {
       statusCode: 200,

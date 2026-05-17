@@ -26,6 +26,8 @@ interface MaxwellChatResponse {
 
 export type MaxwellMode = 'quick' | 'deep';
 
+const MAXWELL_WS_RESPONSE_TIMEOUT_MS = 35_000;
+
 export interface UseMaxwellReturn {
   messages: MaxwellMessage[];
   isLoading: boolean;
@@ -56,21 +58,42 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
   const accumulatedChunksRef = useRef<string>('');
   // Track whether we're currently streaming via WebSocket
   const isStreamingRef = useRef(false);
+  const responseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearResponseTimeout = useCallback(() => {
+    if (responseTimeoutRef.current) {
+      clearTimeout(responseTimeoutRef.current);
+      responseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const stopStreaming = useCallback(() => {
+    clearResponseTimeout();
+    accumulatedChunksRef.current = '';
+    isStreamingRef.current = false;
+    setProgressStep(null);
+    setIsLoading(false);
+  }, [clearResponseTimeout]);
 
   const resetSession = useCallback(() => {
     setMessages([]);
     setSessionId(null);
     setError(null);
-    setIsLoading(false);
-    setProgressStep(null);
-    accumulatedChunksRef.current = '';
-    isStreamingRef.current = false;
-  }, []);
+    stopStreaming();
+  }, [stopStreaming]);
 
   // Reset session when entity changes (session isolation)
   useEffect(() => {
     resetSession();
   }, [sessionAttributes.entityId, resetSession]);
+
+  useEffect(() => {
+    if (!isStreamingRef.current) return;
+    if (status !== 'disconnected' && status !== 'reconnecting') return;
+
+    setError('Maxwell lost its connection before the response finished. Please try again.');
+    stopStreaming();
+  }, [status, stopStreaming]);
 
   // Subscribe to WebSocket maxwell events
   useEffect(() => {
@@ -147,9 +170,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       });
 
       accumulatedChunksRef.current = '';
-      isStreamingRef.current = false;
-      setProgressStep(null);
-      setIsLoading(false);
+      stopStreaming();
     });
 
     const unsubProgress = subscribe('maxwell:progress', (payload: any) => {
@@ -163,10 +184,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
 
       const errorMessage = payload?.message ?? 'Maxwell failed to respond. Please try again.';
       setError(errorMessage);
-      accumulatedChunksRef.current = '';
-      isStreamingRef.current = false;
-      setProgressStep(null);
-      setIsLoading(false);
+      stopStreaming();
     });
 
     return () => {
@@ -175,14 +193,14 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       unsubProgress();
       unsubError();
     };
-  }, [subscribe]);
+  }, [subscribe, stopStreaming]);
 
-  const sendMessage = useCallback(async (text: string, mode: MaxwellMode = 'deep') => {
+  const sendMessage = useCallback(async (text: string, mode: MaxwellMode = 'quick') => {
     if (!text.trim() || isLoading) return;
 
     // Prepend mode instruction so the agent adjusts its behavior
     const modePrefix = mode === 'quick'
-      ? '[Mode: Quick — use 1 tool call maximum. Answer concisely in under 200 words. Skip detailed sourcing.]\n\n'
+      ? '[Mode: Quick — answer directly from the provided context and general knowledge. Do not call tools unless the user explicitly asks you to search organizational records. Use 0 tool calls by default, 1 maximum if truly necessary. Answer concisely in under 200 words. Skip detailed sourcing.]\n\n'
       : '';
     const enhancedText = modePrefix + text;
 
@@ -200,8 +218,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       // --- WebSocket path: send via WS and stream response ---
       accumulatedChunksRef.current = '';
       isStreamingRef.current = true;
+      clearResponseTimeout();
 
-      wsSendMessage('maxwell:chat', {
+      const sent = wsSendMessage('maxwell:chat', {
         message: enhancedText,
         sessionId: sessionId ?? undefined,
         sessionAttributes: {
@@ -212,6 +231,18 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
           implementation: sessionAttributes.implementation,
         },
       });
+
+      if (!sent) {
+        setError('Maxwell connection was not ready. Please try again.');
+        stopStreaming();
+        return;
+      }
+
+      responseTimeoutRef.current = setTimeout(() => {
+        if (!isStreamingRef.current) return;
+        setError('Maxwell did not finish responding. Please try again.');
+        stopStreaming();
+      }, MAXWELL_WS_RESPONSE_TIMEOUT_MS);
       // isLoading will be set to false by the response_complete or error handler
     } else {
       // --- REST fallback path ---
@@ -240,7 +271,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
         setIsLoading(false);
       }
     }
-  }, [isLoading, sessionId, sessionAttributes, status, wsSendMessage]);
+  }, [clearResponseTimeout, isLoading, sessionId, sessionAttributes, status, stopStreaming, wsSendMessage]);
 
   return { messages, isLoading, progressStep, error, sessionId, sendMessage, resetSession };
 }

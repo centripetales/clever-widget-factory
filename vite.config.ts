@@ -10,6 +10,9 @@ export default defineConfig(({ mode }) => {
   server: {
     host: "::",
     port: 8080,
+    watch: {
+      ignored: ['**/lambda/**', '**/scripts/**', '**/.kiro/**', '**/node_modules/**']
+    }
   },
   plugins: [
     react(),
