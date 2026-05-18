@@ -147,6 +147,7 @@ exports.handler = async (event) => {
         JOIN state_links sl ON sl.state_id = s.id
         LEFT JOIN organization_members om
           ON s.captured_by::text = om.cognito_user_id::text
+          AND s.organization_id = om.organization_id
         WHERE sl.entity_type          = '${escapeLiteral(entityType)}'
           AND sl.entity_id::text      = '${escapeLiteral(entityId)}'
           AND s.organization_id::text = '${escapeLiteral(organizationId)}'

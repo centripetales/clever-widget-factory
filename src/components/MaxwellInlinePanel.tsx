@@ -1,13 +1,15 @@
 import { useRef, useEffect, useState, KeyboardEvent } from 'react';
 import { X, Send, RefreshCw, Loader2, Copy, Check, Code } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
-import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage } from '@/hooks/useMaxwell';
+import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage, MaxwellMode } from '@/hooks/useMaxwell';
 import { useMaxwellStorage } from '@/hooks/useMaxwellStorage';
 import { EntityContext } from '@/hooks/useEntityContext';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
 import { copyToClipboard, copyConversationRich } from '@/lib/urlUtils';
+import { ExpandableMarkdownImage } from '@/components/ExpandableMarkdownImage';
 
 const STARTER_QUESTIONS: Record<string, string[]> = {
   action: [
@@ -59,14 +61,6 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
     }
   };
 
-  // Resolve S3 image URLs in markdown image syntax
-  const resolveImageUrls = (text: string) => {
-    return text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
-      const resolvedUrl = getImageUrl(url) || url;
-      return `![${alt}](${resolvedUrl})`;
-    });
-  };
-
   return (
     <div className={cn('flex flex-col gap-1 group', isUser ? 'items-end' : 'items-start')}>
       <div
@@ -81,7 +75,14 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
         ) : (
           <div className="maxwell-markdown prose prose-sm dark:prose-invert max-w-none break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <ReactMarkdown>{resolveImageUrls(message.content)}</ReactMarkdown>
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]}
+              components={{
+                img: ({ node, ...props }) => <ExpandableMarkdownImage src={props.src} alt={props.alt} />
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
           </div>
         )}
         <button
@@ -135,17 +136,18 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
   const { saveConversation, clearConversation } = useMaxwellStorage();
   const [input, setInput] = useState('');
   const [copiedAll, setCopiedAll] = useState(false);
+  const [mode, setMode] = useState<MaxwellMode>('quick');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const sessionAttributes: MaxwellSessionAttributes | null = context
     ? {
-        entityId: context.entityId,
-        entityType: context.entityType,
-        entityName: context.entityName,
-        policy: context.policy,
-        implementation: context.implementation,
-      }
+      entityId: context.entityId,
+      entityType: context.entityType,
+      entityName: context.entityName,
+      policy: context.policy,
+      implementation: context.implementation,
+    }
     : null;
 
   const { messages, isLoading, progressStep, error, sendMessage, resetSession } = useMaxwell(
@@ -174,7 +176,7 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
     const text = input.trim();
     if (!text || isLoading || !sessionAttributes) return;
     setInput('');
-    await sendMessage(text);
+    await sendMessage(text, mode);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -216,6 +218,17 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
             </div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as MaxwellMode)}
+              disabled={isLoading}
+              className="rounded-md border border-input bg-background px-2 py-1 text-xs font-semibold text-foreground ring-offset-background outline-none hover:bg-muted focus:ring-1 focus:ring-ring disabled:opacity-50 transition-colors cursor-pointer mr-1"
+              title="Select Maxwell Model"
+            >
+              <option value="quick">⚡ Haiku (Fast)</option>
+              <option value="deep">🧠 Sonnet (Deep)</option>
+            </select>
+
             {messages.length > 0 && (
               <>
                 <button
@@ -247,6 +260,17 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
 
       {hideHeader && (
         <div className="flex items-center justify-end gap-1 px-2 pt-1 flex-shrink-0">
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as MaxwellMode)}
+            disabled={isLoading}
+            className="rounded-md border border-input bg-background px-2 py-1 text-xs font-semibold text-foreground ring-offset-background outline-none hover:bg-muted focus:ring-1 focus:ring-ring disabled:opacity-50 transition-colors cursor-pointer mr-1"
+            title="Select Maxwell Model"
+          >
+            <option value="quick">⚡ Haiku (Fast)</option>
+            <option value="deep">🧠 Sonnet (Deep)</option>
+          </select>
+
           {messages.length > 0 && (
             <>
               <button
@@ -275,7 +299,7 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
             {starterQuestions.map((q) => (
               <button
                 key={q}
-                onClick={() => sendMessage(q)}
+                onClick={() => sendMessage(q, mode)}
                 disabled={isLoading}
                 className="w-full rounded-xl border border-border bg-muted/50 px-3 py-2 text-left text-xs text-foreground hover:bg-muted transition-colors"
               >

@@ -38,9 +38,12 @@ const connectionIdListeners = new Set<(id: string | null) => void>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 
+// Teardown debounce state
+let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
 // Keepalive ping state
-const PING_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const PONG_TIMEOUT_MS = 30 * 1000; // 30 seconds
+const PING_INTERVAL_MS = 30 * 1000; // 30 seconds
+const PONG_TIMEOUT_MS = 10 * 1000; // 10 seconds
 let pingIntervalTimer: ReturnType<typeof setInterval> | null = null;
 let pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -274,6 +277,12 @@ export function useWebSocket(): UseWebSocketReturn {
     statusListeners.add(statusHandler);
     connectionIdListeners.add(connectionIdHandler);
 
+    // Cancel any scheduled connection teardown from recent unmounts
+    if (cleanupTimer) {
+      clearTimeout(cleanupTimer);
+      cleanupTimer = null;
+    }
+
     // Sync with current singleton state
     setLocalStatus(singletonStatus);
     setLocalConnectionId(singletonConnectionId);
@@ -288,12 +297,18 @@ export function useWebSocket(): UseWebSocketReturn {
       statusListeners.delete(statusHandler);
       connectionIdListeners.delete(connectionIdHandler);
 
-      // If no more consumers, tear down the connection
+      // If no more consumers, tear down the connection after a debounce delay
       if (statusListeners.size === 0) {
-        cleanupConnection();
-        setStatus('disconnected');
-        setConnectionId(null);
-        reconnectAttempt = 0;
+        if (cleanupTimer) clearTimeout(cleanupTimer);
+        cleanupTimer = setTimeout(() => {
+          cleanupTimer = null;
+          if (statusListeners.size === 0) {
+            cleanupConnection();
+            setStatus('disconnected');
+            setConnectionId(null);
+            reconnectAttempt = 0;
+          }
+        }, 1000); // 1-second debounce delay to absorb React page transitions and remount thrashing
       }
     };
   }, []);
