@@ -2554,10 +2554,14 @@ async function handleVerify(actionId, body, organizationId, aiConfig) {
 
         await db.query('COMMIT');
 
-        // 7. Queue embedding for each new demonstration state via SQS (fire-and-forget)
+        // 7. Explicitly await SQS queueing for each new demonstration state
         const axisLabel = objective.axisKey ? axisLabelMap[objective.axisKey] : null;
-        queueDemonstrationEmbedding(stateId, stateText, organizationId, axisLabel || null)
-          .catch(err => console.error('Failed to queue demonstration embedding:', err));
+        try {
+          await queueDemonstrationEmbedding(stateId, stateText, organizationId, axisLabel || null);
+          console.log('Successfully queued demonstration embedding for state', stateId);
+        } catch (err) {
+          console.error('Failed to queue demonstration embedding:', err);
+        }
       } catch (insertErr) {
         await db.query('ROLLBACK');
         throw insertErr;

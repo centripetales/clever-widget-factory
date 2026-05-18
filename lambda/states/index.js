@@ -324,9 +324,13 @@ async function createState(event, authContext, headers) {
 
     await client.query('COMMIT');
 
-    // Fire-and-forget: resolve composition data and queue embedding generation
-    resolveAndQueueEmbedding(state.id, organizationId)
-      .catch(err => console.error('Failed to queue state embedding:', err));
+    // Explicitly await queueing to prevent AWS Lambda environment freeze
+    try {
+      await resolveAndQueueEmbedding(state.id, organizationId);
+      console.log('Successfully queued state embedding for state', state.id);
+    } catch (err) {
+      console.error('Failed to queue state embedding:', err);
+    }
 
     return await getState(state.id, authContext, headers);
   } catch (error) {
@@ -441,9 +445,13 @@ async function updateState(event, id, authContext, headers) {
 
     await client.query('COMMIT');
 
-    // Fire-and-forget: resolve composition data and queue embedding generation
-    resolveAndQueueEmbedding(id, organizationId)
-      .catch(err => console.error('Failed to queue state embedding:', err));
+    // Explicitly await queueing to prevent AWS Lambda environment freeze
+    try {
+      await resolveAndQueueEmbedding(id, organizationId);
+      console.log('Successfully queued state embedding for state', id);
+    } catch (err) {
+      console.error('Failed to queue state embedding:', err);
+    }
 
     return await getState(id, authContext, headers);
   } catch (error) {

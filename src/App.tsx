@@ -21,13 +21,6 @@ import LeadershipRoute from "@/components/LeadershipRoute";
 import SuperAdminRoute from "@/components/SuperAdminRoute";
 import { GlobalMaxwellFAB } from "@/components/GlobalMaxwellFAB";
 import { MaxwellRecordHighlightProvider } from "@/contexts/MaxwellRecordHighlightContext";
-import { useTenantContext } from "@/lib/tenant";
-import { PlatformLayout } from "@/components/platform/PlatformLayout";
-import PlatformHome from "@/pages/platform/Home";
-import PlatformAbout from "@/pages/platform/About";
-import PlatformContact from "@/pages/platform/Contact";
-
-
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -384,42 +377,6 @@ function AppContent() {
   );
 }
 
-/**
- * Platform routes — rendered when useTenantContext() returns type === 'platform'.
- * These routes are public (no auth required) and use PlatformLayout.
- * Task 4.1: parallel branch to existing org routes.
- */
-function PlatformRoutes() {
-  return (
-    <PlatformLayout>
-      <Routes>
-        <Route path="/" element={<PlatformHome />} />
-        <Route path="/about" element={<PlatformAbout />} />
-        <Route path="/contact" element={<PlatformContact />} />
-        <Route path="*" element={<PlatformHome />} />
-      </Routes>
-    </PlatformLayout>
-  );
-}
-
-/**
- * TenantRouter — reads tenant context once at mount and selects the appropriate
- * routing tree.
- *
- * Task 4.2: when type === 'platform', render platform routes.
- *           Otherwise, render existing org routes unchanged (Task 4.3).
- */
-function TenantRouter() {
-  const tenantContext = useTenantContext();
-
-  if (tenantContext.type === 'platform') {
-    return <PlatformRoutes />;
-  }
-
-  // Org context: render existing app routes completely unchanged.
-  return <AppContent />;
-}
-
 const App = () => (
   <PersistQueryClientProvider
     client={queryClient}
@@ -435,7 +392,7 @@ const App = () => (
             <Toaster />
             <Sonner />
             <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || "/"}>
-              <TenantRouter />
+              <AppContent />
             </BrowserRouter>
           </TooltipProvider>
         </AppSettingsProvider>

@@ -67,15 +67,15 @@ exports.handler = async (event) => {
 
   const authContext = getAuthorizerContext(event);
   if (!authContext.organization_id) {
-    return { 
-      statusCode: 401, 
+    return {
+      statusCode: 401,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Unauthorized: No organization context' }) 
+      body: JSON.stringify({ error: 'Unauthorized: No organization context' })
     };
   }
 
@@ -83,30 +83,30 @@ exports.handler = async (event) => {
   try {
     body = JSON.parse(event.body || '{}');
   } catch {
-    return { 
-      statusCode: 400, 
+    return {
+      statusCode: 400,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Invalid request body' }) 
+      body: JSON.stringify({ error: 'Invalid request body' })
     };
   }
 
   const { message, sessionId, sessionAttributes = {} } = body;
 
   if (!message) {
-    return { 
-      statusCode: 400, 
+    return {
+      statusCode: 400,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'message is required' }) 
+      body: JSON.stringify({ error: 'message is required' })
     };
   }
 
@@ -118,7 +118,7 @@ exports.handler = async (event) => {
     if (policyText) {
       contextParts.push(`Description: ${policyText}`);
     }
-    const implementationText = normalizeContextText(sessionAttributes.implementation, 600);
+    const implementationText = normalizeContextText(sessionAttributes.implementation, 999999);
     if (implementationText) {
       contextParts.push(`Observations summary: ${implementationText}`);
     }
@@ -129,23 +129,30 @@ exports.handler = async (event) => {
 
   if (!AGENT_ID || !AGENT_ALIAS_ID) {
     console.error('Missing MAXWELL_AGENT_ID or MAXWELL_AGENT_ALIAS_ID env vars');
-    return { 
-      statusCode: 500, 
+    return {
+      statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Agent not configured' }) 
+      body: JSON.stringify({ error: 'Agent not configured' })
     };
   }
+
+  const mode = body.mode || 'deep';
+  const targetAliasId = mode === 'quick'
+    ? AGENT_ALIAS_ID
+    : (process.env.MAXWELL_AGENT_ALIAS_ID_DEEP || 'XVS45ZMCA6');
+
+  console.log(`[ROUTE] Mode: ${mode} -> Routing to Bedrock Agent Alias: ${targetAliasId}`);
 
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
     ...sessionAttributes,
     policy: normalizeContextText(sessionAttributes.policy),
-    implementation: normalizeContextText(sessionAttributes.implementation, 600),
+    implementation: normalizeContextText(sessionAttributes.implementation, 999999),
     organization_id: authContext.organization_id,
     current_date: new Date().toISOString().split('T')[0],
   };
@@ -162,7 +169,7 @@ exports.handler = async (event) => {
 
   const command = new InvokeAgentCommand({
     agentId: AGENT_ID,
-    agentAliasId: AGENT_ALIAS_ID,
+    agentAliasId: targetAliasId,
     sessionId: effectiveSessionId,
     inputText: enhancedMessage, // Use enhanced message with context
     enableTrace: true, // Enable trace for debugging
@@ -180,7 +187,7 @@ exports.handler = async (event) => {
     let reply = '';
     const traceEvents = [];
     let firstChunkTime = null;
-    
+
     for await (const chunk of response.completion) {
       if (!firstChunkTime) firstChunkTime = Date.now();
       if (chunk.chunk?.bytes) {
@@ -190,20 +197,20 @@ exports.handler = async (event) => {
         traceEvents.push(chunk.trace);
       }
     }
-    
+
     const tEnd = Date.now();
     console.log(`[METRICS] Maxwell Chat API - Total Time: ${tEnd - t0}ms, Time to first chunk: ${firstChunkTime ? firstChunkTime - t0 : 'N/A'}ms, Trace steps: ${traceEvents.length}`);
 
     return {
       statusCode: 200,
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ 
-        reply, 
+      body: JSON.stringify({
+        reply,
         sessionId: returnedSessionId,
         trace: traceEvents // Include trace in response
       }),
@@ -212,39 +219,39 @@ exports.handler = async (event) => {
     console.error('Bedrock Agent error:', err);
 
     if (err.name === 'ThrottlingException') {
-      return { 
-        statusCode: 429, 
+      return {
+        statusCode: 429,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
           'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
         },
-        body: JSON.stringify({ error: 'Maxwell is busy, please try again' }) 
+        body: JSON.stringify({ error: 'Maxwell is busy, please try again' })
       };
     }
     if (err.name === 'ServiceQuotaExceededException' || err.$metadata?.httpStatusCode === 504) {
-      return { 
-        statusCode: 504, 
+      return {
+        statusCode: 504,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
           'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
         },
-        body: JSON.stringify({ error: 'Maxwell took too long to respond' }) 
+        body: JSON.stringify({ error: 'Maxwell took too long to respond' })
       };
     }
 
-    return { 
-      statusCode: 500, 
+    return {
+      statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Internal error communicating with Maxwell' }) 
+      body: JSON.stringify({ error: 'Internal error communicating with Maxwell' })
     };
   }
 };

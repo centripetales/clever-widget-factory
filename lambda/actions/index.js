@@ -93,7 +93,20 @@ exports.handler = async (event) => {
           a.*,
           om.full_name as assigned_to_name,
           CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
-          CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates
+          CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
+          COALESCE(
+            (
+              SELECT EXISTS(
+                SELECT 1 FROM states s
+                JOIN state_links sl ON s.id = sl.state_id
+                JOIN state_risk_profiles srp ON s.id = srp.state_id
+                WHERE sl.entity_type = 'action'
+                  AND sl.entity_id = a.id
+                  AND srp.aggregate_risk = 0.0
+              )
+            ),
+            false
+          ) as shared_with_partners
         FROM actions a
         LEFT JOIN organization_members om ON a.assigned_to = om.user_id
         LEFT JOIN analysis_contexts ac ON a.id = ac.context_id AND ac.context_service = 'action_score'
@@ -186,11 +199,95 @@ exports.handler = async (event) => {
       };
     }
 
+    // POST/PUT toggle shared status of action (set state risk profile to 0.0)
+    if ((httpMethod === 'POST' || httpMethod === 'PUT') && path.includes('/actions/') && path.endsWith('/toggle_shared_with_partners')) {
+      const actionId = path.split('/actions/')[1].split('/')[0];
+      const body = JSON.parse(event.body || '{}');
+      const { shared_with_partners } = body;
+      
+      const targetRisk = shared_with_partners ? '0.0' : '0.8';
+
+      // 1. Find or create a state for this action to represent the narrative
+      const findStateSql = `
+        SELECT s.id 
+        FROM states s
+        JOIN state_links sl ON s.id = sl.state_id
+        WHERE sl.entity_type = 'action' AND sl.entity_id = '${actionId}'
+        LIMIT 1
+      `;
+      const states = await queryJSON(findStateSql);
+      
+      let stateId;
+      if (states && states.length > 0) {
+        stateId = states[0].id;
+      } else {
+        // Create a new default operational/story state for this action
+        stateId = require('crypto').randomUUID();
+        const createStateSql = `
+          INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
+          VALUES ('${stateId}', '${organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+        `;
+        await queryJSON(createStateSql);
+        
+        const createLinkSql = `
+          INSERT INTO state_links (id, state_id, entity_type, entity_id)
+          VALUES (gen_random_uuid(), '${stateId}', 'action', '${actionId}')
+        `;
+        await queryJSON(createLinkSql);
+      }
+
+      // 2. Insert or update the narrative's risk profile to targetRisk (0.0 for shared/public, 0.8 for private)
+      const saveRiskSql = `
+        INSERT INTO state_risk_profiles (state_id, aggregate_risk)
+        VALUES ('${stateId}', ${targetRisk})
+        ON CONFLICT (state_id) 
+        DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+        RETURNING *
+      `;
+      const riskProfile = await queryJSON(saveRiskSql);
+
+      // 3. For any photos attached to this action, update their risk to 0.0 (if shared) or 0.8 (if private)
+      const getPhotosSql = `
+        SELECT photo_url FROM state_photos WHERE state_id = '${stateId}'
+      `;
+      const photos = await queryJSON(getPhotosSql);
+      if (photos && photos.length > 0) {
+        for (const p of photos) {
+          const savePhotoRiskSql = `
+            INSERT INTO photo_metadata_extractions (photo_url, aggregate_risk)
+            VALUES ('${p.photo_url}', ${targetRisk})
+            ON CONFLICT (photo_url)
+            DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+          `;
+          await queryJSON(savePhotoRiskSql);
+        }
+      }
+
+      // Broadcast cache invalidation
+      try {
+        await broadcastInvalidation({
+          entityType: 'action',
+          entityId: actionId,
+          mutationType: 'updated',
+          organizationId,
+          excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+        });
+      } catch (err) {
+        console.error('[ACTIONS] Broadcast failed:', err.message);
+      }
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ success: true, shared_with_partners, riskProfile: riskProfile[0] })
+      };
+    }
+
     // PUT action by ID (update via path parameter)
-    if (httpMethod === 'PUT' && path.includes('/actions/')) {
+    if (httpMethod === 'PUT' && path.includes('/actions/') && !path.endsWith('/toggle_shared_with_partners') && !path.endsWith('/toggle_public')) {
       const actionId = path.split('/actions/')[1].split('/')[0]; // Extract ID, handle trailing slashes
       const body = JSON.parse(event.body || '{}');
-      const { created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, ...actionData } = body;
+      const { created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
       const userId = updated_by || authContext.cognito_user_id || require('crypto').randomUUID();
       const orgId = accessibleOrgIds[0];
@@ -214,6 +311,66 @@ exports.handler = async (event) => {
       const actionStatus = actionData.status || currentAction.status;
       const assignedTo = actionData.assigned_to || currentAction.assigned_to;
       
+      // Execute dynamic sharing updates if shared_with_partners is specified
+      if (shared_with_partners !== undefined) {
+        const targetRisk = shared_with_partners ? '0.0' : '0.8';
+
+        // 1. Find or create a state for this action to represent the narrative
+        const findStateSql = `
+          SELECT s.id 
+          FROM states s
+          JOIN state_links sl ON s.id = sl.state_id
+          WHERE sl.entity_type = 'action' AND sl.entity_id = '${actionId}'
+          LIMIT 1
+        `;
+        const states = await queryJSON(findStateSql);
+        
+        let stateId;
+        if (states && states.length > 0) {
+          stateId = states[0].id;
+        } else {
+          // Create a new default operational/story state for this action so it can be shared
+          stateId = require('crypto').randomUUID();
+          const createStateSql = `
+            INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
+            VALUES ('${stateId}', '${orgId || organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+          `;
+          await queryJSON(createStateSql);
+          
+          const createLinkSql = `
+            INSERT INTO state_links (id, state_id, entity_type, entity_id)
+            VALUES (gen_random_uuid(), '${stateId}', 'action', '${actionId}')
+          `;
+          await queryJSON(createLinkSql);
+        }
+
+        // 2. Insert or update the narrative's risk profile to targetRisk
+        const saveRiskSql = `
+          INSERT INTO state_risk_profiles (state_id, aggregate_risk)
+          VALUES ('${stateId}', ${targetRisk})
+          ON CONFLICT (state_id) 
+          DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+        `;
+        await queryJSON(saveRiskSql);
+
+        // 3. For any photos attached to this action, update their risk to targetRisk
+        const getPhotosSql = `
+          SELECT photo_url FROM state_photos WHERE state_id = '${stateId}'
+        `;
+        const photos = await queryJSON(getPhotosSql);
+        if (photos && photos.length > 0) {
+          for (const p of photos) {
+            const savePhotoRiskSql = `
+              INSERT INTO photo_metadata_extractions (photo_url, aggregate_risk)
+              VALUES ('${p.photo_url}', ${targetRisk})
+              ON CONFLICT (photo_url)
+              DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+            `;
+            await queryJSON(savePhotoRiskSql);
+          }
+        }
+      }
+
       const updates = [];
       for (const [key, val] of Object.entries(actionData)) {
         if (val === undefined) continue;
@@ -241,11 +398,16 @@ exports.handler = async (event) => {
         updates.push(`is_exploration = ${is_exploration}`);
       }
       
-      updates.push(`updated_by = '${userId}'`);
-      if (completed_at) updates.push(`completed_at = '${completed_at}'`);
+      let updatedAction = currentAction;
+      let result = [];
       
-      const sql = `UPDATE actions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''} RETURNING *`;
-      const result = await queryJSON(sql);
+      if (updates.length > 0) {
+        updates.push(`updated_by = '${userId}'`);
+        if (completed_at) updates.push(`completed_at = '${completed_at}'`);
+        
+        const sql = `UPDATE actions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''} RETURNING *`;
+        result = await queryJSON(sql);
+      }
       
       // Queue embedding generation if embedding-relevant fields were updated
       // Fire-and-forget pattern to avoid blocking the response
@@ -421,7 +583,7 @@ exports.handler = async (event) => {
         statusCode: 200, 
         headers, 
         body: JSON.stringify({ 
-          data: result[0],
+          data: result && result.length > 0 ? result[0] : updatedAction,
           affectedResources: {
             tools: affectedTools
           }
@@ -432,11 +594,75 @@ exports.handler = async (event) => {
     // POST/PUT action (create/update)
     if ((httpMethod === 'POST' || httpMethod === 'PUT') && path.endsWith('/actions')) {
       const body = JSON.parse(event.body || '{}');
-      const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, ...actionData } = body;
+      const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
       const userId = created_by || updated_by || require('crypto').randomUUID();
+      const orgId = accessibleOrgIds[0] || organizationId;
       
+      // Helper function to handle companion state and risk assessments
+      const handleSharingUpdate = async (targetActionId, isShared) => {
+        const targetRisk = isShared ? '0.0' : '0.8';
+
+        // Find or create narrative state
+        const findStateSql = `
+          SELECT s.id 
+          FROM states s
+          JOIN state_links sl ON s.id = sl.state_id
+          WHERE sl.entity_type = 'action' AND sl.entity_id = '${targetActionId}'
+          LIMIT 1
+        `;
+        const states = await queryJSON(findStateSql);
+        
+        let stateId;
+        if (states && states.length > 0) {
+          stateId = states[0].id;
+        } else {
+          stateId = require('crypto').randomUUID();
+          const createStateSql = `
+            INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
+            VALUES ('${stateId}', '${orgId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+          `;
+          await queryJSON(createStateSql);
+          
+          const createLinkSql = `
+            INSERT INTO state_links (id, state_id, entity_type, entity_id)
+            VALUES (gen_random_uuid(), '${stateId}', 'action', '${targetActionId}')
+          `;
+          await queryJSON(createLinkSql);
+        }
+
+        // Insert or update narrative's risk profile
+        const saveRiskSql = `
+          INSERT INTO state_risk_profiles (state_id, aggregate_risk)
+          VALUES ('${stateId}', ${targetRisk})
+          ON CONFLICT (state_id) 
+          DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+        `;
+        await queryJSON(saveRiskSql);
+
+        // Update photo risk profiles
+        const getPhotosSql = `
+          SELECT photo_url FROM state_photos WHERE state_id = '${stateId}'
+        `;
+        const photos = await queryJSON(getPhotosSql);
+        if (photos && photos.length > 0) {
+          for (const p of photos) {
+            const savePhotoRiskSql = `
+              INSERT INTO photo_metadata_extractions (photo_url, aggregate_risk)
+              VALUES ('${p.photo_url}', ${targetRisk})
+              ON CONFLICT (photo_url)
+              DO UPDATE SET aggregate_risk = ${targetRisk}, updated_at = NOW()
+            `;
+            await queryJSON(savePhotoRiskSql);
+          }
+        }
+      };
+
       if (id) {
+        // Execute companion sharing updates if shared_with_partners is specified
+        if (shared_with_partners !== undefined) {
+          await handleSharingUpdate(id, shared_with_partners);
+        }
         // Update
         const updates = [];
         for (const [key, val] of Object.entries(actionData)) {
@@ -523,6 +749,11 @@ exports.handler = async (event) => {
         const sql = `INSERT INTO actions (${fields.join(', ')}, created_at, updated_at) VALUES (${values.join(', ')}, NOW(), NOW()) RETURNING *`;
         const result = await queryJSON(sql);
         const newAction = result[0];
+        
+        // Execute companion sharing updates if shared_with_partners is specified
+        if (shared_with_partners !== undefined) {
+          await handleSharingUpdate(newAction.id, shared_with_partners);
+        }
         
         // Queue embedding generation for the new action (fire-and-forget)
         const embeddingSource = composeActionEmbeddingSource(newAction);
@@ -673,11 +904,14 @@ exports.handler = async (event) => {
 
     // Actions endpoint
     if (httpMethod === 'GET' && path.endsWith('/actions')) {
-      const { limit, offset = 0, assigned_to, status, linked_issue_id, asset_id } = queryStringParameters || {};
+      const { limit, offset = 0, assigned_to, status, linked_issue_id, asset_id, id } = queryStringParameters || {};
       
       const orgFilter = buildOrganizationFilter(authContext, 'a');
       let whereConditions = [];
       if (orgFilter.condition) whereConditions.push(orgFilter.condition);
+      if (id) {
+        whereConditions.push(`a.id = '${id.replace(/'/g, "''")}'`);
+      }
       if (assigned_to) {
         whereConditions.push(`a.assigned_to = '${assigned_to.replace(/'/g, "''")}'`);
       }
@@ -705,6 +939,19 @@ exports.handler = async (event) => {
           om.favorite_color as assigned_to_color,
           CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
+          COALESCE(
+            (
+              SELECT EXISTS(
+                SELECT 1 FROM states s
+                JOIN state_links sl ON s.id = sl.state_id
+                JOIN state_risk_profiles srp ON s.id = srp.state_id
+                WHERE sl.entity_type = 'action'
+                  AND sl.entity_id = a.id
+                  AND srp.aggregate_risk = 0.0
+              )
+            ),
+            false
+          ) as shared_with_partners,
           CASE WHEN a.asset_id IS NOT NULL THEN
             json_build_object('id', t.id, 'name', t.name, 'category', t.category)
           ELSE NULL END as asset
