@@ -85,3 +85,88 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Convert a Maxwell conversation to rich HTML suitable for pasting into Google Docs.
+ * Images embedded as Markdown ![alt](url) are converted to <img> tags so they
+ * render inline when pasted into Google Docs or other rich-text editors.
+ */
+export function conversationToHtml(
+  messages: Array<{ role: string; content: string }>
+): string {
+  const lines: string[] = ['<div style="font-family: Arial, sans-serif; font-size: 14px;">'];
+
+  for (const msg of messages) {
+    const label = msg.role === 'user' ? 'You' : 'Maxwell';
+    const labelColor = msg.role === 'user' ? '#1a56db' : '#166534';
+    lines.push(`<p><strong style="color:${labelColor}">${label}:</strong></p>`);
+
+    // Convert Markdown to HTML (basic subset needed for Maxwell responses)
+    let html = msg.content
+      // Images — must come before links to avoid double-processing
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) =>
+        `<img src="${url}" alt="${alt}" style="max-width:100%;margin:8px 0;display:block;" />`
+      )
+      // Bold
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      // Italic
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      // Inline code
+      .replace(/`([^`]+)`/g, '<code style="background:#f3f4f6;padding:2px 4px;border-radius:3px;">$1</code>')
+      // Headers
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      // Unordered list items
+      .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+      // Ordered list items
+      .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+      // Blockquotes
+      .replace(/^> (.+)$/gm, '<blockquote style="border-left:3px solid #d1d5db;padding-left:8px;color:#6b7280;">$1</blockquote>')
+      // Horizontal rules
+      .replace(/^---$/gm, '<hr/>')
+      // Paragraphs — double newlines become paragraph breaks
+      .replace(/\n\n/g, '</p><p>')
+      // Single newlines become line breaks
+      .replace(/\n/g, '<br/>');
+
+    lines.push(`<p>${html}</p>`);
+    lines.push('<hr style="border:none;border-top:1px solid #e5e7eb;margin:12px 0;"/>');
+  }
+
+  lines.push('</div>');
+  return lines.join('\n');
+}
+
+/**
+ * Copy a Maxwell conversation to the clipboard as both rich HTML and plain text.
+ * Rich HTML allows images to render when pasting into Google Docs.
+ * Falls back to plain text if ClipboardItem is not supported.
+ */
+export async function copyConversationRich(
+  messages: Array<{ role: string; content: string }>
+): Promise<boolean> {
+  const plainText = messages
+    .map(m => `${m.role === 'user' ? 'You' : 'Maxwell'}: ${m.content}`)
+    .join('\n\n');
+
+  const html = conversationToHtml(messages);
+
+  // Use ClipboardItem for rich copy (requires HTTPS or localhost)
+  if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        }),
+      ]);
+      return true;
+    } catch (err) {
+      console.warn('Rich clipboard copy failed, falling back to plain text:', err);
+    }
+  }
+
+  // Fallback to plain text
+  return copyToClipboard(plainText);
+}

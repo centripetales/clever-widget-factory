@@ -15,10 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { CombinedAssetFilters } from "./CombinedAssetFilters";
 import { CombinedAssetGrid } from "./CombinedAssetGrid";
 import { CombinedAssetDialog } from "./CombinedAssetDialog";
-import { ToolCheckoutDialog } from "./ToolCheckoutDialog";
-import { ToolCheckInDialog } from "./ToolCheckInDialog";
-import { IssueReportDialog } from "./IssueReportDialog";
-import { CreateIssueDialog } from "./CreateIssueDialog";
 import { ToolRemovalDialog } from "./tools/ToolRemovalDialog";
 import { EditToolForm } from "./tools/forms/EditToolForm";
 
@@ -30,8 +26,6 @@ import { useCombinedAssets, CombinedAsset } from "@/hooks/useCombinedAssets";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useToolHistory } from "@/hooks/tools/useToolHistory";
-import { useToolIssues } from "@/hooks/useGenericIssues";
-import { useInventoryIssues } from "@/hooks/useGenericIssues";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useOrganizationMembers } from "@/hooks/useOrganizationMembers";
@@ -60,7 +54,6 @@ export const CombinedAssetsContainer = () => {
   const [semanticResults, setSemanticResults] = useState<CombinedAsset[]>([]);
   const [isSemanticSearching, setIsSemanticSearching] = useState(false);
   const [showMyCheckedOut, setShowMyCheckedOut] = useState(false);
-  const [showWithIssues, setShowWithIssues] = useState(false);
   const [showLowStock, setShowLowStock] = useState(showLowStockParam);
   const [showOnlyAssets, setShowOnlyAssets] = useState(false);
   const [showOnlyStock, setShowOnlyStock] = useState(viewParam === 'stock');
@@ -75,9 +68,6 @@ export const CombinedAssetsContainer = () => {
   const [showRemovedItems, setShowRemovedItems] = useState(false);
   const [searchDescriptions, setSearchDescriptions] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [showCheckoutDialog, setShowCheckoutDialog] = useState(false);
-  const [showCheckinDialog, setShowCheckinDialog] = useState(false);
-  const [showIssueDialog, setShowIssueDialog] = useState(false);
   const [showRemovalDialog, setShowRemovalDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showViewDialog, setShowViewDialog] = useState(false);
@@ -141,17 +131,8 @@ export const CombinedAssetsContainer = () => {
     performance.mark('container_mount');
   }, []);
   
-  // Tool history and issues for view dialog
-  const { toolHistory, currentCheckout, fetchToolHistory } = useToolHistory();
-  const { issues: assetIssues, fetchIssues: fetchAssetIssues } = useToolIssues(
-    selectedAssetForDetails?.type === 'asset' ? selectedAssetForDetails.id : null
-  );
-  const { issues: stockIssues, fetchIssues: fetchStockIssues } = useInventoryIssues(
-    selectedAssetForDetails?.type === 'stock' ? selectedAssetForDetails.id : null
-  );
-  
-  // Get appropriate issues based on selected asset type
-  const issues = selectedAssetForDetails?.type === 'asset' ? assetIssues : stockIssues;
+  // Tool history for view dialog
+  const { toolHistory, fetchToolHistory } = useToolHistory();
 
   // Fetch pending orders for stock items using TanStack Query for caching
   const fetchPartsOrders = async () => {
@@ -317,8 +298,7 @@ export const CombinedAssetsContainer = () => {
         if (!asset.is_checked_out || asset.checked_out_user_id !== user?.id) return false;
       }
 
-      // Issues filter
-      if (showWithIssues && !asset.has_issues) return false;
+      // Issues filter - removed (issue system deprecated)
 
       // Apply search filter when Areas Only is enabled (since we skip search in useCombinedAssets)
       if (showOnlyAreas && searchTerm && searchTerm.trim()) {
@@ -352,7 +332,7 @@ export const CombinedAssetsContainer = () => {
     }
 
     return filtered;
-  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, showMyCheckedOut, showWithIssues, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
+  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, showMyCheckedOut, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
 
   const handleCreateAsset = async (assetData: any, isAsset: boolean) => {
     const result = await createAsset(assetData, isAsset);
@@ -407,21 +387,6 @@ export const CombinedAssetsContainer = () => {
   const handleRemove = useCallback((asset: CombinedAsset) => {
     setSelectedAssetId(asset.id);
     setShowRemovalDialog(true);
-  }, []);
-
-  const handleCheckout = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowCheckoutDialog(true);
-  }, []);
-
-  const handleCheckin = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowCheckinDialog(true);
-  }, []);
-
-  const handleManageIssues = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowIssueDialog(true);
   }, []);
 
   const handleAskMaxwell = useCallback((asset: CombinedAsset) => {
@@ -653,7 +618,6 @@ export const CombinedAssetsContainer = () => {
         <ToolDetails
           tool={selectedAssetForDetails as any}
           toolHistory={toolHistory}
-          currentCheckout={null} // TODO: Add current checkout logic if needed
           onBack={handleBackToAssets}
         />
       );
@@ -661,14 +625,7 @@ export const CombinedAssetsContainer = () => {
       return (
         <StockDetails
           stock={selectedAssetForDetails as any}
-          issues={issues}
           onBack={handleBackToAssets}
-          onResolveIssue={(issue) => {
-            // Handle issue resolution
-          }}
-          onEditIssue={(issue) => {
-            // Handle issue editing
-          }}
           onRefresh={() => {
             // Refresh stock data
           }}
@@ -721,8 +678,6 @@ export const CombinedAssetsContainer = () => {
         setSearchDescriptions={setSearchDescriptions}
         showMyCheckedOut={showMyCheckedOut}
         setShowMyCheckedOut={setShowMyCheckedOut}
-        showWithIssues={showWithIssues}
-        setShowWithIssues={setShowWithIssues}
         showLowStock={showLowStock}
         setShowLowStock={setShowLowStock}
         showOnlyAssets={showOnlyAssets}
@@ -754,10 +709,6 @@ export const CombinedAssetsContainer = () => {
             onView={handleShowAssetDetails}
             onEdit={handleEdit}
             onRemove={handleRemove}
-            onCheckout={handleCheckout}
-            onCheckin={handleCheckin}
-            onReportIssue={handleManageIssues}
-            onManageIssues={handleManageIssues}
             onAddObservation={handleAddObservation}
             onAddQuantity={handleAddQuantity}
             onUseQuantity={handleUseQuantity}
@@ -782,54 +733,6 @@ export const CombinedAssetsContainer = () => {
         onSubmit={handleCreateAsset}
         initialName={searchTerm}
       />
-
-      {/* Checkout Dialog */}
-      {selectedAsset && selectedAsset.type === 'asset' && (
-        <ToolCheckoutDialog
-          open={showCheckoutDialog}
-          onOpenChange={() => {
-            setShowCheckoutDialog(false);
-            setSelectedAssetId(null);
-          }}
-          tool={selectedAsset as any}
-          onSuccess={() => {
-            setShowCheckoutDialog(false);
-            setSelectedAssetId(null);
-          }}
-        />
-      )}
-
-      {/* Check-in Dialog */}
-      {selectedAsset && selectedAsset.type === 'asset' && (
-        <ToolCheckInDialog
-          open={showCheckinDialog}
-          onOpenChange={() => {
-            setShowCheckinDialog(false);
-            setSelectedAssetId(null);
-          }}
-          tool={selectedAsset as any}
-          onSuccess={() => {
-            setShowCheckinDialog(false);
-            setSelectedAssetId(null);
-          }}
-        />
-      )}
-
-      {/* Unified Issue Dialog for both assets and stock */}
-      {selectedAsset && (
-        <IssueReportDialog
-          open={showIssueDialog}
-          onOpenChange={() => {
-            setShowIssueDialog(false);
-            setSelectedAssetId(null);
-          }}
-          asset={selectedAsset}
-          onSuccess={() => {
-            setShowIssueDialog(false);
-            setSelectedAssetId(null);
-          }}
-        />
-      )}
 
       {/* Removal Dialogs */}
       {selectedAsset && selectedAsset.type === 'asset' && (
@@ -1055,7 +958,6 @@ export const CombinedAssetsContainer = () => {
               <ToolDetails
                 tool={selectedAsset as any}
                 toolHistory={toolHistory}
-                currentCheckout={currentCheckout}
                 onBack={() => {
                   setShowViewDialog(false);
                   setSelectedAssetId(null);

@@ -32,13 +32,13 @@ const path = require('path');
 
 // --- Bedrock Agent configuration ---
 const bedrockClient = new BedrockAgentRuntimeClient({
-  region: process.env.BEDROCK_REGION || 'us-west-2',
+  region: process.env.BEDROCK_REGION,
 });
 const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
 
 // --- Prompt loading (same pattern as lambda/maxwell-chat/index.js) ---
-const PROMPT_SET = process.env.PROMPT_SET || 'sonnet46';
+const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
 console.log(`[MAXWELL-WORKER] Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
 
@@ -77,6 +77,21 @@ function buildInstructionPrefix(message) {
   return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
 }
 
+function normalizeContextText(value, maxLength = 900) {
+  if (!value) return '';
+  const text = String(value)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text;
+}
+
 /**
  * Build a JSON envelope message.
  */
@@ -106,13 +121,35 @@ async function postToConnection(apiGwClient, connectionId, envelope) {
 function extractTraceStep(trace) {
   if (trace.trace?.orchestrationTrace?.invocationInput?.actionGroupInvocationInput) {
     const actionGroup = trace.trace.orchestrationTrace.invocationInput.actionGroupInvocationInput;
-    return `Searching: ${actionGroup.actionGroupName || 'knowledge base'}`;
+    return `Searching: ${actionGroup.actionGroupName || 'knowledge base'}...`;
   }
   if (trace.trace?.orchestrationTrace?.rationale?.text) {
     const rationale = trace.trace.orchestrationTrace.rationale.text;
     return rationale.length > 120 ? rationale.substring(0, 120) + '...' : rationale;
   }
   if (trace.trace?.orchestrationTrace?.observation) {
+    const obs = trace.trace.orchestrationTrace.observation;
+    if (obs.actionGroupInvocationOutput?.text) {
+      try {
+        const body = JSON.parse(obs.actionGroupInvocationOutput.text);
+        if (body && Array.isArray(body.observations)) {
+          const logsCount = body.observations.length;
+          let photosCount = 0;
+          let metricsCount = 0;
+          for (const item of body.observations) {
+            if (Array.isArray(item.photos)) {
+              photosCount += item.photos.length;
+            }
+            if (Array.isArray(item.metrics)) {
+              metricsCount += item.metrics.length;
+            }
+          }
+          return `Loaded ${logsCount} database logs, ${photosCount} photos, and ${metricsCount} metrics. Preparing report...`;
+        }
+      } catch (err) {
+        console.error('[MAXWELL-WORKER] Telemetry trace JSON.parse failed:', err);
+      }
+    }
     return 'Analyzing results...';
   }
   return 'Processing...';
@@ -129,7 +166,7 @@ exports.handler = async (event) => {
   }));
 
   const { connectionId, payload, endpoint, organizationId } = event;
-  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint });
+  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint, region: 'us-west-2' });
 
   // Validate organization context
   if (!organizationId) {
@@ -165,20 +202,31 @@ exports.handler = async (event) => {
   let enhancedMessage = buildInstructionPrefix(message);
   if (sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
     const contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
-    if (sessionAttributes.policy) {
-      contextParts.push(`Description: ${sessionAttributes.policy}`);
+    const policyText = normalizeContextText(sessionAttributes.policy);
+    if (policyText) {
+      contextParts.push(`Description: ${policyText}`);
     }
-    if (sessionAttributes.implementation) {
-      contextParts.push(`Observations summary: ${sessionAttributes.implementation}`);
+    const implementationText = normalizeContextText(sessionAttributes.implementation, 999999);
+    if (implementationText) {
+      contextParts.push(`Observations summary: ${implementationText}`);
     }
     enhancedMessage += `[Context: ${contextParts.join('. ')}] `;
   }
   enhancedMessage += `[Today's date: ${new Date().toISOString().split('T')[0]}] `;
   enhancedMessage += message;
 
+  const mode = payload.mode || 'deep';
+  const targetAliasId = mode === 'quick'
+    ? AGENT_ALIAS_ID
+    : (process.env.MAXWELL_AGENT_ALIAS_ID_DEEP || 'XVS45ZMCA6');
+
+  console.log(`[MAXWELL-WORKER ROUTE] Mode: ${mode} -> Routing to Bedrock Agent Alias: ${targetAliasId}`);
+
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
     ...sessionAttributes,
+    policy: normalizeContextText(sessionAttributes.policy),
+    implementation: normalizeContextText(sessionAttributes.implementation, 999999),
     organization_id: organizationId,
     current_date: new Date().toISOString().split('T')[0],
   };
@@ -195,7 +243,7 @@ exports.handler = async (event) => {
 
   const command = new InvokeAgentCommand({
     agentId: AGENT_ID,
-    agentAliasId: AGENT_ALIAS_ID,
+    agentAliasId: targetAliasId,
     sessionId: effectiveSessionId,
     inputText: enhancedMessage,
     enableTrace: true,
@@ -205,13 +253,16 @@ exports.handler = async (event) => {
   });
 
   try {
+    const t0 = Date.now();
     const response = await bedrockClient.send(command);
     const returnedSessionId = response.sessionId;
 
     let reply = '';
     const traceEvents = [];
+    let firstChunkTime = null;
 
     for await (const chunk of response.completion) {
+      if (!firstChunkTime) firstChunkTime = Date.now();
       // Forward trace events as progress indicators
       if (chunk.trace) {
         traceEvents.push(chunk.trace);
@@ -238,14 +289,61 @@ exports.handler = async (event) => {
       }
     }
 
+    const tEnd = Date.now();
+    console.log(`[METRICS] Maxwell Worker - Total Time: ${tEnd - t0}ms, Time to first chunk: ${firstChunkTime ? firstChunkTime - t0 : 'N/A'}ms, Trace steps: ${traceEvents.length}`);
+
+    const lightweightTrace = [];
+    for (const t of traceEvents) {
+      const ot = t.trace?.orchestrationTrace;
+      if (!ot) continue;
+
+      if (ot.invocationInput?.actionGroupInvocationInput) {
+        const action = ot.invocationInput.actionGroupInvocationInput;
+        lightweightTrace.push({
+          event: 'Tool Call',
+          actionGroup: action.actionGroupName || 'unknown',
+          apiPath: action.apiPath,
+          function: action.function
+        });
+      } else if (ot.invocationInput?.knowledgeBaseLookupInput) {
+        lightweightTrace.push({
+          event: 'Knowledge Base Query',
+          query: ot.invocationInput.knowledgeBaseLookupInput.text
+        });
+      } else if (ot.rationale?.text) {
+        lightweightTrace.push({
+          event: 'Reasoning',
+          text: ot.rationale.text.length > 200 ? ot.rationale.text.substring(0, 200) + '...' : ot.rationale.text
+        });
+      } else if (ot.observation?.actionGroupInvocationOutput?.text) {
+        try {
+          const body = JSON.parse(ot.observation.actionGroupInvocationOutput.text);
+          lightweightTrace.push({
+            event: 'Tool Result',
+            records_loaded: Array.isArray(body.observations) ? body.observations.length : undefined,
+            status: 'success'
+          });
+        } catch (e) {
+          lightweightTrace.push({
+            event: 'Tool Result',
+            length: ot.observation.actionGroupInvocationOutput.text.length
+          });
+        }
+      } else if (ot.observation?.knowledgeBaseLookupOutput) {
+        lightweightTrace.push({
+          event: 'Knowledge Base Result',
+          references_found: ot.observation.knowledgeBaseLookupOutput.retrievedReferences?.length || 0
+        });
+      }
+    }
+
     // Send the final complete response
-    // Note: trace events are already sent individually as maxwell:progress messages.
-    // We omit the full trace array here to stay under the 128 KB WebSocket frame limit.
-    // Only include trace count so the frontend knows how many steps occurred.
+    // We send a filtered lightweightTrace instead of the full trace array to stay under the 128 KB limit.
     await postToConnection(apiGwClient, connectionId, buildEnvelope('maxwell:response_complete', {
       reply,
       sessionId: returnedSessionId || effectiveSessionId,
       traceCount: traceEvents.length,
+      trace: lightweightTrace,
     }));
   } catch (err) {
     console.error('[MAXWELL-WORKER] Bedrock Agent error:', err);

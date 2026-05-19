@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ActionCard } from '@/components/ActionCard';
 import { Button } from "@/components/ui/button";
 import { Plus } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
-import { UnifiedActionDialog } from './UnifiedActionDialog';
-import { BaseAction, Profile, createMissionAction } from '@/types/actions';
+import { BaseAction, Profile } from '@/types/actions';
 
 interface MissionActionListProps {
   missionId: string;
@@ -15,11 +15,9 @@ interface MissionActionListProps {
 
 export function MissionActionList({ missionId, profiles, canEdit = false, missionNumber }: MissionActionListProps) {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [actions, setActions] = useState<BaseAction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isAddingAction, setIsAddingAction] = useState(false);
-  const [editingAction, setEditingAction] = useState<BaseAction | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
     // Initial load of actions for this mission
@@ -56,28 +54,11 @@ export function MissionActionList({ missionId, profiles, canEdit = false, missio
   };
 
   const handleCreateAction = () => {
-    setEditingAction(null);
-    setIsCreating(true);
-    setIsAddingAction(true);
+    navigate(`/actions/new?missionId=${missionId}`);
   };
 
   const handleEditAction = (action: BaseAction) => {
-    setEditingAction(action);
-    setIsCreating(false);
-    setIsAddingAction(true);
-  };
-
-  const handleSaveAction = () => {
-    setIsAddingAction(false);
-    setEditingAction(null);
-    setIsCreating(false);
-    fetchActions();
-  };
-
-  const handleCancelAction = () => {
-    setIsAddingAction(false);
-    setEditingAction(null);
-    setIsCreating(false);
+    navigate(`/actions/${action.id}`);
   };
 
   if (loading) {
@@ -100,7 +81,7 @@ export function MissionActionList({ missionId, profiles, canEdit = false, missio
         )}
       </div>
 
-      {actions.length === 0 && !isAddingAction ? (
+      {actions.length === 0 ? (
         <div className="text-center py-8 text-muted-foreground">
           <p>No actions defined for this project.</p>
           {canEdit && (
@@ -120,21 +101,6 @@ export function MissionActionList({ missionId, profiles, canEdit = false, missio
           ))}
         </div>
       )}
-
-      {/* Unified Action Dialog */}
-      <UnifiedActionDialog
-        open={isAddingAction}
-        onOpenChange={(open) => !open && handleCancelAction()}
-        action={editingAction || undefined}
-        context={{
-          type: 'mission',
-          parentId: missionId,
-          prefilledData: isCreating ? createMissionAction(missionId) : undefined
-        }}
-        profiles={profiles}
-        onActionSaved={handleSaveAction}
-        isCreating={isCreating}
-      />
     </div>
   );
 }

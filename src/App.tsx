@@ -21,8 +21,6 @@ import LeadershipRoute from "@/components/LeadershipRoute";
 import SuperAdminRoute from "@/components/SuperAdminRoute";
 import { GlobalMaxwellFAB } from "@/components/GlobalMaxwellFAB";
 import { MaxwellRecordHighlightProvider } from "@/contexts/MaxwellRecordHighlightContext";
-
-
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -31,12 +29,11 @@ import Dashboard from "./pages/Dashboard";
 import InventorySummary from "./pages/InventorySummary";
 import CombinedAssets from "./pages/CombinedAssets";
 import AddObservation from "./pages/AddObservation";
-import CheckIn from "./pages/CheckIn";
 import Missions from "./pages/Missions";
 import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
+import ActionPage from "./pages/ActionPage";
 import Explorations from "./pages/Explorations";
-import Issues from "./pages/Issues";
 import Audit from "./pages/Audit";
 import AuditTool from "./pages/AuditTool";
 import ScoringPrompts from "./pages/ScoringPrompts";
@@ -184,14 +181,6 @@ function AppContent() {
           }
         />
         <Route
-          path="/checkin"
-          element={
-            <ProtectedRoute>
-              <CheckIn />
-            </ProtectedRoute>
-          }
-        />
-        <Route
           path="/missions"
           element={
             <ProtectedRoute>
@@ -208,10 +197,26 @@ function AppContent() {
           }
         />
         <Route
-          path="/actions/:actionId?"
+          path="/actions"
           element={
             <ProtectedRoute>
               <Actions />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions/new"
+          element={
+            <ProtectedRoute>
+              <ActionPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/actions/:actionId"
+          element={
+            <ProtectedRoute>
+              <ActionPage />
             </ProtectedRoute>
           }
         />
@@ -225,11 +230,7 @@ function AppContent() {
         />
         <Route
           path="/issues"
-          element={
-            <ProtectedRoute>
-              <Issues />
-            </ProtectedRoute>
-          }
+          element={<Navigate to="/combined-assets" replace />}
         />
         <Route
           path="/audit"

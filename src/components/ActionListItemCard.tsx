@@ -115,17 +115,9 @@ export function ActionListItemCard({
             {action.asset ? (
               <Badge variant="outline" className="bg-blue-100 text-blue-600 border-blue-300 max-w-full overflow-hidden">
                 <span className="truncate">
-                  Asset: {action.asset.name.length > 10 
-                    ? `${action.asset.name.substring(0, 10)}...` 
-                    : action.asset.name}
-                </span>
-              </Badge>
-            ) : action.issue_tool ? (
-              <Badge variant="outline" className="bg-orange-100 text-orange-800 max-w-full overflow-hidden">
-                <span className="truncate">
-                  Issue Tool: {action.issue_tool.name.length > 10 
-                    ? `${action.issue_tool.name.substring(0, 10)}...` 
-                    : action.issue_tool.name}
+                  Asset: {(action.asset.name?.length ?? 0) > 10 
+                    ? `${action.asset.name?.substring(0, 10)}...` 
+                    : (action.asset.name ?? 'Unknown')}
                 </span>
               </Badge>
             ) : null}
@@ -135,9 +127,9 @@ export function ActionListItemCard({
             {action.mission && (
               <Badge variant="outline" className="bg-indigo-100 text-indigo-800 max-w-full overflow-hidden">
                 <span className="truncate">
-                  Project #{action.mission.mission_number}: {action.mission.title.length > 15 
-                    ? `${action.mission.title.substring(0, 15)}...` 
-                    : action.mission.title}
+                  Project #{action.mission.mission_number}: {(action.mission.title?.length ?? 0) > 15 
+                    ? `${action.mission.title?.substring(0, 15)}...` 
+                    : (action.mission.title ?? 'Untitled')}
                 </span>
               </Badge>
             )}

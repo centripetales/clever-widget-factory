@@ -43,25 +43,25 @@ export interface CapabilityProfile {
 }
 
 /**
- * Query hook to fetch a person's capability profile relative to an action.
- * GET /api/capability/:actionId/:userId
- * Only enabled when both IDs are provided and the action has an approved skill profile.
+ * Query hook to fetch the current user's capability profile relative to an action.
+ * GET /api/capability/:actionId
+ * userId always comes from auth context — the logged-in user is always the subject.
+ * Only enabled when actionId is provided and the action has an approved skill profile.
  * Requirements: 3.1
  */
 export function useCapabilityProfile(
   actionId: string | undefined,
-  userId: string | undefined,
   hasApprovedSkillProfile: boolean = false
 ) {
   return useQuery({
-    queryKey: capabilityProfileQueryKey(actionId!, userId!),
+    queryKey: capabilityProfileQueryKey(actionId!),
     queryFn: async () => {
       const result = await apiService.get<{ data: CapabilityProfile }>(
-        `/capability/${actionId}/${userId}`
+        `/capability/${actionId}`
       );
       return result.data;
     },
-    enabled: !!(actionId && userId && hasApprovedSkillProfile),
+    enabled: !!(actionId && hasApprovedSkillProfile),
     staleTime: 60000, // 1 minute — capability profiles are computed on-demand
   });
 }
@@ -71,6 +71,7 @@ export function useCapabilityProfile(
  * GET /api/capability/:actionId/organization
  * Only enabled when actionId is provided and the action has an approved skill profile.
  * Requirements: 6.1
+ * @deprecated Organization capability view is not yet implemented in the current iteration.
  */
 export function useOrganizationCapability(
   actionId: string | undefined,
@@ -85,6 +86,6 @@ export function useOrganizationCapability(
       return result.data;
     },
     enabled: !!(actionId && hasApprovedSkillProfile),
-    staleTime: 60000, // 1 minute — capability profiles are computed on-demand
+    staleTime: 60000,
   });
 }

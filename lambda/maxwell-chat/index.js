@@ -3,16 +3,15 @@ const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const fs = require('fs');
 const path = require('path');
 
-const client = new BedrockAgentRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+const client = new BedrockAgentRuntimeClient({ region: process.env.BEDROCK_REGION });
 
 const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
 
 // Load prompt fragments once at cold start
-// PROMPT_SET env var selects the prompt directory: "sonnet46" (default), "haiku", etc.
-const PROMPT_SET = process.env.PROMPT_SET || 'sonnet46';
+const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
-console.log(`Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
+
 
 const loadPrompt = (name) => {
   try {
@@ -48,20 +47,35 @@ function buildInstructionPrefix(message) {
   return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
 }
 
+function normalizeContextText(value, maxLength = 900) {
+  if (!value) return '';
+  const text = String(value)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text;
+}
+
 exports.handler = async (event) => {
-  console.log('Maxwell chat event:', JSON.stringify(event, null, 2));
+
 
   const authContext = getAuthorizerContext(event);
   if (!authContext.organization_id) {
-    return { 
-      statusCode: 401, 
+    return {
+      statusCode: 401,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Unauthorized: No organization context' }) 
+      body: JSON.stringify({ error: 'Unauthorized: No organization context' })
     };
   }
 
@@ -69,30 +83,30 @@ exports.handler = async (event) => {
   try {
     body = JSON.parse(event.body || '{}');
   } catch {
-    return { 
-      statusCode: 400, 
+    return {
+      statusCode: 400,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Invalid request body' }) 
+      body: JSON.stringify({ error: 'Invalid request body' })
     };
   }
 
   const { message, sessionId, sessionAttributes = {} } = body;
 
   if (!message) {
-    return { 
-      statusCode: 400, 
+    return {
+      statusCode: 400,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'message is required' }) 
+      body: JSON.stringify({ error: 'message is required' })
     };
   }
 
@@ -100,11 +114,13 @@ exports.handler = async (event) => {
   let enhancedMessage = buildInstructionPrefix(message);
   if (sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
     let contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
-    if (sessionAttributes.policy) {
-      contextParts.push(`Description: ${sessionAttributes.policy}`);
+    const policyText = normalizeContextText(sessionAttributes.policy);
+    if (policyText) {
+      contextParts.push(`Description: ${policyText}`);
     }
-    if (sessionAttributes.implementation) {
-      contextParts.push(`Observations summary: ${sessionAttributes.implementation}`);
+    const implementationText = normalizeContextText(sessionAttributes.implementation, 999999);
+    if (implementationText) {
+      contextParts.push(`Observations summary: ${implementationText}`);
     }
     enhancedMessage += `[Context: ${contextParts.join('. ')}] `;
   }
@@ -113,21 +129,30 @@ exports.handler = async (event) => {
 
   if (!AGENT_ID || !AGENT_ALIAS_ID) {
     console.error('Missing MAXWELL_AGENT_ID or MAXWELL_AGENT_ALIAS_ID env vars');
-    return { 
-      statusCode: 500, 
+    return {
+      statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Agent not configured' }) 
+      body: JSON.stringify({ error: 'Agent not configured' })
     };
   }
+
+  const mode = body.mode || 'deep';
+  const targetAliasId = mode === 'quick'
+    ? AGENT_ALIAS_ID
+    : (process.env.MAXWELL_AGENT_ALIAS_ID_DEEP || 'XVS45ZMCA6');
+
+
 
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
     ...sessionAttributes,
+    policy: normalizeContextText(sessionAttributes.policy),
+    implementation: normalizeContextText(sessionAttributes.implementation, 999999),
     organization_id: authContext.organization_id,
     current_date: new Date().toISOString().split('T')[0],
   };
@@ -137,14 +162,14 @@ exports.handler = async (event) => {
     Object.entries(mergedSessionAttributes).map(([k, v]) => [k, String(v ?? '')])
   );
 
-  console.log('Session attributes being sent to Maxwell:', JSON.stringify(stringifiedAttributes, null, 2));
+
 
   // Generate a session ID if not provided (Bedrock requires it)
   const effectiveSessionId = sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
   const command = new InvokeAgentCommand({
     agentId: AGENT_ID,
-    agentAliasId: AGENT_ALIAS_ID,
+    agentAliasId: targetAliasId,
     sessionId: effectiveSessionId,
     inputText: enhancedMessage, // Use enhanced message with context
     enableTrace: true, // Enable trace for debugging
@@ -154,14 +179,17 @@ exports.handler = async (event) => {
   });
 
   try {
+    const t0 = Date.now();
     const response = await client.send(command);
     const returnedSessionId = response.sessionId;
 
     // Collect streamed chunks and trace events
     let reply = '';
     const traceEvents = [];
-    
+    let firstChunkTime = null;
+
     for await (const chunk of response.completion) {
+      if (!firstChunkTime) firstChunkTime = Date.now();
       if (chunk.chunk?.bytes) {
         reply += new TextDecoder().decode(chunk.chunk.bytes);
       }
@@ -170,16 +198,19 @@ exports.handler = async (event) => {
       }
     }
 
+    const tEnd = Date.now();
+
+
     return {
       statusCode: 200,
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ 
-        reply, 
+      body: JSON.stringify({
+        reply,
         sessionId: returnedSessionId,
         trace: traceEvents // Include trace in response
       }),
@@ -188,39 +219,39 @@ exports.handler = async (event) => {
     console.error('Bedrock Agent error:', err);
 
     if (err.name === 'ThrottlingException') {
-      return { 
-        statusCode: 429, 
+      return {
+        statusCode: 429,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
           'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
         },
-        body: JSON.stringify({ error: 'Maxwell is busy, please try again' }) 
+        body: JSON.stringify({ error: 'Maxwell is busy, please try again' })
       };
     }
     if (err.name === 'ServiceQuotaExceededException' || err.$metadata?.httpStatusCode === 504) {
-      return { 
-        statusCode: 504, 
+      return {
+        statusCode: 504,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
           'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
         },
-        body: JSON.stringify({ error: 'Maxwell took too long to respond' }) 
+        body: JSON.stringify({ error: 'Maxwell took too long to respond' })
       };
     }
 
-    return { 
-      statusCode: 500, 
+    return {
+      statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
         'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
       },
-      body: JSON.stringify({ error: 'Internal error communicating with Maxwell' }) 
+      body: JSON.stringify({ error: 'Internal error communicating with Maxwell' })
     };
   }
 };

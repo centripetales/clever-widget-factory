@@ -31,7 +31,7 @@ export interface AxisDrilldownProps {
   onClose: () => void;
 }
 
-const BLOOM_LABELS = ['No exposure', 'Remember', 'Understand', 'Apply', 'Analyze', 'Create'];
+const BLOOM_LABELS = ['Not yet assessed', 'Remember', 'Understand', 'Apply', 'Analyze', 'Create'];
 
 /** Format a 0-5 Bloom's level as a readable string. */
 function formatLevel(level: number): string {

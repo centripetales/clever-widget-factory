@@ -81,6 +81,7 @@ const AI_CONFIG_DEFAULTS: AiConfig = {
 const skillAxisSchema = z.object({
   key: z.string().min(1, 'Key is required'),
   label: z.string().min(1, 'Label is required'),
+  description: z.string().min(1, 'Description is required'),
   required_level: z
     .number()
     .int('Must be a whole number')
@@ -439,6 +440,7 @@ function PreviewState({
       axes: profile.axes.map((a) => ({
         key: a.key,
         label: a.label,
+        description: a.description,
         required_level: a.required_level,
       })),
     },
@@ -475,12 +477,28 @@ function PreviewState({
           <p className="text-xs text-destructive">{errors.axes.root.message}</p>
         )}
         {fields.map((field, index) => (
-          <div key={field.id} className="flex items-center gap-2">
+          <div key={field.id} className="space-y-2 p-3 border rounded-md">
             <Input
               {...register(`axes.${index}.label`)}
-              className="text-sm flex-1"
+              className="text-sm"
               placeholder="Axis label"
             />
+            {errors.axes?.[index]?.label && (
+              <span className="text-xs text-destructive">
+                {errors.axes[index].label?.message}
+              </span>
+            )}
+            <Textarea
+              {...register(`axes.${index}.description`)}
+              rows={3}
+              className="text-sm"
+              placeholder="2-4 sentence description of the concept..."
+            />
+            {errors.axes?.[index]?.description && (
+              <span className="text-xs text-destructive">
+                {errors.axes[index].description?.message}
+              </span>
+            )}
             <Input
               {...register(`axes.${index}.required_level`, { valueAsNumber: true })}
               type="number"
@@ -490,11 +508,6 @@ function PreviewState({
               className="text-sm w-20"
               placeholder="0–5"
             />
-            {errors.axes?.[index]?.label && (
-              <span className="text-xs text-destructive">
-                {errors.axes[index].label?.message}
-              </span>
-            )}
             {errors.axes?.[index]?.required_level && (
               <span className="text-xs text-destructive">
                 {errors.axes[index].required_level?.message}
@@ -531,6 +544,24 @@ function PreviewState({
 
 // --- Approved State (mini radar preview with progress bars) ---
 
+function AxisDescription({ description }: { description: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="space-y-0.5">
+      <p className={`text-xs text-muted-foreground ${expanded ? '' : 'line-clamp-3'}`}>
+        {description}
+      </p>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="text-xs text-primary hover:underline"
+      >
+        {expanded ? 'Show less' : 'Show more'}
+      </button>
+    </div>
+  );
+}
+
 function ApprovedState({
   profile,
   isRegenerating,
@@ -553,6 +584,18 @@ function ApprovedState({
           Approved {new Date(profile.approved_at).toLocaleDateString()}
         </p>
       )}
+
+      {/* Axes list — Requirements: 4.2, 4.3, 5.4 */}
+      <div className="space-y-3">
+        {profile.axes.map((axis) => (
+          <div key={axis.key} className="space-y-0.5">
+            <p className="text-sm font-medium">{axis.label}</p>
+            {axis.description && (
+              <AxisDescription description={axis.description} />
+            )}
+          </div>
+        ))}
+      </div>
 
       {/* Regenerate */}
       <Button

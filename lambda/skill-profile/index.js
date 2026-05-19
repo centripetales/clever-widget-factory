@@ -7,7 +7,7 @@ const { escapeLiteral } = require('/opt/nodejs/sqlUtils');
 const { fetchAiConfig, resolveAiConfig } = require('/opt/nodejs/aiConfigDefaults');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
-const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
 const { composeAxisEmbeddingSource } = require('/opt/nodejs/axisUtils');
@@ -204,6 +204,9 @@ async function handleGenerate(event, organizationId) {
     }
   }
 
+  // Preserve user's growth intent as the narrative — user controls what their skill profile says
+  if (growthIntent) { profile.narrative = growthIntent; }
+
   // Return preview — no approved_at/approved_by, nothing persisted
   return success(profile);
 }
@@ -238,7 +241,7 @@ function buildSkillProfilePrompt(ctx, strict = false, aiConfig = null, growthInt
   const actionContext = parts.join('\n');
 
   const strictClause = strict
-    ? `\nCRITICAL: You MUST return EXACTLY ${aiConfig.min_axes} to ${aiConfig.max_axes} axes. Each required_level MUST be an INTEGER between 0 and 5 inclusive. Do NOT return fewer than ${aiConfig.min_axes} or more than ${aiConfig.max_axes} axes. Do NOT return levels outside 0-5. Failure to comply will cause an error.`
+    ? `\nCRITICAL: You MUST return EXACTLY ${aiConfig.min_axes} to ${aiConfig.max_axes} axes. Each axis MUST have a non-empty "description" (2-4 sentences). Each required_level MUST be an INTEGER between 0 and 5 inclusive. Do NOT return fewer than ${aiConfig.min_axes} or more than ${aiConfig.max_axes} axes. Do NOT return levels outside 0-5. Failure to comply will cause an error.`
     : '';
 
   // Requirement 2.6: When no growth intent, use existing action-driven prompt unchanged
@@ -263,6 +266,11 @@ Produce a JSON object with these fields:
 2. "axes": An array of ${aiConfig.min_axes} to ${aiConfig.max_axes} skill axes, each with:
    - "key": A snake_case identifier (e.g., "regulatory_navigation")
    - "label": A human-readable label (e.g., "Regulatory Navigation")
+   - "description": A 2-4 sentence rich description of the concept.
+     Capture: the core concept, why it matters for this action, what
+     understanding looks like, and at least one specific question it raises.
+     Derive from the action context (title, description, expected outcome).
+     Write about concepts and mechanisms — NOT about specific farm instances.
    - "required_level": An INTEGER from 0 to 5 using the Bloom's scale above. Be realistic — most axes should be 1-3.
 3. "generated_at": The current UTC timestamp in ISO 8601 format.
 
@@ -302,6 +310,12 @@ Produce a JSON object with these fields:
 2. "axes": An array of ${aiConfig.min_axes} to ${aiConfig.max_axes} concept axes, each with:
    - "key": A snake_case identifier (e.g., "trust_building_frameworks")
    - "label": A human-readable label (e.g., "Trust Building Frameworks")
+   - "description": A 2-4 sentence rich description of the concept.
+     Capture: the core concept, why it matters for this action, what
+     understanding looks like, and at least one specific question it raises.
+     Ground the description in the learner's own growth intent words.
+     Write about concepts and mechanisms — NOT about specific farm instances
+     (no field names, soil sample IDs, or observation dates).
    - "required_level": An INTEGER from 0 to 5 using the Bloom's scale above. Be realistic — most axes should be 2-3.
 3. "generated_at": The current UTC timestamp in ISO 8601 format.
 ${strictClause}
@@ -314,7 +328,7 @@ Respond with ONLY the JSON object, no markdown formatting, no code fences, no ex
  * @returns {Promise<Object>} Parsed skill profile object
  */
 async function callBedrockForSkillProfile(prompt) {
-  const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+  const MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
 
   const payload = {
     anthropic_version: 'bedrock-2023-05-31',
@@ -368,6 +382,7 @@ function isValidSkillProfile(profile, aiConfig = null) {
     if (!axis || typeof axis !== 'object') return false;
     if (typeof axis.key !== 'string' || !axis.key.trim()) return false;
     if (typeof axis.label !== 'string' || !axis.label.trim()) return false;
+    if (typeof axis.description !== 'string' || !axis.description.trim()) return false;
     if (typeof axis.required_level !== 'number') return false;
     if (axis.required_level < 0 || axis.required_level > 5) return false;
   }

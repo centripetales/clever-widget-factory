@@ -429,19 +429,6 @@ export class ExplorationService {
       throw error;
     }
   }
-
-  async updateExploration(id: string, data: { exploration_code?: string; name?: string }): Promise<ExplorationResponse> {
-    try {
-      const response = await apiService.put(`/explorations`, {
-        exploration_id: id,
-        ...data
-      });
-      return getApiData(response);
-    } catch (error) {
-      console.error('Error updating exploration:', error);
-      throw error;
-    }
-  }
 }
 
 // Export a singleton instance for convenience

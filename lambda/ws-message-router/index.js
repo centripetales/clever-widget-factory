@@ -76,7 +76,7 @@ exports.handler = async (event) => {
 
   const { connectionId } = event.requestContext;
   const endpoint = `https://${event.requestContext.domainName}/${event.requestContext.stage}`;
-  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint });
+  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint, region: 'us-west-2' });
 
   // 1. Parse the message body
   let message;

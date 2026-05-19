@@ -72,6 +72,17 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
     resetSession();
   }, [sessionAttributes.entityId, resetSession]);
 
+  // Abort streaming if WebSocket connection drops
+  useEffect(() => {
+    if (isStreamingRef.current && (status === 'disconnected' || status === 'reconnecting')) {
+      setError('Connection lost while waiting for response. Please try again.');
+      setIsLoading(false);
+      setProgressStep(null);
+      isStreamingRef.current = false;
+      accumulatedChunksRef.current = '';
+    }
+  }, [status]);
+
   // Subscribe to WebSocket maxwell events
   useEffect(() => {
     const unsubChunk = subscribe('maxwell:response_chunk', (payload: any) => {
@@ -204,6 +215,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       wsSendMessage('maxwell:chat', {
         message: enhancedText,
         sessionId: sessionId ?? undefined,
+        mode,
         sessionAttributes: {
           entityId: sessionAttributes.entityId,
           entityType: sessionAttributes.entityType,
@@ -214,11 +226,21 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       });
       // isLoading will be set to false by the response_complete or error handler
     } else {
-      // --- REST fallback path ---
+      // --- Explicit validation instead of silent fallback ---
+      if (mode === 'deep') {
+        const errorMsg = `Deep mode requires an active WebSocket connection to stream real-time results. Connection status: ${status}`;
+        console.error('[MAXWELL] ' + errorMsg);
+        setError(errorMsg);
+        setIsLoading(false);
+        return;
+      }
+
+      // Quick queries (Haiku) take <2 seconds and are safe to run over REST
       try {
         const response = await apiService.post<MaxwellChatResponse>('/agent/maxwell-chat', {
           message: enhancedText,
           sessionId,
+          mode,
           sessionAttributes,
         });
 

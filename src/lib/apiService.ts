@@ -15,7 +15,6 @@ import {
   actionsQueryKey,
   completedActionsQueryKey,
   allActionsQueryKey,
-  issuesQueryKey,
   missionsQueryKey,
   partsOrdersQueryKey,
   explorationsQueryKey,
@@ -215,9 +214,8 @@ async function apiRequest<T = any>(
   // Callers can opt out by passing skipOrgHeader: true in options
   if (activeOrganizationId && !(options as any)?.skipOrgHeader) {
     (headers as Record<string, string>)['X-Organization-Id'] = activeOrganizationId;
-    console.log('[apiService] Adding X-Organization-Id:', activeOrganizationId, url);
   } else if (activeOrganizationId && (options as any)?.skipOrgHeader) {
-    console.log('[apiService] Skipping X-Organization-Id for:', url);
+    // skipped
   }
 
   // Add X-Connection-Id header so the backend can exclude this client
@@ -271,7 +269,7 @@ async function apiRequest<T = any>(
           description: '401 Unauthorized received. Token refresh failed — please sign in again.',
           variant: 'destructive',
         });
-        window.location.href = '/login';
+        window.location.href = '/auth';
       }
     }
 
@@ -283,7 +281,7 @@ async function apiRequest<T = any>(
         description: '401 Unauthorized received again after token refresh — please sign in again.',
         variant: 'destructive',
       });
-      window.location.href = '/login';
+      window.location.href = '/auth';
     }
 
     // Handle 403 Forbidden - user doesn't have permission
@@ -396,20 +394,6 @@ function updateCacheFromResponse(endpoint: string, method: string, responseData:
       );
       globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) => 
         old ? old.filter(item => item.id !== actionId) : undefined
-      );
-    }
-  } else if (endpoint.includes('/issues')) {
-    if (method === 'POST') {
-      if (optimisticId) {
-        globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => 
-          old.map(item => item.id === optimisticId ? data : item)
-        );
-      } else {
-        globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => [...old, data]);
-      }
-    } else if (method === 'PUT') {
-      globalQueryClient.setQueryData(issuesQueryKey(), (old: any[] = []) => 
-        old.map(item => item.id === data.id ? data : item)
       );
     }
   } else if (endpoint.includes('/missions')) {

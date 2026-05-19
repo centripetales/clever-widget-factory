@@ -12,10 +12,7 @@ export const explorationByActionIdQueryKey = (actionId: string) => ['exploration
 export const toolsQueryKey = () => ['tools'];
 export const partsQueryKey = () => ['parts'];
 
-export const checkoutsQueryKey = (isReturned?: boolean) => [
-  'checkouts',
-  isReturned === false ? 'active' : isReturned === true ? 'returned' : 'all'
-];
+// Checkouts query key removed — checkout system deprecated
 
 export const actionScoresQueryKey = (start?: string, end?: string) => [
   'action_scores',
@@ -29,24 +26,7 @@ export const proactiveReactiveQueryKey = (start?: string, end?: string) => [
   end ?? 'all',
 ];
 
-// Issues query keys
-export interface IssuesQueryFilters {
-  contextType?: string;
-  contextId?: string;
-  status?: string;
-}
-
-export const issuesQueryKey = (filters: IssuesQueryFilters = {}) => [
-  'issues',
-  filters.contextType ?? 'all',
-  filters.contextId ?? 'all',
-  filters.status ?? 'all',
-];
-
-// Issue-specific query keys
-export const issueScoreQueryKey = (issueId: string) => ['issue_score', issueId];
-
-export const issueActionsQueryKey = (issueId: string) => ['issue_actions', issueId];
+// Issues query keys removed - issue system deprecated
 
 // Missions query keys
 export const missionsQueryKey = () => ['missions'];
@@ -70,7 +50,7 @@ export const experiencesQueryKey = (filters?: { entity_type?: string; entity_id?
 export const experienceQueryKey = (experienceId: string) => ['experience', experienceId];
 
 // Capability query keys
-export const capabilityProfileQueryKey = (actionId: string, userId: string) => ['capability', actionId, userId];
+export const capabilityProfileQueryKey = (actionId: string) => ['capability', actionId];
 export const organizationCapabilityQueryKey = (actionId: string) => ['capability', actionId, 'organization'];
 
 // State space model query keys

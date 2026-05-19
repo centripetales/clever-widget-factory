@@ -7,9 +7,14 @@ export interface BaseAction {
   policy?: string;
   status: string;
   assigned_to?: string | null;
+  assigned_to_name?: string;
+  assigned_to_color?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
+  issue_reference?: string;
+  observations?: string;
+  estimated_completion_date?: string | null;
   
   // Exploration flag - authoritative indicator
   is_exploration?: boolean;
@@ -23,14 +28,12 @@ export interface BaseAction {
   // Parent relationship fields - only one should be set
   mission_id?: string | null;
   asset_id?: string | null;
-  linked_issue_id?: string | null;
   
   // Additional optional fields
   required_tools?: string[];
   required_tool_serial_numbers?: string[];
   required_stock?: { part_id: string; quantity: number; part_name: string; }[];
   attachments?: string[];
-  issue_reference?: string | null;
   scoring_data?: any;
   plan_commitment?: boolean | null;
   policy_agreed_at?: string | null;
@@ -54,12 +57,14 @@ export interface BaseAction {
     user_id: string;
     full_name: string;
     role: string;
+    favorite_color?: string;
   } | null;
   participants_details?: {
     id: string;
     user_id: string;
     full_name: string;
     role: string;
+    favorite_color?: string;
   }[];
   mission?: {
     id: string;
@@ -84,10 +89,11 @@ export interface Profile {
   user_id: string;
   full_name: string;
   role: string;
+  favorite_color?: string;
 }
 
 export interface ActionCreationContext {
-  type: 'mission' | 'issue' | 'asset';
+  type: 'mission' | 'asset';
   parentId?: string;
   parentTitle?: string;
   prefilledData?: Partial<BaseAction>;
@@ -112,25 +118,17 @@ export const createMissionAction = (missionId: string): Partial<BaseAction> => (
 });
 
 export const createIssueAction = (
-  issueId: string, 
-  issueDescription?: string, 
-  toolId?: string
+  _issueId: string,
+  _issueDescription?: string,
+  _toolId?: string
 ): Partial<BaseAction> => ({
-  linked_issue_id: issueId,
+  // Issue system removed - returns empty action
   status: 'not_started',
   title: '',
-  description: issueDescription || '',
-  expected_state: '',
-  state_text: issueDescription || '', // Logical field mapping
-  policy: '',
-  policy_text: '', // Logical field mapping
-  summary_policy_text: '',
-  assigned_to: null,
-  participants: [],
-  required_tools: toolId ? [toolId] : [],
+  description: '',
+  required_tools: [],
   required_stock: [],
   attachments: [],
-  issue_reference: issueDescription ? `Issue: ${issueDescription.split('\n')[0]}` : null
 });
 
 export const createAssetAction = (assetId: string): Partial<BaseAction> => ({
@@ -172,15 +170,13 @@ export const validateActionRelationship = (action: Partial<BaseAction>): boolean
   const relationships = [
     action.mission_id,
     action.asset_id,
-    action.linked_issue_id
   ].filter(Boolean);
   
-  return relationships.length <= 1; // Exactly zero or one parent relationship
+  return relationships.length <= 1;
 };
 
 export const getActionTypeFromAction = (action: BaseAction): ActionCreationContext['type'] => {
   if (action.mission_id) return 'mission';
-  if (action.linked_issue_id) return 'issue';
   return 'asset';
 };
 

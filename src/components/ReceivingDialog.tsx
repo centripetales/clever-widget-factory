@@ -16,7 +16,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { apiService } from "@/lib/apiService";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
-import { OrderIssueReportDialog } from "./OrderIssueReportDialog";
 
 interface PendingOrder {
   id: string;
@@ -58,7 +57,6 @@ export function ReceivingDialog({
   const { user } = useAuth();
   const [receivingNotes, setReceivingNotes] = useState("");
   const [actualQuantity, setActualQuantity] = useState<number | ''>('');
-  const [showIssueDialog, setShowIssueDialog] = useState(false);
   const { toast } = useToast();
 
   // Initialize actual quantity to expected if not set
@@ -180,12 +178,11 @@ export function ReceivingDialog({
   };
 
   const handleReportIssue = () => {
-    setShowIssueDialog(true);
-  };
-
-  const handleIssueReported = () => {
-    setShowIssueDialog(false);
-    onSuccess(); // Refresh the data
+    // Issue system removed - show toast instead
+    toast({
+      title: "Note quantity mismatch",
+      description: "Please add a note in the receiving notes field describing the discrepancy.",
+    });
   };
 
   return (
@@ -307,14 +304,6 @@ export function ReceivingDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
-
-      <OrderIssueReportDialog
-        isOpen={showIssueDialog}
-        onClose={() => setShowIssueDialog(false)}
-        order={order}
-        part={part}
-        onIssueReported={handleIssueReported}
-      />
     </Dialog>
   );
 }

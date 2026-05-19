@@ -45,7 +45,7 @@ async function writeToUnifiedTable(entityType, entityId, embeddingSource, embedd
     sql = `
       INSERT INTO unified_embeddings (entity_type, entity_id, embedding_source, model_version, embedding, organization_id, action_id, axis_key)
       VALUES ('${escapedEntityType}', gen_random_uuid(), '${escapedSource}', 'titan-v1', '${embeddingArray}'::vector, '${escapedOrgId}', '${escapedActionId}'::uuid, '${escapedAxisKey}')
-      ON CONFLICT (entity_type, action_id, axis_key)
+      ON CONFLICT (entity_type, action_id, axis_key) WHERE entity_type = 'skill_axis' AND action_id IS NOT NULL AND axis_key IS NOT NULL
       DO UPDATE SET
         embedding_source = EXCLUDED.embedding_source,
         embedding = EXCLUDED.embedding,

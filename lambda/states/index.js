@@ -136,9 +136,7 @@ async function listStates(event, authContext, headers) {
     const { entity_type, entity_id } = queryParams;
     
     const orgFilter = buildOrganizationFilter(authContext, 's');
-    console.log('🔍 listStates orgFilter:', JSON.stringify(orgFilter));
-    console.log('🔍 authContext:', JSON.stringify(authContext));
-    console.log('🔍 queryParams:', JSON.stringify(queryParams));
+
     
     const whereClause = orgFilter.condition;
     
@@ -189,7 +187,7 @@ async function listStates(event, authContext, headers) {
       ORDER BY s.captured_at DESC
     `;
 
-    console.log('🔍 Full SQL:', sql);
+
     const result = await client.query(sql);
     return successResponse(result.rows, headers);
   } finally {
@@ -202,8 +200,7 @@ async function getState(id, authContext, headers) {
   
   try {
     const orgFilter = buildOrganizationFilter(authContext, 's');
-    console.log('🔍 orgFilter:', JSON.stringify(orgFilter));
-    console.log('🔍 id:', id, 'type:', typeof id);
+
     
     const sql = `
       SELECT 
@@ -242,7 +239,7 @@ async function getState(id, authContext, headers) {
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
     `;
 
-    console.log('🔍 Full SQL:', sql);
+
     const result = await client.query(sql);
     
     if (result.rows.length === 0) {
@@ -324,9 +321,13 @@ async function createState(event, authContext, headers) {
 
     await client.query('COMMIT');
 
-    // Fire-and-forget: resolve composition data and queue embedding generation
-    resolveAndQueueEmbedding(state.id, organizationId)
-      .catch(err => console.error('Failed to queue state embedding:', err));
+    // Explicitly await queueing to prevent AWS Lambda environment freeze
+    try {
+      await resolveAndQueueEmbedding(state.id, organizationId);
+      console.log('Successfully queued state embedding for state', state.id);
+    } catch (err) {
+      console.error('Failed to queue state embedding:', err);
+    }
 
     return await getState(state.id, authContext, headers);
   } catch (error) {
@@ -441,9 +442,13 @@ async function updateState(event, id, authContext, headers) {
 
     await client.query('COMMIT');
 
-    // Fire-and-forget: resolve composition data and queue embedding generation
-    resolveAndQueueEmbedding(id, organizationId)
-      .catch(err => console.error('Failed to queue state embedding:', err));
+    // Explicitly await queueing to prevent AWS Lambda environment freeze
+    try {
+      await resolveAndQueueEmbedding(id, organizationId);
+      console.log('Successfully queued state embedding for state', id);
+    } catch (err) {
+      console.error('Failed to queue state embedding:', err);
+    }
 
     return await getState(id, authContext, headers);
   } catch (error) {

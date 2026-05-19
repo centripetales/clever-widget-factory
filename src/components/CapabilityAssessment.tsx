@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { useQueries, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle, RefreshCw, AlertTriangle, CircleMinus, CheckCircle2, CircleDot, BookOpen, GraduationCap, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -27,7 +27,7 @@ export interface CapabilityAssessmentProps {
 
 /** Bloom's level labels for display */
 const BLOOM_LABELS: Record<number, string> = {
-  0: 'No exposure',
+  0: 'Not yet assessed',
   1: 'Remember',
   2: 'Understand',
   3: 'Apply',
@@ -367,40 +367,21 @@ export function CapabilityAssessment({ action }: CapabilityAssessmentProps) {
   const hasApprovedSkillProfile = !!action.skill_profile?.approved_at;
   const skillProfile = action.skill_profile as SkillProfile | null | undefined;
 
-  // Collect all involved user IDs: assigned_to + participants
-  const involvedUserIds = useMemo(() => {
-    const ids: string[] = [];
-    if (action.assigned_to) {
-      ids.push(action.assigned_to);
-    }
-    if (action.participants?.length) {
-      for (const pid of action.participants) {
-        if (!ids.includes(pid)) {
-          ids.push(pid);
-        }
-      }
-    }
-    return ids;
-  }, [action.assigned_to, action.participants]);
-
-  // Fetch capability profiles for all involved users using useQueries
-  const capabilityQueries = useQueries({
-    queries: involvedUserIds.map((userId) => ({
-      queryKey: capabilityProfileQueryKey(action.id, userId),
-      queryFn: async () => {
-        const result = await apiService.get<{ data: CapabilityProfile }>(
-          `/capability/${action.id}/${userId}`
-        );
-        return result.data;
-      },
-      enabled: hasApprovedSkillProfile,
-      staleTime: 60_000,
-    })),
+  // Fetch the current user's own capability profile — userId always from auth context
+  const capabilityQuery = useQuery({
+    queryKey: capabilityProfileQueryKey(action.id),
+    queryFn: async () => {
+      const result = await apiService.get<{ data: CapabilityProfile }>(
+        `/capability/${action.id}`
+      );
+      return result.data;
+    },
+    enabled: hasApprovedSkillProfile,
+    staleTime: 60_000,
   });
 
-  // Derive loading / error states from all queries
-  const isLoading = capabilityQueries.some((q) => q.isLoading);
-  const hasError = capabilityQueries.some((q) => q.isError);
+  const isLoading = capabilityQuery.isLoading;
+  const hasError = capabilityQuery.isError;
 
   // 30-second loading timeout
   useEffect(() => {
@@ -412,21 +393,16 @@ export function CapabilityAssessment({ action }: CapabilityAssessmentProps) {
     return () => clearTimeout(timer);
   }, [isLoading]);
 
-  // Retry all failed queries
+  // Retry failed query
   const handleRetry = useCallback(() => {
     setTimedOut(false);
-    capabilityQueries.forEach((q) => {
-      if (q.isError) q.refetch();
-    });
-  }, [capabilityQueries]);
+    if (capabilityQuery.isError) capabilityQuery.refetch();
+  }, [capabilityQuery]);
 
-  // Collect successful capability profiles
+  // Collect successful capability profile (single user — self)
   const capabilityProfiles = useMemo(
-    () =>
-      capabilityQueries
-        .filter((q) => q.isSuccess && q.data)
-        .map((q) => q.data as CapabilityProfile),
-    [capabilityQueries]
+    () => (capabilityQuery.isSuccess && capabilityQuery.data ? [capabilityQuery.data] : []),
+    [capabilityQuery.isSuccess, capabilityQuery.data]
   );
 
   // Fetch learning objectives for the current user (used by gap checklist and objectives section)
@@ -458,7 +434,7 @@ export function CapabilityAssessment({ action }: CapabilityAssessmentProps) {
   }, [capabilityProfiles]);
 
   // Refetch learning objectives when capability data updates (e.g., after Regenerate)
-  const capabilitySettled = capabilityQueries.every((q) => !q.isLoading && !q.isFetching);
+  const capabilitySettled = !capabilityQuery.isLoading && !capabilityQuery.isFetching;
   const [prevSettled, setPrevSettled] = useState(false);
   useEffect(() => {
     if (capabilitySettled && !prevSettled && user?.id) {
@@ -471,21 +447,17 @@ export function CapabilityAssessment({ action }: CapabilityAssessmentProps) {
   const handleRescore = useCallback(async () => {
     setIsRescoring(true);
     try {
-      await Promise.all(
-        involvedUserIds.map(async (userId) => {
-          const result = await apiService.get<{ data: CapabilityProfile }>(
-            `/capability/${action.id}/${userId}?force=true`
-          );
-          queryClient.setQueryData(capabilityProfileQueryKey(action.id, userId), result.data);
-        })
+      const result = await apiService.get<{ data: CapabilityProfile }>(
+        `/capability/${action.id}?force=true`
       );
+      queryClient.setQueryData(capabilityProfileQueryKey(action.id), result.data);
       refetchLearning();
     } catch (err) {
       console.error('Rescore failed:', err);
     } finally {
       setIsRescoring(false);
     }
-  }, [involvedUserIds, action.id, queryClient, refetchLearning]);
+  }, [action.id, queryClient, refetchLearning]);
 
   // --- Empty state: no approved skill profile ---
   // Don't render anything — SkillProfilePanel already handles the empty/generate flow.

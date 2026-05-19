@@ -15,10 +15,8 @@ vi.mock('aws-amplify/auth', () => ({
 global.fetch = vi.fn();
 
 describe('apiService', () => {
-  // Create a valid JWT token with future expiry
-  const futureExp = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
-  const payload = btoa(JSON.stringify({ exp: futureExp }));
-  const mockIdToken = `header.${payload}.signature`;
+  // mockIdToken is set in beforeEach to match the token returned by the mock
+  let mockIdToken: string;
   const API_BASE_URL = 'https://api.example.com';
 
   beforeEach(() => {
@@ -32,13 +30,13 @@ describe('apiService', () => {
     // Payload: { exp: future_timestamp_in_seconds }
     const futureExp = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
     const payload = btoa(JSON.stringify({ exp: futureExp }));
-    const validJWT = `header.${payload}.signature`;
+    mockIdToken = `header.${payload}.signature`;
     
-    // Mock fetchAuthSession to return a token
+    // Mock fetchAuthSession to return the same token
     vi.mocked(fetchAuthSession).mockResolvedValue({
       tokens: {
         idToken: {
-          toString: () => validJWT,
+          toString: () => mockIdToken,
         },
       },
     } as any);

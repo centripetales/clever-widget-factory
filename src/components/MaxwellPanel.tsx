@@ -32,13 +32,13 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
   const [copied, setCopied] = useState(false);
   const [copiedTrace, setCopiedTrace] = useState(false);
   const [showTrace, setShowTrace] = useState(false);
-  
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-  
+
   const handleCopyTrace = async () => {
     if (message.trace) {
       await navigator.clipboard.writeText(JSON.stringify(message.trace, null, 2));
@@ -46,7 +46,7 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
       setTimeout(() => setCopiedTrace(false), 2000);
     }
   };
-  
+
   // Parse markdown images: ![alt](url) and render as <img> tags
   const renderContent = (text: string) => {
     const parts: (string | JSX.Element)[] = [];
@@ -60,7 +60,7 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
       if (match.index > lastIndex) {
         parts.push(text.slice(lastIndex, match.index));
       }
-      
+
       // Add the image (clickable to open full resolution)
       const alt = match[1];
       const url = match[2];
@@ -81,15 +81,15 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           />
         </a>
       );
-      
+
       lastIndex = match.index + match[0].length;
     }
-    
+
     // Add remaining text
     if (lastIndex < text.length) {
       parts.push(text.slice(lastIndex));
     }
-    
+
     return parts.length > 0 ? parts : text;
   };
 
@@ -119,7 +119,7 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           )}
         </button>
       </div>
-      
+
       {/* Trace section for assistant messages */}
       {!isUser && message.trace && message.trace.length > 0 && (
         <div className="max-w-[85%] mt-1 relative">
@@ -183,7 +183,7 @@ export function MaxwellPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const isCollapsed = activeSnapPoint === SNAP_COLLAPSED;
-  
+
   // Select starter questions based on entity type
   const starterQuestions = entityType === 'action' ? STARTER_QUESTIONS_ACTION : STARTER_QUESTIONS_ASSET;
 

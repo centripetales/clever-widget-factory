@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Send, RefreshCw, Loader2, Copy, Check, Code, ArrowRight, Maximize2, Minimize2, Zap, BookOpen, Info } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage, MaxwellMode } from '@/hooks/useMaxwell';
 import { useMaxwellStorage, EntityContext } from '@/hooks/useMaxwellStorage';
@@ -10,6 +11,8 @@ import { useMaxwellRecordHighlight } from '@/contexts/MaxwellRecordHighlightCont
 import { useEntityContext } from '@/hooks/useEntityContext';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
+import { copyConversationRich } from '@/lib/urlUtils';
+import { ExpandableMarkdownImage } from '@/components/ExpandableMarkdownImage';
 
 const STARTER_QUESTIONS_ACTION = [
   'Summarize what has happened so far and given our policy and observations what are next steps',
@@ -56,14 +59,6 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
     }
   };
   
-  // Resolve S3 image URLs in markdown image syntax
-  const resolveImageUrls = (text: string) => {
-    return text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
-      const resolvedUrl = getImageUrl(url) || url;
-      return `![${alt}](${resolvedUrl})`;
-    });
-  };
-
   return (
     <div className={cn('flex flex-col gap-1 group', isUser ? 'items-end' : 'items-start')}>
       <div
@@ -78,7 +73,14 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         ) : (
           <div className="maxwell-markdown prose prose-sm dark:prose-invert max-w-none break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <ReactMarkdown>{resolveImageUrls(message.content)}</ReactMarkdown>
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]}
+              components={{
+                img: ({ node, ...props }) => <ExpandableMarkdownImage src={props.src} alt={props.alt} />
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
           </div>
         )}
         <button
@@ -243,7 +245,7 @@ export function GlobalMaxwellPanel({
     if (activeContext) {
       const stored = loadConversation(activeContext);
       if (stored && stored.length > 0) {
-        // TODO: Restore messages to useMaxwell hook
+
         // This requires modifying useMaxwell to accept initial messages
         // For now, conversations are saved but not restored on mount
       }
@@ -265,10 +267,7 @@ export function GlobalMaxwellPanel({
       : STARTER_QUESTIONS_ASSET;
 
   const handleCopyAll = async () => {
-    const conversationText = messages
-      .map((msg) => `${msg.role === 'user' ? 'You' : 'Maxwell'}: ${msg.content}`)
-      .join('\n\n');
-    await navigator.clipboard.writeText(conversationText);
+    await copyConversationRich(messages);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   };

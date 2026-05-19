@@ -99,8 +99,9 @@ exports.handler = async (event) => {
       ) t;`;
       const issuesResult = await queryJSON(issuesSql);
       
-      // Get actions
-      const actionsSql = `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) as json_agg FROM (
+      // Get actions — includes actions where this tool is the parent asset (asset_id)
+      // AND actions where this tool appears in required_tools (by UUID)
+      const actionsSql = `SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.created_at DESC), '[]'::json) as json_agg FROM (
         SELECT 
           a.id::text,
           a.title,
@@ -113,14 +114,22 @@ exports.handler = async (event) => {
           a.created_by::text,
           a.created_at,
           a.updated_at,
-          COALESCE(om.full_name, 'System') as created_by_name
+          a.completed_at,
+          COALESCE(om.full_name, 'System') as created_by_name,
+          COALESCE(assignee.full_name, '') as assigned_to_name
         FROM actions a
         LEFT JOIN LATERAL (
           SELECT full_name FROM organization_members
           WHERE cognito_user_id::text = a.created_by::text
           LIMIT 1
         ) om ON true
+        LEFT JOIN LATERAL (
+          SELECT full_name FROM organization_members
+          WHERE user_id::text = a.assigned_to::text
+          LIMIT 1
+        ) assignee ON true
         WHERE a.asset_id::text = '${escapeLiteral(toolId)}'
+           OR a.required_tools @> ARRAY['${escapeLiteral(toolId)}']::text[]
         ORDER BY a.created_at DESC
       ) t;`;
       const actionsResult = await queryJSON(actionsSql);
@@ -192,8 +201,6 @@ exports.handler = async (event) => {
       
       // Build timeline
       const asset = assetResult?.[0];
-      const checkouts = checkoutsResult?.[0]?.json_agg || [];
-      const issues = issuesResult?.[0]?.json_agg || [];
       const actions = actionsResult?.[0]?.json_agg || [];
       const observations = observationsResult?.[0]?.json_agg || [];
       const assetHistory = assetHistoryResult?.[0]?.json_agg || [];
@@ -219,31 +226,6 @@ exports.handler = async (event) => {
           description: 'Asset created'
         });
       }
-      
-      checkouts.forEach(c => {
-        timeline.push({
-          type: 'checkout',
-          timestamp: c.checkout_date || c.created_at,
-          description: `Checked out by ${c.user_display_name}`,
-          data: c
-        });
-      });
-      
-      issues.forEach(i => {
-        timeline.push({
-          type: 'issue_reported',
-          timestamp: i.reported_at,
-          description: `Issue reported by ${i.reported_by_name}`,
-          data: i
-        });
-        if (i.resolved_at) {
-          timeline.push({
-            type: 'issue_resolved',
-            timestamp: i.resolved_at,
-            description: 'Issue resolved'
-          });
-        }
-      });
       
       actions.forEach(a => {
         timeline.push({
@@ -271,8 +253,6 @@ exports.handler = async (event) => {
         body: JSON.stringify({ 
           data: {
             asset: asset || null,
-            checkouts,
-            issues,
             actions,
             observations,
             timeline

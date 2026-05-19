@@ -13,12 +13,13 @@ const { selectLenses, applyGapBoost, buildValuesLenses, buildLensPromptBlock, bu
 const { scoreToBloomLevel } = require('/opt/nodejs/bloomUtils');
 const { computeBloomLevel, computeTaperingDecision } = require('./progressionModel');
 
-const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+const bedrock = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION });
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
 // --- Model Configuration ---
-// Switch models by setting env vars MODEL_REASONING / MODEL_FAST on the Lambda.
+// Set env vars MODEL_REASONING / MODEL_FAST on the Lambda. No fallbacks — missing config
+// must fail loudly rather than silently using a wrong model.
 //
 // Available models (us-west-2 cross-region inference):
 //   Haiku 4.5  — us.anthropic.claude-haiku-4-5-20251001-v1:0   ($1/$5 per MTok,  fastest)
@@ -27,10 +28,12 @@ const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/c
 //   Sonnet 4   — us.anthropic.claude-sonnet-4-20250514-v1:0    ($3/$15 per MTok,  moderate)
 //
 // Reasoning model: evaluation, capability scoring, objective generation (nuanced judgment)
-const MODEL_REASONING = process.env.MODEL_REASONING || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const MODEL_REASONING = process.env.MODEL_REASONING;
+if (!MODEL_REASONING) throw new Error('MODEL_REASONING env var is required');
 //
 // Fast model: quiz question generation (structured JSON, speed > depth)
-const MODEL_FAST = process.env.MODEL_FAST || 'anthropic.claude-3-5-haiku-20241022-v1:0';
+const MODEL_FAST = process.env.MODEL_FAST;
+if (!MODEL_FAST) throw new Error('MODEL_FAST env var is required');
 
 // Legacy alias — points to reasoning model for backward compatibility
 const OBJECTIVE_MODEL_ID = MODEL_REASONING;
@@ -152,7 +155,6 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
 
     // 2. Build axes from the skill profile — treat all axes as potential learning axes.
     //    The frontend determines which are gaps based on the capability Lambda's data.
-    //    The learning Lambda generates objectives for any axis that doesn't already have them.
     const allAxes = skillProfile.axes.map(axis => ({
       axisKey: axis.key,
       axisLabel: axis.label,
@@ -160,7 +162,14 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
       currentLevel: 0 // Placeholder — frontend uses capability Lambda for actual levels
     }));
 
-    // 4. Check for existing learning objective states for this action + user
+    // 4. Check for existing learning objective states for this action + user.
+    //    Use a pg advisory lock keyed on (action, user) to prevent concurrent requests
+    //    from both seeing zero objectives and both generating a duplicate set.
+    const lockKey = Math.abs(
+      (actionId + userId).split('').reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)
+    );
+    await db.query(`SELECT pg_advisory_xact_lock(${lockKey})`);
+
     const existingObjectivesResult = await db.query(
       `SELECT s.id, s.state_text, s.captured_at
        FROM states s
@@ -188,7 +197,8 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
       }
     }
 
-    // 5. For each axis without existing objectives, generate via Bedrock
+    // 5. For each axis without existing objectives, generate via Bedrock and store.
+    //    The advisory lock above ensures only one request runs this section at a time.
     const axesNeedingGeneration = allAxes.filter(
       (axis) => !existingByAxis[axis.axisKey] || existingByAxis[axis.axisKey].length === 0
     );
@@ -198,46 +208,35 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
         action, skillProfile, axesNeedingGeneration
       );
 
-      // Store each generated objective as a state with state_links
       for (const obj of generatedObjectives) {
         const stateText = composeLearningObjectiveStateText(
           obj.axisKey, actionId, userId, obj.text
         );
 
-        await db.query('BEGIN');
-        try {
-          const insertResult = await db.query(
-            `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
-             VALUES ('${orgIdSafe}', '${escapeLiteral(stateText)}', '${userIdSafe}', NOW())
-             RETURNING id`
-          );
-          const stateId = insertResult.rows[0].id;
+        const insertResult = await db.query(
+          `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+           VALUES ('${orgIdSafe}', '${escapeLiteral(stateText)}', '${userIdSafe}', NOW())
+           RETURNING id`
+        );
+        const stateId = insertResult.rows[0].id;
 
-          // Create state_link to the action
-          await db.query(
-            `INSERT INTO state_links (state_id, entity_type, entity_id)
-             VALUES ('${escapeLiteral(stateId)}', 'action', '${actionIdSafe}')`
-          );
+        await db.query(
+          `INSERT INTO state_links (state_id, entity_type, entity_id)
+           VALUES ('${escapeLiteral(stateId)}', 'action', '${actionIdSafe}')`
+        );
 
-          await db.query('COMMIT');
-
-          // Track the new objective
-          if (!existingByAxis[obj.axisKey]) {
-            existingByAxis[obj.axisKey] = [];
-          }
-          existingByAxis[obj.axisKey].push({
-            id: stateId,
-            text: obj.text,
-            axisKey: obj.axisKey
-          });
-
-          // 6. Queue embedding for each new objective state via SQS (fire-and-forget)
-          queueObjectiveEmbedding(stateId, stateText, organizationId)
-            .catch(err => console.error('Failed to queue objective embedding:', err));
-        } catch (insertErr) {
-          await db.query('ROLLBACK');
-          throw insertErr;
+        if (!existingByAxis[obj.axisKey]) {
+          existingByAxis[obj.axisKey] = [];
         }
+        existingByAxis[obj.axisKey].push({
+          id: stateId,
+          text: obj.text,
+          axisKey: obj.axisKey
+        });
+
+        // 6. Queue embedding for each new objective state (fire-and-forget)
+        queueObjectiveEmbedding(stateId, stateText, organizationId)
+          .catch(err => console.error('Failed to queue objective embedding:', err));
       }
     }
 
@@ -283,9 +282,9 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
         const axisEmbeddingCheck = await db.query(
           `SELECT COUNT(*) as cnt FROM unified_embeddings
            WHERE entity_type = 'skill_axis'
-             AND entity_id LIKE $1
+             AND action_id = $1
              AND organization_id = $2`,
-          [`${actionId}:%`, organizationId]
+          [actionId, organizationId]
         );
         usePerAxisPath = parseInt(axisEmbeddingCheck.rows[0].cnt, 10) > 0;
       } catch (err) {
@@ -299,20 +298,19 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
       const allAxisMatches = [];
 
       for (const axis of allAxes) {
-        const axisEntityId = `${actionId}:${axis.axisKey}`;
         try {
           const simResult = await db.query(
             `SELECT ue.entity_id, ue.embedding_source,
-                    (1 - (ue.embedding <=> (SELECT embedding FROM unified_embeddings WHERE entity_type = 'skill_axis' AND entity_id = $1 LIMIT 1))) as similarity
+                    (1 - (ue.embedding <=> (SELECT embedding FROM unified_embeddings WHERE entity_type = 'skill_axis' AND action_id = $1 AND axis_key = $2 LIMIT 1))) as similarity
              FROM unified_embeddings ue
              INNER JOIN states s ON s.id::text = ue.entity_id
              WHERE ue.entity_type = 'state'
-               AND ue.organization_id = $2
-               AND s.captured_by = $3
+               AND ue.organization_id = $3
+               AND s.captured_by = $4
                AND s.state_text LIKE '%which was the correct answer%'
              ORDER BY similarity DESC
              LIMIT 10`,
-            [axisEntityId, organizationId, userId]
+            [actionId, axis.axisKey, organizationId, userId]
           );
 
           for (const row of simResult.rows) {
@@ -323,7 +321,7 @@ async function handleGetObjectives(actionId, userId, organizationId, aiConfig) {
             });
           }
         } catch (err) {
-          console.warn('Vector similarity search failed for axis', axisEntityId, ':', err.message);
+          console.warn('Vector similarity search failed for axis', axis.axisKey, ':', err.message);
         }
       }
 
@@ -1415,7 +1413,6 @@ async function fetchAssetContext(db, actionId, axisKey, organizationId) {
   try {
     const actionIdSafe = escapeLiteral(actionId);
     const orgIdSafe = escapeLiteral(organizationId);
-    const skillAxisEntityId = escapeLiteral(`${actionId}:${axisKey}`);
 
     // Vector similarity query: find top 10 assets similar to the skill axis embedding
     const result = await db.query(
@@ -1423,7 +1420,8 @@ async function fetchAssetContext(db, actionId, axisKey, organizationId) {
               (1 - (ue.embedding <=> (
                 SELECT embedding FROM unified_embeddings
                 WHERE entity_type = 'skill_axis'
-                  AND entity_id = '${skillAxisEntityId}'
+                  AND action_id = $1
+                  AND axis_key = $2
                 LIMIT 1
               ))) as similarity
        FROM unified_embeddings ue
@@ -1431,7 +1429,8 @@ async function fetchAssetContext(db, actionId, axisKey, organizationId) {
          AND ue.organization_id = '${orgIdSafe}'
          AND NOT (ue.entity_type = 'action' AND ue.entity_id = '${actionIdSafe}')
        ORDER BY similarity DESC
-       LIMIT 10`
+       LIMIT 10`,
+      [actionId, axisKey]
     );
 
     if (!result.rows || result.rows.length === 0) {
@@ -2555,10 +2554,14 @@ async function handleVerify(actionId, body, organizationId, aiConfig) {
 
         await db.query('COMMIT');
 
-        // 7. Queue embedding for each new demonstration state via SQS (fire-and-forget)
+        // 7. Explicitly await SQS queueing for each new demonstration state
         const axisLabel = objective.axisKey ? axisLabelMap[objective.axisKey] : null;
-        queueDemonstrationEmbedding(stateId, stateText, organizationId, axisLabel || null)
-          .catch(err => console.error('Failed to queue demonstration embedding:', err));
+        try {
+          await queueDemonstrationEmbedding(stateId, stateText, organizationId, axisLabel || null);
+          console.log('Successfully queued demonstration embedding for state', stateId);
+        } catch (err) {
+          console.error('Failed to queue demonstration embedding:', err);
+        }
       } catch (insertErr) {
         await db.query('ROLLBACK');
         throw insertErr;

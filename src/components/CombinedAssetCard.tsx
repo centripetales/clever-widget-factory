@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, LogOut, LogIn, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
 import { AssetHistoryDialog } from "./AssetHistoryDialog";
@@ -11,33 +11,7 @@ import { PrismIcon } from "@/components/icons/PrismIcon";
 
 import { useMemo, memo, useRef } from "react";
 
-interface CombinedAsset {
-  id: string;
-  name: string;
-  type: 'asset' | 'stock';
-  description?: string;
-  category?: string;
-  status?: string;
-  serial_number?: string;
-  current_quantity?: number;
-  minimum_quantity?: number;
-  unit?: string;
-  image_url?: string;
-  storage_location?: string;
-  storage_vicinity?: string;
-  parent_structure_id?: string;
-  parent_structure_name?: string;
-  area_display?: string;
-  legacy_storage_vicinity?: string;
-  has_issues?: boolean;
-  accountable_person_id?: string;
-  accountable_person_name?: string;
-  accountable_person_color?: string;
-  created_at?: string;
-  updated_at?: string;
-  similarity_score?: number;
-  checkout_action_id?: string;
-}
+import { CombinedAsset } from '@/hooks/useCombinedAssets';
 
 interface CheckoutInfo {
   user_name: string;
@@ -55,10 +29,6 @@ interface CombinedAssetCardProps {
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
-  onCheckout?: (asset: CombinedAsset) => void;
-  onCheckin?: (asset: CombinedAsset) => void;
-  onReportIssue?: (asset: CombinedAsset) => void;
-  onManageIssues?: (asset: CombinedAsset) => void;
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
   onAskMaxwell?: (asset: CombinedAsset) => void;
@@ -99,7 +69,6 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     type: prevAsset.type !== nextAsset.type,
     status: prevAsset.status !== nextAsset.status,
     current_quantity: prevAsset.current_quantity !== nextAsset.current_quantity,
-    has_issues: prevAsset.has_issues !== nextAsset.has_issues,
     accountable_person_name: prevAsset.accountable_person_name !== nextAsset.accountable_person_name,
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
     updated_at: prevAsset.updated_at !== nextAsset.updated_at
@@ -144,10 +113,6 @@ export const CombinedAssetCard = memo(({
   onView,
   onEdit,
   onRemove,
-  onCheckout,
-  onCheckin,
-  onReportIssue,
-  onManageIssues,
   onAddQuantity,
   onUseQuantity,
   onAskMaxwell,
@@ -194,7 +159,7 @@ export const CombinedAssetCard = memo(({
 
   const getIconColor = () => {
     if (asset.type === 'asset') {
-      return asset.has_issues ? "text-red-600" : "text-blue-600";
+      return "text-blue-600";
     }
     return "text-green-600";
   };
@@ -205,7 +170,7 @@ export const CombinedAssetCard = memo(({
   
   const iconColor = useMemo(() => {
     return getIconColor();
-  }, [asset.type, asset.has_issues]);
+  }, [asset.type]);
 
   return (
     <Card className="relative hover:shadow-md transition-shadow cursor-pointer flex flex-col min-h-[280px] md:min-h-[320px]" onClick={() => onView(asset)}>
@@ -357,51 +322,6 @@ export const CombinedAssetCard = memo(({
 
         <div className="flex gap-2 mt-2 mt-auto pt-2" onClick={(e) => e.stopPropagation()}>
           {/* Asset-specific buttons */}
-          {asset.type === 'asset' && !asset.is_checked_out && !checkoutInfo && onCheckout && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-12 px-2"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCheckout(asset);
-                    }}
-                  >
-                    <LogOut className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Checkout</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-
-          {asset.type === 'asset' && checkoutInfo && onCheckin && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-12 px-2 text-orange-600 border-orange-600 hover:bg-orange-50 hover:border-orange-700"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCheckin(asset);
-                    }}
-                  >
-                    <LogIn className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Check In</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
 
           {/* Asset History Button - Always show for assets */}
           {asset.type === 'asset' && (
@@ -569,33 +489,6 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              
-              {(asset.type === 'asset' || asset.type === 'stock') && onManageIssues && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className={`w-12 px-2 ${
-                          asset.has_issues 
-                            ? "text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300" 
-                            : ""
-                        }`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onManageIssues(asset);
-                        }}
-                      >
-                        <AlertTriangle className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Manage Issues</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
               
               {isAdmin && (
                 <TooltipProvider>

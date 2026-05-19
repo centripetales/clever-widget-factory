@@ -70,7 +70,7 @@ async function handleMaxwellChat(connectionId, payload, event) {
   console.log('[MAXWELL-WS] handleMaxwellChat (async delegation):', { connectionId, message: payload.message?.substring(0, 100) });
 
   const endpoint = `https://${event.requestContext.domainName}/${event.requestContext.stage}`;
-  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint });
+  const apiGwClient = new ApiGatewayManagementApiClient({ endpoint, region: 'us-west-2' });
 
   // Extract authorizer context
   const authContext = event.requestContext.authorizer || {};

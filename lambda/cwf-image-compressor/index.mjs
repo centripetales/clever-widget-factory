@@ -1,7 +1,10 @@
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import sharp from 'sharp';
+import exifr from 'exifr';
 
 const s3Client = new S3Client({ region: 'us-west-2' });
+const lambdaClient = new LambdaClient({ region: 'us-west-2' });
 
 export const handler = async (event) => {
   console.log('S3 event:', JSON.stringify(event, null, 2));
@@ -31,6 +34,20 @@ export const handler = async (event) => {
       const imageBuffer = await streamToBuffer(response.Body);
       
       console.log('Downloaded:', { size: imageBuffer.length });
+
+      // Extract EXIF metadata
+      let exifrOutput = null;
+      try {
+        exifrOutput = await exifr.parse(imageBuffer, {
+          gps: true,
+          tiff: true,
+          xmp: false,
+          iptc: false
+        });
+        console.log('Parsed EXIF successfully:', exifrOutput ? Object.keys(exifrOutput) : 'null');
+      } catch (exifErr) {
+        console.warn('EXIF parsing failed/skipped:', exifErr.message);
+      }
       
       // Compress with sharp - downsample long side to max 2400px, preserve aspect ratio
       // Strip metadata (original in originals/ folder preserves EXIF)
@@ -99,6 +116,65 @@ export const handler = async (event) => {
       
       await s3Client.send(putCommand);
       console.log('Uploaded compressed (no EXIF):', finalKey);
+      
+      // Write EXIF to companion DB table if extracted
+      if (exifrOutput) {
+        const photoUrl = `https://${bucket}.s3.us-west-2.amazonaws.com/${finalKey}`;
+        const latitude = (exifrOutput.latitude !== undefined && !isNaN(exifrOutput.latitude)) ? exifrOutput.latitude : 'NULL';
+        const longitude = (exifrOutput.longitude !== undefined && !isNaN(exifrOutput.longitude)) ? exifrOutput.longitude : 'NULL';
+        const altitude = (exifrOutput.GPSAltitude !== undefined && !isNaN(exifrOutput.GPSAltitude)) ? exifrOutput.GPSAltitude : 'NULL';
+        
+        let capturedAt = 'NULL';
+        if (exifrOutput.DateTimeOriginal) {
+          const d = new Date(exifrOutput.DateTimeOriginal);
+          if (!isNaN(d.getTime())) {
+            capturedAt = `'${d.toISOString()}'`;
+          }
+        }
+        
+        const deviceMake = exifrOutput.Make ? `'${exifrOutput.Make.replace(/'/g, "''")}'` : 'NULL';
+        const deviceModel = exifrOutput.Model ? `'${exifrOutput.Model.replace(/'/g, "''")}'` : 'NULL';
+        
+        const cleanExif = {};
+        for (const [k, v] of Object.entries(exifrOutput)) {
+          if (v instanceof Buffer || typeof v === 'object' && v !== null && v.constructor !== Object && !Array.isArray(v)) {
+            continue;
+          }
+          cleanExif[k] = v;
+        }
+        const rawExifJson = JSON.stringify(cleanExif).replace(/'/g, "''");
+        
+        const sql = `
+          INSERT INTO photo_metadata_extractions (
+            photo_url, gps_latitude, gps_longitude, gps_altitude, captured_at, device_make, device_model, raw_exif
+          )
+          VALUES (
+            '${photoUrl.replace(/'/g, "''")}', ${latitude}, ${longitude}, ${altitude}, ${capturedAt}, ${deviceMake}, ${deviceModel}, '${rawExifJson}'::jsonb
+          )
+          ON CONFLICT (photo_url)
+          DO UPDATE SET
+            gps_latitude = EXCLUDED.gps_latitude,
+            gps_longitude = EXCLUDED.gps_longitude,
+            gps_altitude = EXCLUDED.gps_altitude,
+            captured_at = EXCLUDED.captured_at,
+            device_make = EXCLUDED.device_make,
+            device_model = EXCLUDED.device_model,
+            raw_exif = EXCLUDED.raw_exif,
+            updated_at = NOW();
+        `;
+        
+        try {
+          console.log('Writing EXIF metadata to DB for:', photoUrl);
+          const dbResponse = await lambdaClient.send(new InvokeCommand({
+            FunctionName: 'cwf-db-migration',
+            Payload: JSON.stringify({ sql })
+          }));
+          const dbResult = JSON.parse(new TextDecoder().decode(dbResponse.Payload));
+          console.log('EXIF database write result:', dbResult);
+        } catch (dbErr) {
+          console.error('Failed to write EXIF metadata to DB:', dbErr.message);
+        }
+      }
       
       // Upload thumbnail to thumb/ subfolder (no metadata)
       const putThumbnailCommand = new PutObjectCommand({
