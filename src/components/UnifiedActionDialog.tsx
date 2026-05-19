@@ -1574,24 +1574,7 @@ export function ActionForm({
             )}
           </div>
 
-          {/* State Space gundam button — only for existing actions */}
-          {/* TODO: Re-enable Join Mission feature
-            {!isCreating && action?.id && (
-              <div className="flex-1 flex flex-col items-center justify-center">
-                <Label className="text-sm font-medium mb-1">Join Mission</Label>
-                <button
-                  onClick={() => navigate(`/actions/${action.id}/state-space`)}
-                  className="hover:opacity-80 transition-opacity"
-                >
-                  <img
-                    src="/dormant_gundam_state.png"
-                    alt="State Space"
-                    className="w-3/4 rounded-lg border object-contain transition-transform duration-200 hover:scale-110"
-                  />
-                </button>
-              </div>
-            )}
-            */}
+
           {!isCreating && action?.id && (
             <div className="flex-1 flex flex-col items-center justify-center">
               <Button

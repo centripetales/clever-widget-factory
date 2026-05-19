@@ -245,7 +245,7 @@ export function GlobalMaxwellPanel({
     if (activeContext) {
       const stored = loadConversation(activeContext);
       if (stored && stored.length > 0) {
-        // TODO: Restore messages to useMaxwell hook
+
         // This requires modifying useMaxwell to accept initial messages
         // For now, conversations are saved but not restored on mount
       }

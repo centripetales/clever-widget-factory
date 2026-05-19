@@ -11,7 +11,7 @@ const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
 // Load prompt fragments once at cold start
 const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
-console.log(`Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
+
 
 const loadPrompt = (name) => {
   try {
@@ -63,7 +63,7 @@ function normalizeContextText(value, maxLength = 900) {
 }
 
 exports.handler = async (event) => {
-  console.log('Maxwell chat event:', JSON.stringify(event, null, 2));
+
 
   const authContext = getAuthorizerContext(event);
   if (!authContext.organization_id) {
@@ -146,7 +146,7 @@ exports.handler = async (event) => {
     ? AGENT_ALIAS_ID
     : (process.env.MAXWELL_AGENT_ALIAS_ID_DEEP || 'XVS45ZMCA6');
 
-  console.log(`[ROUTE] Mode: ${mode} -> Routing to Bedrock Agent Alias: ${targetAliasId}`);
+
 
   // Merge org context into session attributes so the tool Lambda can scope queries
   const mergedSessionAttributes = {
@@ -162,7 +162,7 @@ exports.handler = async (event) => {
     Object.entries(mergedSessionAttributes).map(([k, v]) => [k, String(v ?? '')])
   );
 
-  console.log('Session attributes being sent to Maxwell:', JSON.stringify(stringifiedAttributes, null, 2));
+
 
   // Generate a session ID if not provided (Bedrock requires it)
   const effectiveSessionId = sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
@@ -199,7 +199,7 @@ exports.handler = async (event) => {
     }
 
     const tEnd = Date.now();
-    console.log(`[METRICS] Maxwell Chat API - Total Time: ${tEnd - t0}ms, Time to first chunk: ${firstChunkTime ? firstChunkTime - t0 : 'N/A'}ms, Trace steps: ${traceEvents.length}`);
+
 
     return {
       statusCode: 200,

@@ -61,7 +61,7 @@ export function ActionScoreDialog({
   // Set default prompt on mount
   useEffect(() => {
     if (prompts.length > 0 && !selectedPromptId) {
-      const defaultPrompt = prompts.find(p => p.is_default) || prompts[0];
+      const defaultPrompt = prompts.find((p: any) => p.is_default) || prompts[0];
       setSelectedPromptId(defaultPrompt.id);
     }
   }, [prompts, selectedPromptId]);
@@ -113,7 +113,7 @@ export function ActionScoreDialog({
       } else {
         // Set default prompt if not already set
         if (prompts.length > 0 && !selectedPromptId) {
-          const defaultPrompt = prompts.find(p => p.is_default) || prompts[0];
+          const defaultPrompt = prompts.find((p: any) => p.is_default) || prompts[0];
           setSelectedPromptId(defaultPrompt.id);
         }
       }
@@ -128,7 +128,7 @@ export function ActionScoreDialog({
     }
   }, [open, existingScore, action.id]); // Add action.id to dependencies
 
-  const selectedPrompt = prompts.find(p => p.id === selectedPromptId);
+  const selectedPrompt = prompts.find((p: any) => p.id === selectedPromptId);
 
   // Aggregate observations from implementation updates
   const aggregatedObservations = implementationUpdates
@@ -476,7 +476,7 @@ IMPORTANT OVERRIDES (do not ignore):
                   <SelectValue placeholder="Choose a scoring prompt..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {prompts.map((prompt) => (
+                  {prompts.map((prompt: any) => (
                     <SelectItem key={prompt.id} value={prompt.id}>
                       {prompt.name} {prompt.is_default && '(Default)'}
                     </SelectItem>

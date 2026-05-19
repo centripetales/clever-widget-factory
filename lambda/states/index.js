@@ -136,9 +136,7 @@ async function listStates(event, authContext, headers) {
     const { entity_type, entity_id } = queryParams;
     
     const orgFilter = buildOrganizationFilter(authContext, 's');
-    console.log('🔍 listStates orgFilter:', JSON.stringify(orgFilter));
-    console.log('🔍 authContext:', JSON.stringify(authContext));
-    console.log('🔍 queryParams:', JSON.stringify(queryParams));
+
     
     const whereClause = orgFilter.condition;
     
@@ -189,7 +187,7 @@ async function listStates(event, authContext, headers) {
       ORDER BY s.captured_at DESC
     `;
 
-    console.log('🔍 Full SQL:', sql);
+
     const result = await client.query(sql);
     return successResponse(result.rows, headers);
   } finally {
@@ -202,8 +200,7 @@ async function getState(id, authContext, headers) {
   
   try {
     const orgFilter = buildOrganizationFilter(authContext, 's');
-    console.log('🔍 orgFilter:', JSON.stringify(orgFilter));
-    console.log('🔍 id:', id, 'type:', typeof id);
+
     
     const sql = `
       SELECT 
@@ -242,7 +239,7 @@ async function getState(id, authContext, headers) {
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
     `;
 
-    console.log('🔍 Full SQL:', sql);
+
     const result = await client.query(sql);
     
     if (result.rows.length === 0) {

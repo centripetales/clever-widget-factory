@@ -7,9 +7,14 @@ export interface BaseAction {
   policy?: string;
   status: string;
   assigned_to?: string | null;
+  assigned_to_name?: string;
+  assigned_to_color?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
+  issue_reference?: string;
+  observations?: string;
+  estimated_completion_date?: string | null;
   
   // Exploration flag - authoritative indicator
   is_exploration?: boolean;
@@ -52,12 +57,14 @@ export interface BaseAction {
     user_id: string;
     full_name: string;
     role: string;
+    favorite_color?: string;
   } | null;
   participants_details?: {
     id: string;
     user_id: string;
     full_name: string;
     role: string;
+    favorite_color?: string;
   }[];
   mission?: {
     id: string;
@@ -82,6 +89,7 @@ export interface Profile {
   user_id: string;
   full_name: string;
   role: string;
+  favorite_color?: string;
 }
 
 export interface ActionCreationContext {

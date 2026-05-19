@@ -11,33 +11,7 @@ import { PrismIcon } from "@/components/icons/PrismIcon";
 
 import { useMemo, memo, useRef } from "react";
 
-interface CombinedAsset {
-  id: string;
-  name: string;
-  type: 'asset' | 'stock';
-  description?: string;
-  category?: string;
-  status?: string;
-  serial_number?: string;
-  current_quantity?: number;
-  minimum_quantity?: number;
-  unit?: string;
-  image_url?: string;
-  storage_location?: string;
-  storage_vicinity?: string;
-  parent_structure_id?: string;
-  parent_structure_name?: string;
-  area_display?: string;
-  legacy_storage_vicinity?: string;
-  has_issues?: boolean;
-  accountable_person_id?: string;
-  accountable_person_name?: string;
-  accountable_person_color?: string;
-  created_at?: string;
-  updated_at?: string;
-  similarity_score?: number;
-  checkout_action_id?: string;
-}
+import { CombinedAsset } from '@/hooks/useCombinedAssets';
 
 interface CheckoutInfo {
   user_name: string;

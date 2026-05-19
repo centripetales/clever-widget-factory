@@ -9,11 +9,13 @@ import { getThumbnailUrl } from '@/lib/imageUtils';
 interface Asset {
   id: string;
   name: string;
-  status?: string;
-  legacy_storage_vicinity?: string;
-  serial_number?: string;
-  storage_location?: string;
-  image_url?: string;
+  status?: string | null;
+  legacy_storage_vicinity?: string | null;
+  serial_number?: string | null;
+  storage_location?: string | null;
+  image_url?: string | null;
+  description?: string | null;
+  category?: string | null;
 }
 
 interface AssetSelectorProps {
@@ -113,7 +115,7 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
         }
         return asset;
       })
-      .filter((asset): asset is Asset => asset !== undefined);
+      .filter((asset: any): asset is Asset => asset !== undefined);
     
     setSelectedAssetDetails(details);
   };
@@ -161,7 +163,7 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
     const identifier = asset.serial_number || asset.id;
     
     // Use functional update to avoid stale closure issues
-    setFormData((prev) => {
+    setFormData((prev: any) => {
       const currentRequiredTools = Array.isArray(prev.required_tools) 
         ? prev.required_tools 
         : [];
@@ -217,7 +219,7 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
       }));
       
       // Update formData by removing any tool with matching id or serial_number
-      setFormData((prev) => {
+      setFormData((prev: any) => {
         const currentRequiredTools = Array.isArray(prev.required_tools) 
           ? prev.required_tools 
           : [];
@@ -268,7 +270,7 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
     }));
     
     // Update formData (this is the source of truth) - remove by the actual ID in required_tools
-    setFormData((prev) => {
+    setFormData((prev: any) => {
       const currentRequiredTools = Array.isArray(prev.required_tools) 
         ? prev.required_tools 
         : [];
