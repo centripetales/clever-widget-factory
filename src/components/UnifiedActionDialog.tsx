@@ -276,22 +276,66 @@ export function ActionForm({
   // Resolve: use prop if provided (dialog mode), otherwise use internal state (page mode)
   const maxwellOpen = onMaxwellOpenChange ? isMaxwellOpen : isMaxwellOpenInternal;
   const maxwellCtx = onMaxwellOpenChange ? maxwellContext : maxwellContextInternal;
+
+  // Fetch states for the action to extract learning takeaways for Copy Context and Maxwell context
+  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
+
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
       onMaxwellOpenChange(open);
     } else {
       setIsMaxwellOpenInternal(open);
       if (open && action) {
+        let implText = '';
+        if (actionStates && Array.isArray(actionStates)) {
+          implText = actionStates.map((state: any) => {
+            let text = state.observation_text || '';
+            if (state.photos && Array.isArray(state.photos)) {
+              const photoTexts = state.photos
+                .map((p: any) => p.transcription ? `Photo AI Analysis: ${p.transcription.replace('\\[photo_analysis\\] ', '')}` : '')
+                .filter(Boolean);
+              if (photoTexts.length > 0) {
+                text += (text ? '\n' : '') + photoTexts.join('\n');
+              }
+            }
+            return text;
+          }).join('\n\n');
+        }
         setMaxwellContextInternal({
           entityId: action.id,
           entityType: 'action',
           entityName: action.title || 'Untitled Action',
           policy: action.policy || '',
-          implementation: '',
+          implementation: implText,
         });
       }
     }
   };
+
+  // Sync implementation text into maxwell context when actionStates loads or changes
+  useEffect(() => {
+    if (isMaxwellOpenInternal && action && maxwellContextInternal) {
+      let implText = '';
+      if (actionStates && Array.isArray(actionStates)) {
+        implText = actionStates.map((state: any) => {
+          let text = state.observation_text || '';
+          if (state.photos && Array.isArray(state.photos)) {
+            const photoTexts = state.photos
+              .map((p: any) => p.transcription ? `Photo AI Analysis: ${p.transcription.replace('\\[photo_analysis\\] ', '')}` : '')
+              .filter(Boolean);
+            if (photoTexts.length > 0) {
+              text += (text ? '\n' : '') + photoTexts.join('\n');
+            }
+          }
+          return text;
+        }).join('\n\n');
+      }
+      
+      if (implText !== maxwellContextInternal.implementation) {
+        setMaxwellContextInternal(prev => prev ? { ...prev, implementation: implText } : null);
+      }
+    }
+  }, [actionStates, isMaxwellOpenInternal, action]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLocalUploading, setIsLocalUploading] = useState(false);
   const uploadCompletedTimeRef = useRef<number>(0);
@@ -304,9 +348,6 @@ export function ActionForm({
 
   // Derive observation count from TanStack cache (preferred over database count)
   const derivedObservationCount = useActionObservationCount(action?.id || '');
-
-  // Fetch states for the action to extract learning takeaways for Copy Context
-  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
 
   const preferName = (value?: string | null) => {
     if (!value) return null;
@@ -1538,9 +1579,12 @@ export function ActionForm({
                     const file = attachmentFiles.get(url);
                     const thumbnailUrl = getThumbnailUrl(url);
                     const displayUrl = file ? URL.createObjectURL(file) : (thumbnailUrl || fullUrl);
+                    // Find if this attachment has a transcription
+                    const matchingPhoto = actionStates?.flatMap((s: any) => s.photos || []).find((p: any) => p.photo_url === url);
+                    const hasAi = !!matchingPhoto?.transcription?.trim();
 
                     return (
-                      <div key={index} className="relative">
+                      <div key={index} className="relative group/img-container">
                         {isPdf ? (
                           <div
                             className="h-16 w-16 flex items-center justify-center bg-muted rounded border cursor-pointer hover:bg-muted/80"
@@ -1551,18 +1595,33 @@ export function ActionForm({
                             </svg>
                           </div>
                         ) : (
-                          <img
-                            src={displayUrl}
-                            alt={`Attachment ${index + 1}`}
-                            className="h-16 w-16 object-cover rounded border cursor-pointer"
-                            onClick={() => window.open(fullUrl, '_blank')}
-                          />
+                          <div className="relative">
+                            <img
+                              src={displayUrl}
+                              alt={`Attachment ${index + 1}`}
+                              className="h-16 w-16 object-cover rounded border cursor-pointer"
+                              onClick={() => window.open(fullUrl, '_blank')}
+                            />
+                            {hasAi && (
+                              <div className="absolute top-0.5 left-0.5 z-20">
+                                <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1 py-0.2 rounded-full text-[8px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
+                                  <span>AI</span>
+                                  <span className="absolute left-0 top-full mt-1 w-[260px] p-2.5 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
+                                    <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                    <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
+                                      {matchingPhoto.transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                    </span>
+                                  </span>
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         )}
                         <Button
                           size="sm"
                           variant="destructive"
                           onClick={() => removeAttachment(index)}
-                          className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0"
+                          className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 z-30"
                         >
                           ×
                         </Button>

@@ -4,6 +4,7 @@ const { getDbClient } = require('/opt/nodejs/db');
 const { formatSqlValue } = require('/opt/nodejs/sqlUtils');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { composeStateEmbeddingSource } = require('/opt/nodejs/embedding-composition');
+const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
@@ -162,7 +163,38 @@ async function listStates(event, authContext, headers) {
               'id', sp.id,
               'photo_url', sp.photo_url,
               'photo_description', sp.photo_description,
-              'photo_order', sp.photo_order
+              'photo_order', sp.photo_order,
+              'transcription', (
+                SELECT s_trans.state_text 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'model_id', (
+                SELECT pap.model_id
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'system_prompt', (
+                SELECT pap.system_prompt
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              )
             ) ORDER BY sp.photo_order
           ) FROM state_photos sp WHERE sp.state_id = s.id),
           '[]'
@@ -183,6 +215,7 @@ async function listStates(event, authContext, headers) {
       WHERE ${whereClause}${entityFilter}
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[photo_analysis]%')
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
       ORDER BY s.captured_at DESC
     `;
@@ -218,7 +251,38 @@ async function getState(id, authContext, headers) {
               'id', sp.id,
               'photo_url', sp.photo_url,
               'photo_description', sp.photo_description,
-              'photo_order', sp.photo_order
+              'photo_order', sp.photo_order,
+              'transcription', (
+                SELECT s_trans.state_text 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'model_id', (
+                SELECT pap.model_id
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'system_prompt', (
+                SELECT pap.system_prompt
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              )
             ) ORDER BY sp.photo_order
           ) FROM state_photos sp WHERE sp.state_id = s.id),
           '[]'
@@ -283,11 +347,12 @@ async function createState(event, authContext, headers) {
     
     const stateResult = await client.query(stateSql);
     const state = stateResult.rows[0];
+    const insertedPhotos = [];
 
     if (photos.length > 0) {
       for (let i = 0; i < photos.length; i++) {
         const photo = photos[i];
-        await client.query(`
+        const photoResult = await client.query(`
           INSERT INTO state_photos (
             state_id,
             photo_url,
@@ -298,8 +363,12 @@ async function createState(event, authContext, headers) {
             ${formatSqlValue(photo.photo_url)},
             ${formatSqlValue(photo.photo_description)},
             ${formatSqlValue(photo.photo_order ?? i)}
-          )
+          ) RETURNING id
         `);
+        insertedPhotos.push({
+          id: photoResult.rows[0].id,
+          photo_url: photo.photo_url
+        });
       }
     }
 
@@ -329,7 +398,29 @@ async function createState(event, authContext, headers) {
       console.error('Failed to queue state embedding:', err);
     }
 
-    return await getState(state.id, authContext, headers);
+    // Trigger photo analysis pass synchronously if photos are present
+    let warnings = [];
+    if (insertedPhotos.length > 0) {
+      try {
+        warnings = await runPhotoAnalysis(client, organizationId, insertedPhotos);
+      } catch (analysisErr) {
+        console.error('Photo analysis execution failed:', analysisErr);
+        warnings.push(`Photo analysis failed: ${analysisErr.message}`);
+      }
+    }
+
+    const response = await getState(state.id, authContext, headers);
+    if (warnings.length > 0 && response.statusCode === 200) {
+      try {
+        const resBody = JSON.parse(response.body);
+        resBody.warnings = warnings;
+        response.body = JSON.stringify(resBody);
+      } catch (jsonErr) {
+        console.error('Failed to append warnings to response:', jsonErr);
+      }
+    }
+
+    return response;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -480,4 +571,138 @@ async function deleteState(id, authContext, headers) {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Executes a multimodal vision description pass via AWS Bedrock Nova Lite
+ * for the uploaded photos, linking the generated machine observations to standard photos and parameter registries.
+ */
+async function runPhotoAnalysis(dbClient, organizationId, insertedPhotos) {
+  const warnings = [];
+  try {
+    const paramsResult = await dbClient.query(`
+      SELECT id, model_id, system_prompt, inference_config 
+      FROM photo_analysis_params 
+      WHERE prompt_key = 'photo_analysis'
+      LIMIT 1
+    `);
+    
+    if (paramsResult.rows.length === 0) {
+      console.warn('No active photo analysis parameters found for prompt key "photo_analysis"');
+      return warnings;
+    }
+    
+    const params = paramsResult.rows[0];
+    const bedrockClient = new BedrockRuntimeClient({ region: 'us-west-2' });
+
+    for (const photo of insertedPhotos) {
+      try {
+        console.log(`Downloading photo for photo analysis: ${photo.photo_url}`);
+        const response = await fetch(photo.photo_url);
+        if (!response.ok) {
+          throw new Error(`HTTP fetch failed with status: ${response.status} ${response.statusText}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const base64Data = buffer.toString('base64');
+        
+        let format = 'jpeg';
+        if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+          format = 'png';
+        } else if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) {
+          format = 'webp';
+        }
+        let mediaType = format === 'png' ? 'image/png' : format === 'webp' ? 'image/webp' : 'image/jpeg';
+
+        const systemPrompt = params.system_prompt || 'Describe what you see objectively.';
+        
+        const payload = {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  image: {
+                    format: mediaType === 'image/png' ? 'png' : mediaType === 'image/webp' ? 'webp' : 'jpeg',
+                    source: {
+                      bytes: base64Data
+                    }
+                  }
+                },
+                {
+                  text: systemPrompt
+                }
+              ]
+            }
+          ],
+          system: [
+            {
+              text: "You are a professional assistant analyzing farmer logs and observations."
+            }
+          ],
+          inferenceConfig: {
+            maxTokens: params.inference_config?.max_tokens || 1000,
+            temperature: params.inference_config?.temperature || 0.1
+          }
+        };
+
+        console.log(`Invoking Bedrock Nova Lite (${params.model_id})...`);
+        const command = new InvokeModelCommand({
+          modelId: params.model_id,
+          body: JSON.stringify(payload),
+          contentType: 'application/json',
+          accept: 'application/json'
+        });
+
+        const bedrockResponse = await bedrockClient.send(command);
+        const responseBody = JSON.parse(new TextDecoder().decode(bedrockResponse.body));
+        
+        const description = responseBody?.output?.message?.content?.[0]?.text;
+        if (!description || !description.trim()) {
+          throw new Error('Empty transcription returned from model');
+        }
+
+        console.log('Transcription retrieved successfully.');
+
+        // Insert machine observations state
+        const insertStateSql = `
+          INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+          VALUES ($1, $2, 'system-nova-lite', NOW())
+          RETURNING id
+        `;
+        const stateRes = await dbClient.query(insertStateSql, [
+          organizationId,
+          `[photo_analysis] ${description}`
+        ]);
+        const transStateId = stateRes.rows[0].id;
+
+        // Establish Relational state_links
+        await dbClient.query(`
+          INSERT INTO state_links (state_id, entity_type, entity_id)
+          VALUES ($1, 'state_photo', $2)
+        `, [transStateId, photo.id]);
+
+        await dbClient.query(`
+          INSERT INTO state_links (state_id, entity_type, entity_id)
+          VALUES ($1, 'photo_analysis_param', $2)
+        `, [transStateId, params.id]);
+
+        // Queue vector embeddings for this transcription state
+        try {
+          await resolveAndQueueEmbedding(transStateId, organizationId);
+        } catch (queueErr) {
+          console.error('Failed SQS queue for transcription state:', queueErr);
+        }
+
+      } catch (innerError) {
+        console.error(`Error processing photo ${photo.photo_url}:`, innerError);
+        warnings.push(`Photo analysis failed for S3 asset: ${innerError.message}`);
+      }
+    }
+  } catch (outerError) {
+    console.error('Failed to initialize Bedrock vision parameters or client:', outerError);
+    warnings.push(`Bedrock model access failed: ${outerError.message}`);
+  }
+  return warnings;
 }

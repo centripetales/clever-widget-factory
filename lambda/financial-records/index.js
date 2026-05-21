@@ -234,7 +234,7 @@ async function listRecords(queryParams, authContext) {
   const { organizationId, cognitoUserId, permissions } = authContext;
   const params = queryParams || {};
 
-  const limit = Math.min(Math.max(parseInt(params.limit, 10) || 50, 1), 200);
+  const limit = Math.min(Math.max(parseInt(params.limit, 10) || 1000, 1), 5000);
   const offset = Math.max(parseInt(params.offset, 10) || 0, 0);
 
   // Build filtered records query
@@ -357,10 +357,19 @@ async function getRecord(id, authContext) {
     return error('Not authorized to view this record', 403);
   }
 
-  // Fetch photos from state_photos via state_links
+  // Fetch photos from state_photos via state_links with rich model metadata joins
   const photosResult = await pool.query(
-    'SELECT sp.* FROM state_photos sp' +
+    'SELECT sp.*, ' +
+    '  s_trans.state_text AS transcription, ' +
+    '  pap.model_id, ' +
+    '  pap.version, ' +
+    '  pap.system_prompt ' +
+    ' FROM state_photos sp' +
     ' JOIN state_links sl ON sl.state_id = sp.state_id' +
+    ' LEFT JOIN state_links sl_trans ON sl_trans.entity_type = \'state_photo\' AND sl_trans.entity_id = sp.id' +
+    ' LEFT JOIN states s_trans ON sl_trans.state_id = s_trans.id AND s_trans.state_text LIKE \'[photo_analysis]%\'' +
+    ' LEFT JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = \'photo_analysis_param\'' +
+    ' LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id' +
     ' WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'' +
     ' ORDER BY sp.photo_order',
     [id]

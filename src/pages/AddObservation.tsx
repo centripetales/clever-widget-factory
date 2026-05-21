@@ -177,13 +177,24 @@ export default function AddObservation() {
       };
 
       let stateId: string;
+      let warnings: string[] | undefined;
       
       if (isEditMode) {
-        await updateState({ id: observationId!, data });
+        const result = await updateState({ id: observationId!, data });
         stateId = observationId!;
+        warnings = (result as any)?.warnings;
       } else {
         const result = await createState(data);
         stateId = result.id;
+        warnings = (result as any)?.warnings;
+      }
+
+      if (warnings && warnings.length > 0) {
+        toast({
+          title: "Photo Transcription Failed",
+          description: warnings.join('. ') + " bubbled for operator review.",
+          variant: "destructive"
+        });
       }
 
       // Save metric snapshots if there are any values

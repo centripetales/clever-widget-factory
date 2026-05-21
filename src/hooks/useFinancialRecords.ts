@@ -39,8 +39,8 @@ export function useFinancialRecords(filters?: FinancialRecordFilters) {
   return useQuery({
     queryKey: financialRecordKeys.list(filters),
     queryFn: () => financialRecordsService.listRecords(filters),
-    staleTime: Infinity,
-    gcTime: Infinity,
+    staleTime: 30000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 

@@ -309,30 +309,48 @@ export default function FinancialRecordDetail() {
               {!record.photos || record.photos.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No photos attached</p>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {(record.photos || [])
-                    .sort((a, b) => a.photo_order - b.photo_order)
-                    .map((photo, index) => (
-                      <div key={index}>
-                        <img
-                          src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url}
-                          alt={photo.photo_description || `photo ${index + 1}`}
-                          className="w-full aspect-square object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
-                          onClick={() => window.open(getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url, '_blank')}
-                          onError={(e) => {
-                            const originalUrl = getImageUrl(photo.photo_url);
-                            if (originalUrl && e.currentTarget.src !== originalUrl) {
-                              e.currentTarget.src = originalUrl;
-                            } else {
-                              e.currentTarget.style.display = 'none';
-                            }
-                          }}
-                        />
-                        {photo.photo_description && (
-                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{photo.photo_description}</p>
-                        )}
-                      </div>
-                    ))}
+                <div className="flex flex-col md:flex-row gap-6 items-stretch">
+                  {/* Left Column: Photo list/grid */}
+                  <div className={`grid gap-3 ${record.photos.length === 1 ? 'w-full md:w-1/3 max-w-[240px]' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 flex-1'}`}>
+                    {(record.photos || [])
+                      .sort((a, b) => a.photo_order - b.photo_order)
+                      .map((photo, index) => (
+                        <div key={index} className="flex flex-col">
+                          <div className="relative group/img-container">
+                            <img
+                              src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url}
+                              alt={(photo as any).photo_description || `photo ${index + 1}`}
+                              className="w-full aspect-square object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
+                              onClick={() => window.open(getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url, '_blank')}
+                              onError={(e) => {
+                                const originalUrl = getImageUrl(photo.photo_url);
+                                if (originalUrl && e.currentTarget.src !== originalUrl) {
+                                  e.currentTarget.src = originalUrl;
+                                } else {
+                                  e.currentTarget.style.display = 'none';
+                                }
+                              }}
+                            />
+                            {photo.transcription?.trim() && (
+                              <div className="absolute top-1 left-1 z-20">
+                                <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
+                                  <span>AI</span>
+                                  <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
+                                    <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                    <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
+                                      {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                    </span>
+                                  </span>
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          {(photo as any).photo_description && (
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{(photo as any).photo_description}</p>
+                          )}
+                        </div>
+                      ))}
+                  </div>
                 </div>
               )}
             </div>

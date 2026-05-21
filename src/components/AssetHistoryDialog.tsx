@@ -39,6 +39,19 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
   const navigate = useNavigate();
   const { deleteState, isDeleting } = useStateMutations();
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+  const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
+
+  const toggleExpandedAi = (photoId: string) => {
+    setExpandedAiPhotos(prev => {
+      const next = new Set(prev);
+      if (next.has(photoId)) {
+        next.delete(photoId);
+      } else {
+        next.add(photoId);
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (open) {
@@ -411,8 +424,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                           )}
                           {entry.photos && entry.photos.length > 0 && (
                             <div className="grid grid-cols-2 gap-2 mt-2">
-                              {entry.photos.map(photo => (
-                                <div key={photo.id} className="relative group">
+                              {entry.photos.map((photo, photoIdx) => (
+                                <div key={photo.id} className="relative">
                                   <a 
                                     href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
                                     target="_blank"
@@ -432,10 +445,51 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                                       }}
                                     />
                                   </a>
-                                  {photo.photo_description && (
-                                    <p className="text-xs text-blue-700 mt-1">
-                                      {photo.photo_description}
-                                    </p>
+                                  {photo.photo_description?.trim() && (
+                                    <div className="text-xs text-blue-700 mt-1">
+                                      <span>{photo.photo_description}</span>
+                                    </div>
+                                  )}
+                                  {(photo as any).transcription?.trim() && (
+                                    <div className="flex flex-col mt-1">
+                                      <div className="flex items-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleExpandedAi(photo.id)}
+                                          className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
+                                        >
+                                          <span>AI Description</span>
+                                          <span className={`absolute ${photoIdx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
+                                            <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                            <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
+                                              {(photo as any).transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                            </span>
+                                            <details className="text-[10px] text-muted-foreground/60 dark:text-muted-foreground/45 select-none cursor-pointer">
+                                              <summary className="hover:text-foreground font-semibold flex items-center gap-1 focus:outline-none">
+                                                <span>Metadata Details</span>
+                                              </summary>
+                                              <div className="mt-1.5 space-y-1 bg-zinc-50/50 dark:bg-zinc-800/10 p-2 rounded border border-zinc-200/50 dark:border-zinc-700/20 cursor-default">
+                                                <div className="flex justify-between border-b border-zinc-150 dark:border-zinc-850 pb-1">
+                                                  <span className="font-semibold text-zinc-700 dark:text-zinc-350">Model:</span>
+                                                  <span className="font-mono text-indigo-650 dark:text-indigo-405">{(photo as any).model_id || 'us.amazon.nova-pro-v1:0'}</span>
+                                                </div>
+                                                <div>
+                                                  <span className="block font-semibold text-zinc-700 dark:text-zinc-350 mb-0.5">Prompt:</span>
+                                                  <span className="block bg-zinc-50 dark:bg-zinc-950 p-2 rounded italic text-[10px] leading-relaxed border border-zinc-150 dark:border-zinc-850 max-h-[120px] overflow-y-auto whitespace-pre-line text-zinc-650 dark:text-zinc-350">
+                                                    {(photo as any).system_prompt || 'No active prompt registered.'}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </details>
+                                          </span>
+                                        </button>
+                                      </div>
+                                      {expandedAiPhotos.has(photo.id) && (
+                                        <span className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed mt-1">
+                                          {(photo as any).transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                        </span>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
                               ))}
