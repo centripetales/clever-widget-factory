@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useCognitoAuth';
+import { perspectivesProcessingMap, perspectivesProcessingListeners } from '@/hooks/useCacheInvalidation';
 import { useLearningObjectives, useObservationVerification } from '@/hooks/useLearning';
 import type { VerificationResponse, LearningObjective } from '@/hooks/useLearning';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
@@ -59,6 +60,27 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
   // Mutations
   const { createState, updateState, deleteState, isCreating, isUpdating, isDeleting } =
     useStateMutations({ entity_type, entity_id });
+
+  // Live countdown for perspectives:processing WS events
+  // Returns remaining seconds for a given stateId, or null if not processing
+  const [perspectivesTick, setPerspectivesTick] = useState(0);
+  useEffect(() => {
+    const listener = () => setPerspectivesTick(t => t + 1);
+    perspectivesProcessingListeners.add(listener);
+    return () => { perspectivesProcessingListeners.delete(listener); };
+  }, []);
+  useEffect(() => {
+    if (perspectivesProcessingMap.size === 0) return;
+    const interval = setInterval(() => setPerspectivesTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [perspectivesTick]);
+  const getPerspectivesRemaining = useCallback((stateId: string): number | null => {
+    const entry = perspectivesProcessingMap.get(stateId);
+    if (!entry) return null;
+    const elapsed = (Date.now() - entry.startedAt) / 1000;
+    const remaining = Math.max(0, Math.ceil(entry.estimatedSeconds - elapsed));
+    return remaining;
+  }, [perspectivesTick]);
 
   // UI state
   const [showAddForm, setShowAddForm] = useState(false);
@@ -721,6 +743,69 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                         })}
                       </div>
                     )}
+                    
+                    {/* Perspectives Badge */}
+                    {(() => {
+                      const wsRemaining = getPerspectivesRemaining(state.id);
+                      const isPending = state.perspectives && state.perspectives.length > 0 && state.perspectives[0].status === 'PENDING';
+
+                      if (wsRemaining !== null) {
+                        // WS-driven: worker has started, show live countdown
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-100/60 text-zinc-400 border border-zinc-200/50 dark:bg-zinc-800/30 dark:text-zinc-500 dark:border-zinc-700/30 select-none">
+                              <svg className="animate-spin h-2.5 w-2.5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                              {wsRemaining > 0 ? `~${wsRemaining}s remaining` : 'Finishing…'}
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      if (isPending) {
+                        // Optimistic: mutation fired but worker hasn't started yet
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-100/60 text-zinc-400 border border-zinc-200/50 dark:bg-zinc-800/30 dark:text-zinc-500 dark:border-zinc-700/30 select-none">
+                              <svg className="animate-spin h-2.5 w-2.5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                              Generating perspectives…
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      if (state.perspectives && state.perspectives.length > 0 && state.perspectives.some(p => p.content)) {
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <button
+                              type="button"
+                              className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50/50 text-indigo-600/70 border border-indigo-200/50 hover:bg-indigo-100/50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30 dark:hover:bg-indigo-900/40 transition-all select-none flex-shrink-0"
+                            >
+                              <span>Perspectives</span>
+                              <span className="absolute left-0 bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left" onClick={(e) => e.stopPropagation()}>
+                                <span className="block font-semibold text-zinc-900 dark:text-white mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">Perspectives</span>
+                                <div className="space-y-2.5">
+                                  {['CLAIM', 'SIGNIFICANCE', 'ENTROPY'].map(type => {
+                                    const perspective = state.perspectives!.find(p => p.perspective_type === type);
+                                    if (!perspective || !perspective.content) return null;
+                                    return (
+                                      <div key={type}>
+                                        <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">{type}</span>
+                                        <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
+                                          {perspective.content}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </span>
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return null;
+                    })()}
+
                   </div>
                 </div>
 

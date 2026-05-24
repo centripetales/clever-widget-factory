@@ -8,6 +8,8 @@ const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-be
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
+const PERSPECTIVES_QUEUE_URL = process.env.PERSPECTIVES_QUEUE_URL;
+if (!PERSPECTIVES_QUEUE_URL) throw new Error('Missing required environment variable: PERSPECTIVES_QUEUE_URL');
 
 /**
  * Resolve state composition data and queue embedding generation via SQS.
@@ -208,7 +210,20 @@ async function listStates(event, authContext, headers) {
             )
           ) FROM state_links sl2 WHERE sl2.state_id = s.id),
           '[]'
-        ) as links
+        ) as links,
+        COALESCE(
+          (SELECT json_agg(
+            json_build_object(
+              'perspective_type', sp.perspective_type,
+              'content', COALESCE(c.content, sig.content, e.content)
+            )
+          ) FROM state_perspectives sp
+            LEFT JOIN claim_perspectives c ON c.id = sp.id
+            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
+            LEFT JOIN entropy_perspectives e ON e.id = sp.id
+          WHERE sp.state_id = s.id),
+          '[]'
+        ) as perspectives
       FROM states s
       LEFT JOIN organization_members om ON s.captured_by = om.user_id
       LEFT JOIN state_links sl ON s.id = sl.state_id
@@ -296,7 +311,20 @@ async function getState(id, authContext, headers) {
             )
           ) FROM state_links sl WHERE sl.state_id = s.id),
           '[]'
-        ) as links
+        ) as links,
+        COALESCE(
+          (SELECT json_agg(
+            json_build_object(
+              'perspective_type', sp.perspective_type,
+              'content', COALESCE(c.content, sig.content, e.content)
+            )
+          ) FROM state_perspectives sp
+            LEFT JOIN claim_perspectives c ON c.id = sp.id
+            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
+            LEFT JOIN entropy_perspectives e ON e.id = sp.id
+          WHERE sp.state_id = s.id),
+          '[]'
+        ) as perspectives
       FROM states s
       LEFT JOIN organization_members om ON s.captured_by = om.user_id
       WHERE s.id = ${formatSqlValue(id)}::uuid AND ${orgFilter.condition}
@@ -389,6 +417,18 @@ async function createState(event, authContext, headers) {
     }
 
     await client.query('COMMIT');
+
+    try {
+      const pClient = await getDbClient();
+      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
+      pClient.release();
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: PERSPECTIVES_QUEUE_URL,
+        MessageBody: JSON.stringify({ stateId: state.id, organizationId })
+      }));
+    } catch (pErr) {
+      console.error('Failed to queue observation for perspectives:', pErr);
+    }
 
     // Explicitly await queueing to prevent AWS Lambda environment freeze
     try {
@@ -532,6 +572,18 @@ async function updateState(event, id, authContext, headers) {
     }
 
     await client.query('COMMIT');
+
+    try {
+      const pClient = await getDbClient();
+      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+      pClient.release();
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: PERSPECTIVES_QUEUE_URL,
+        MessageBody: JSON.stringify({ stateId: id, organizationId })
+      }));
+    } catch (pErr) {
+      console.error('Failed to queue observation for perspectives:', pErr);
+    }
 
     // Explicitly await queueing to prevent AWS Lambda environment freeze
     try {

@@ -9,6 +9,11 @@ export interface Observation {
   updated_at: string;
   photos: ObservationPhoto[];
   links: ObservationLink[];
+  perspectives?: {
+    perspective_type: string;
+    content: string;
+    status?: string; // 'PENDING' used as optimistic sentinel
+  }[];
 }
 
 export interface ObservationPhoto {

@@ -119,7 +119,7 @@ interface SkillProfilePanelProps {
 // --- Component ---
 
 export function SkillProfilePanel({ action, userId, organizationId }: SkillProfilePanelProps) {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(!!action.skill_profile);
   const [previewProfile, setPreviewProfile] = useState<SkillProfile | null>(null);
 
   const { toast } = useToast();
