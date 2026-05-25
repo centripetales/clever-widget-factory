@@ -319,7 +319,10 @@ async function processPendingRecord(client, record) {
     console.log(`[RSP] Running async photo analysis for ${photo.id}...`);
     try {
       const systemPrompt = "You are a professional assistant analyzing farmer logs and observations.";
-      const userPrompt = "Describe what you see objectively.";
+      let userPrompt = "Describe what you see objectively.";
+      if (state.state_text && state.state_text.trim()) {
+        userPrompt += `\n\nUser's Observation Text Context:\n"${state.state_text.trim()}"\n\nUse this context to focus your description, verify the visual details, and relate what is shown in the image to the user's observation log above.`;
+      }
       const inferenceConfig = { max_tokens: 1000, temperature: 0.1 };
       
       const description = await invokeBedrock(

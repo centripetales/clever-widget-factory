@@ -663,8 +663,31 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                         <div className="absolute top-1 left-1 z-20">
                           <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
                             <span>AI</span>
-                            <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
-                              <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                            <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const rawText = state.photos[0].transcription.replace(/^\[photo_analysis\]\s*/, '');
+                                    handleCopy(rawText, `${state.photos[0].id}-AI`);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                >
+                                  {copiedMap[`${state.photos[0].id}-AI`] ? (
+                                    <>
+                                      <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                      <span className="text-green-500 font-bold">Copied!</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                      <span>Copy</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
                               <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
                                 {state.photos[0].transcription.replace(/^\[photo_analysis\]\s*/, '')}
                               </span>
@@ -717,7 +740,30 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                                     >
                                       <span>AI Description</span>
                                       <span className={`absolute ${idx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
-                                        <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                        <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                          <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const rawText = photo.transcription.replace(/^\[photo_analysis\]\s*/, '');
+                                              handleCopy(rawText, `${photo.id}-AI`);
+                                            }}
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                          >
+                                            {copiedMap[`${photo.id}-AI`] ? (
+                                              <>
+                                                <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                                <span className="text-green-500 font-bold">Copied!</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                                <span>Copy</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
                                         <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
                                           {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
                                         </span>
@@ -896,8 +942,31 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                             <div className="absolute top-1 left-1 z-20">
                               <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
                                 <span>AI</span>
-                                <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
-                                  <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal" onClick={(e) => e.stopPropagation()}>
+                                  <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                    <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const rawText = photo.transcription.replace(/^\[photo_analysis\]\s*/, '');
+                                        handleCopy(rawText, `${photo.id}-AI`);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                    >
+                                      {copiedMap[`${photo.id}-AI`] ? (
+                                        <>
+                                          <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                          <span className="text-green-500 font-bold">Copied!</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                          <span>Copy</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
                                   <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
                                     {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
                                   </span>
@@ -922,7 +991,30 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                                 >
                                   <span>AI Description</span>
                                   <span className={`absolute ${idx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
-                                    <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                    <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                      <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const rawText = photo.transcription.replace(/^\[photo_analysis\]\s*/, '');
+                                          handleCopy(rawText, `${photo.id}-AI`);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                      >
+                                        {copiedMap[`${photo.id}-AI`] ? (
+                                          <>
+                                            <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                            <span className="text-green-500 font-bold">Copied!</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                            <span>Copy</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    </div>
                                     <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
                                       {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
                                     </span>
