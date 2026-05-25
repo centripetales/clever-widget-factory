@@ -84,6 +84,7 @@ $([ -n "$SARI_SARI_AGENT_ID" ] && echo "overlay['SARI_SARI_AGENT_ID'] = '$SARI_S
 $([ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && echo "overlay['SARI_SARI_AGENT_ALIAS_ID'] = '$SARI_SARI_AGENT_ALIAS_ID'")
 $([ -n "$ML_LAMBDA_NAME" ] && echo "overlay['ML_LAMBDA_NAME'] = '$ML_LAMBDA_NAME'")
 $([ -n "$WS_API_ENDPOINT" ] && echo "overlay['WS_API_ENDPOINT'] = '$WS_API_ENDPOINT'")
+$([ -n "$PERSPECTIVES_QUEUE_URL" ] && echo "overlay['PERSPECTIVES_QUEUE_URL'] = '$PERSPECTIVES_QUEUE_URL'")
 existing.update(overlay)
 # Output as KEY=VALUE format for AWS CLI
 print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
@@ -104,6 +105,7 @@ print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
     [ -n "$SARI_SARI_AGENT_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ID=$SARI_SARI_AGENT_ID,"
     [ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ALIAS_ID=$SARI_SARI_AGENT_ALIAS_ID,"
     [ -n "$WS_API_ENDPOINT" ] && ENV_VARS="${ENV_VARS}WS_API_ENDPOINT=$WS_API_ENDPOINT,"
+    [ -n "$PERSPECTIVES_QUEUE_URL" ] && ENV_VARS="${ENV_VARS}PERSPECTIVES_QUEUE_URL=$PERSPECTIVES_QUEUE_URL,"
     ENV_VARS="${ENV_VARS%,}}"
     echo "⚠️  Could not merge existing env vars, using .env.local only"
   else

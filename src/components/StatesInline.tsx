@@ -89,6 +89,16 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
 
+  // Copy-to-clipboard state for perspectives
+  const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
+  const handleCopy = useCallback((text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMap(prev => ({ ...prev, [key]: true }));
+    setTimeout(() => {
+      setCopiedMap(prev => ({ ...prev, [key]: false }));
+    }, 2000);
+  }, []);
+
   // Form state
   const [stateText, setStateText] = useState('');
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
@@ -781,15 +791,68 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                               className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50/50 text-indigo-600/70 border border-indigo-200/50 hover:bg-indigo-100/50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30 dark:hover:bg-indigo-900/40 transition-all select-none flex-shrink-0"
                             >
                               <span>Perspectives</span>
-                              <span className="absolute left-0 bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left" onClick={(e) => e.stopPropagation()}>
-                                <span className="block font-semibold text-zinc-900 dark:text-white mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">Perspectives</span>
+                              <span className="absolute left-0 bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left after:absolute after:left-0 after:right-0 after:top-full after:h-2.5 after:content-['']" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                  <span className="font-semibold text-zinc-900 dark:text-white">Perspectives</span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const allText = ['CLAIM', 'SIGNIFICANCE', 'ENTROPY']
+                                        .map(type => {
+                                          const p = state.perspectives!.find(x => x.perspective_type === type);
+                                          return p && p.content ? `${type}:\n${p.content}` : '';
+                                        })
+                                        .filter(Boolean)
+                                        .join('\n\n');
+                                      handleCopy(allText, `${state.id}-ALL`);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                  >
+                                    {copiedMap[`${state.id}-ALL`] ? (
+                                      <>
+                                        <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                        <span className="text-green-500 font-bold">All Copied!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                        <span>Copy All</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
                                 <div className="space-y-2.5">
                                   {['CLAIM', 'SIGNIFICANCE', 'ENTROPY'].map(type => {
                                     const perspective = state.perspectives!.find(p => p.perspective_type === type);
                                     if (!perspective || !perspective.content) return null;
+                                    const copyKey = `${state.id}-${type}`;
+                                    const isCopied = !!copiedMap[copyKey];
                                     return (
                                       <div key={type}>
-                                        <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-0.5">{type}</span>
+                                        <div className="flex items-center justify-between mb-0.5">
+                                          <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{type}</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleCopy(perspective.content, copyKey);
+                                            }}
+                                            className="inline-flex items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all cursor-pointer select-none border border-transparent"
+                                          >
+                                            {isCopied ? (
+                                              <>
+                                                <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                                <span className="text-green-500 font-semibold">Copied!</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                                <span>Copy</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
                                         <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
                                           {perspective.content}
                                         </span>
