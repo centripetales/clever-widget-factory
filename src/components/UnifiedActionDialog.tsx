@@ -1567,101 +1567,50 @@ export function ActionForm({
             </div>
 
             {/* Display uploaded attachments */}
-            {(() => {
-              const observationPhotos = actionStates?.flatMap((s: any) => s.photos || []) || [];
-              const directAttachments = formData.attachments || [];
-              const allAttachmentUrls = Array.from(new Set([
-                ...directAttachments,
-                ...observationPhotos.map((p: any) => p.photo_url)
-              ]));
+            {(formData.attachments || []).length > 0 && (
+              <div className="mt-3 space-y-2">
+                <p className="text-sm text-muted-foreground">Uploaded attachments:</p>
+                <div className="flex flex-wrap gap-2">
+                  {(formData.attachments || []).map((url, index) => {
+                    const isPdf = url.toLowerCase().endsWith('.pdf');
+                    const fullUrl = url.startsWith('http') ? url : `https://cwf-dev-assets.s3.us-west-2.amazonaws.com/${url}`;
+                    const file = attachmentFiles.get(url);
+                    const thumbnailUrl = getThumbnailUrl(url);
+                    const displayUrl = file ? URL.createObjectURL(file) : (thumbnailUrl || fullUrl);
 
-              if (allAttachmentUrls.length === 0) return null;
-
-              return (
-                <div className="mt-3 space-y-2">
-                  <p className="text-sm text-muted-foreground">Uploaded & observation-linked attachments:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {allAttachmentUrls.map((url, index) => {
-                      const isPdf = url.toLowerCase().endsWith('.pdf');
-                      const fullUrl = url.startsWith('http') ? url : `https://cwf-dev-assets.s3.us-west-2.amazonaws.com/${url}`;
-                      const isDirect = directAttachments.includes(url);
-
-                      // Use local File object if available (just uploaded), otherwise fetch from S3
-                      const file = attachmentFiles.get(url);
-                      const thumbnailUrl = getThumbnailUrl(url);
-                      const displayUrl = file ? URL.createObjectURL(file) : (thumbnailUrl || fullUrl);
-                      // Find if this attachment has a transcription
-                      const matchingPhoto = observationPhotos.find((p: any) => p.photo_url === url);
-                      const hasAi = !!matchingPhoto?.transcription?.trim();
-
-                      return (
-                        <div key={index} className="relative group/img-container">
-                          {isPdf ? (
-                            <div
-                              className="h-16 w-16 flex items-center justify-center bg-muted rounded border cursor-pointer hover:bg-muted/80"
-                              onClick={() => window.open(fullUrl, '_blank')}
-                            >
-                              <svg className="h-8 w-8 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                              </svg>
-                            </div>
-                          ) : (
-                            <div className="relative">
-                              <img
-                                src={displayUrl}
-                                alt={`Attachment ${index + 1}`}
-                                className="h-16 w-16 object-cover rounded border cursor-pointer"
-                                onClick={() => window.open(fullUrl, '_blank')}
-                              />
-                              {hasAi && (
-                                <div className="absolute top-0.5 left-0.5 z-20">
-                                  <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1 py-[2px] rounded-full text-[8px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
-                                    <span>AI</span>
-                                    <span className="absolute left-0 top-full mt-1 w-[260px] p-2.5 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
-                                      <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
-                                      <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
-                                        {matchingPhoto.transcription.replace(/^\[photo_analysis\]\s*/, '')}
-                                      </span>
-                                    </span>
-                                  </span>
-                                </div>
-                              )}
-                              {!isDirect && (
-                                <div className="absolute top-0.5 right-0.5 z-20">
-                                  <span className="relative group/obs cursor-default inline-flex items-center gap-0.5 px-1 py-[2px] rounded-full text-[8px] font-semibold bg-blue-600/90 text-white border border-blue-500/50 select-none">
-                                    <span>OBS</span>
-                                    <span className="absolute right-0 top-full mt-1 w-[200px] p-2 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/obs:block z-30 normal-case not-italic text-[10px] text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
-                                      This attachment is linked via an observation. Edit the observation to manage it.
-                                    </span>
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          {isDirect && (
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const directIdx = directAttachments.indexOf(url);
-                                if (directIdx !== -1) {
-                                  removeAttachment(directIdx);
-                                }
-                              }}
-                              className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 z-30"
-                            >
-                              ×
-                            </Button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                    return (
+                      <div key={index} className="relative group/img-container">
+                        {isPdf ? (
+                          <div
+                            className="h-16 w-16 flex items-center justify-center bg-muted rounded border cursor-pointer hover:bg-muted/80"
+                            onClick={() => window.open(fullUrl, '_blank')}
+                          >
+                            <svg className="h-8 w-8 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                          </div>
+                        ) : (
+                          <img
+                            src={displayUrl}
+                            alt={`Attachment ${index + 1}`}
+                            className="h-16 w-16 object-cover rounded border cursor-pointer"
+                            onClick={() => window.open(fullUrl, '_blank')}
+                          />
+                        )}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => removeAttachment(index)}
+                          className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 z-30"
+                        >
+                          ×
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })()}
+              </div>
+            )}
           </div>
 
 
