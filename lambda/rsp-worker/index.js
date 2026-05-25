@@ -219,7 +219,7 @@ async function processPendingRecord(client, record) {
   // Fetch full state context including photos
   const stateSql = `
     SELECT 
-      s.id, s.organization_id, s.state_text, s.captured_at,
+      s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at,
       (
         SELECT json_agg(
           jsonb_build_object(
@@ -323,12 +323,10 @@ async function processPendingRecord(client, record) {
       const inferenceConfig = { max_tokens: 1000, temperature: 0.1 };
       
       const description = await invokeBedrock(
-        bedrockRuntime, 
         llmConfig.model_id, 
         systemPrompt, 
         userPrompt, 
         inferenceConfig, 
-        null, 
         [imgData]
       );
       
@@ -337,12 +335,13 @@ async function processPendingRecord(client, record) {
       // Insert machine observation state
       const insertStateSql = `
         INSERT INTO states (organization_id, state_text, captured_by, captured_at)
-        VALUES ($1, $2, 'system-nova-lite', NOW())
+        VALUES ($1, $2, $3, NOW())
         RETURNING id
       `;
       const stateRes = await client.query(insertStateSql, [
         state.organization_id,
-        `[photo_analysis] ${description.trim()}`
+        `[photo_analysis] ${description.trim()}`,
+        state.captured_by
       ]);
       const transStateId = stateRes.rows[0].id;
 
