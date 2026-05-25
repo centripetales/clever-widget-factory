@@ -438,29 +438,7 @@ async function createState(event, authContext, headers) {
       console.error('Failed to queue state embedding:', err);
     }
 
-    // Trigger photo analysis pass synchronously if photos are present
-    let warnings = [];
-    if (insertedPhotos.length > 0) {
-      try {
-        warnings = await runPhotoAnalysis(client, organizationId, insertedPhotos);
-      } catch (analysisErr) {
-        console.error('Photo analysis execution failed:', analysisErr);
-        warnings.push(`Photo analysis failed: ${analysisErr.message}`);
-      }
-    }
-
-    const response = await getState(state.id, authContext, headers);
-    if (warnings.length > 0 && response.statusCode === 200) {
-      try {
-        const resBody = JSON.parse(response.body);
-        resBody.warnings = warnings;
-        response.body = JSON.stringify(resBody);
-      } catch (jsonErr) {
-        console.error('Failed to append warnings to response:', jsonErr);
-      }
-    }
-
-    return response;
+    return await getState(state.id, authContext, headers);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -533,24 +511,67 @@ async function updateState(event, id, authContext, headers) {
     }
 
     if (photos !== undefined) {
-      await client.query(`DELETE FROM state_photos WHERE state_id = ${formatSqlValue(id)}`);
+      // 1. Fetch existing photos for this state
+      const existingPhotosRes = await client.query(`
+        SELECT id, photo_url, photo_description, photo_order 
+        FROM state_photos 
+        WHERE state_id = ${formatSqlValue(id)}::uuid
+      `);
+      const existingPhotos = existingPhotosRes.rows;
+      const existingUrls = existingPhotos.map(p => p.photo_url);
       
+      const incomingUrls = photos.map(p => p.photo_url);
+      
+      // 2. Identify photos to delete (in existing but not in incoming)
+      const toDelete = existingPhotos.filter(p => !incomingUrls.includes(p.photo_url));
+      if (toDelete.length > 0) {
+        const deleteIds = toDelete.map(p => p.id);
+        await client.query(`
+          DELETE FROM state_photos 
+          WHERE id = ANY($1::uuid[])
+        `, [deleteIds]);
+      }
+      
+      // 3. Keep track of newly added photo records to trigger analysis
+      const newlyAddedPhotos = [];
+      
+      // 4. Handle incoming photos: insert new ones, update existing ones
       for (let i = 0; i < photos.length; i++) {
         const photo = photos[i];
-        await client.query(`
-          INSERT INTO state_photos (
-            state_id,
-            photo_url,
-            photo_description,
-            photo_order
-          ) VALUES (
-            ${formatSqlValue(id)},
-            ${formatSqlValue(photo.photo_url)},
-            ${formatSqlValue(photo.photo_description)},
-            ${formatSqlValue(photo.photo_order ?? i)}
-          )
-        `);
+        const existing = existingPhotos.find(p => p.photo_url === photo.photo_url);
+        
+        if (existing) {
+          // Update order and description of existing photo
+          await client.query(`
+            UPDATE state_photos
+            SET 
+              photo_description = ${formatSqlValue(photo.photo_description)},
+              photo_order = ${formatSqlValue(photo.photo_order ?? i)}
+            WHERE id = $1
+          `, [existing.id]);
+        } else {
+          // Insert new photo
+          const photoResult = await client.query(`
+            INSERT INTO state_photos (
+              state_id,
+              photo_url,
+              photo_description,
+              photo_order
+            ) VALUES (
+              ${formatSqlValue(id)},
+              ${formatSqlValue(photo.photo_url)},
+              ${formatSqlValue(photo.photo_description)},
+              ${formatSqlValue(photo.photo_order ?? i)}
+            ) RETURNING id
+          `);
+          newlyAddedPhotos.push({
+            id: photoResult.rows[0].id,
+            photo_url: photo.photo_url
+          });
+        }
       }
+      
+
     }
 
     if (links !== undefined) {

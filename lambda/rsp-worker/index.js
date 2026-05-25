@@ -89,8 +89,17 @@ async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig 
       ]
     };
     if (toolConfig) {
-      body.tools = toolConfig.tools;
-      if (toolConfig.toolChoice) body.tool_choice = toolConfig.toolChoice;
+      body.tools = toolConfig.tools.map(t => ({
+        name: t.toolSpec.name,
+        description: t.toolSpec.description,
+        input_schema: t.toolSpec.inputSchema.json
+      }));
+      if (toolConfig.toolChoice) {
+        body.tool_choice = {
+          type: 'tool',
+          name: toolConfig.toolChoice.tool.name
+        };
+      }
     }
   } else {
     const content = [];
@@ -219,7 +228,14 @@ async function processPendingRecord(client, record) {
             'photo_description', sp.photo_description,
             'photo_order', sp.photo_order,
             'gps_latitude', pme.gps_latitude,
-            'gps_longitude', pme.gps_longitude
+            'gps_longitude', pme.gps_longitude,
+            'has_analysis', EXISTS(
+              SELECT 1 FROM state_links sl2 
+              JOIN states s2 ON sl2.state_id = s2.id 
+              WHERE sl2.entity_type = 'state_photo' 
+                AND sl2.entity_id = sp.id 
+                AND s2.state_text LIKE '[photo_analysis]%'
+            )
           )
         ) 
         FROM state_photos sp 
@@ -266,7 +282,7 @@ async function processPendingRecord(client, record) {
   }
 
   // Resolve LLM config
-  const configRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.anthropic.claude-3-5-haiku-20241022-v1:0' LIMIT 1`);
+  const configRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.anthropic.claude-sonnet-4-20250514-v1:0' LIMIT 1`);
   const llmConfig = configRes.rows.length > 0 ? configRes.rows[0] : (await client.query('SELECT * FROM llm_generation_configs ORDER BY created_at DESC LIMIT 1')).rows[0];
   if (!llmConfig) throw new Error('No LLM generation config found in llm_generation_configs');
 
@@ -279,14 +295,70 @@ async function processPendingRecord(client, record) {
     organizationId: state.organization_id
   });
 
-  // Download photos
+  // Download photos and track mapping
   const images = [];
-  const photoUrls = (state.photos || []).map(p => p.photo_url).filter(Boolean);
-  for (const url of photoUrls) {
+  const photoMap = new Map();
+  for (const photo of (state.photos || [])) {
+    if (!photo.photo_url) continue;
     try {
-      images.push(await downloadPhoto(url));
+      const imgData = await downloadPhoto(photo.photo_url);
+      images.push(imgData);
+      photoMap.set(photo.photo_url, imgData);
     } catch (err) {
-      console.error(`Failed to download photo ${url}:`, err.message);
+      console.error(`Failed to download photo ${photo.photo_url}:`, err.message);
+    }
+  }
+
+  // Phase 1: Run Photo Analysis for any photos missing descriptions
+  for (const photo of (state.photos || [])) {
+    if (photo.has_analysis) continue;
+    const imgData = photoMap.get(photo.photo_url);
+    if (!imgData) continue;
+
+    console.log(`[RSP] Running async photo analysis for ${photo.id}...`);
+    try {
+      const systemPrompt = "You are a professional assistant analyzing farmer logs and observations.";
+      const userPrompt = "Describe what you see objectively.";
+      const inferenceConfig = { max_tokens: 1000, temperature: 0.1 };
+      
+      const description = await invokeBedrock(
+        bedrockRuntime, 
+        llmConfig.model_id, 
+        systemPrompt, 
+        userPrompt, 
+        inferenceConfig, 
+        null, 
+        [imgData]
+      );
+      
+      if (!description || !description.trim()) throw new Error('Empty photo description');
+      
+      // Insert machine observation state
+      const insertStateSql = `
+        INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+        VALUES ($1, $2, 'system-nova-lite', NOW())
+        RETURNING id
+      `;
+      const stateRes = await client.query(insertStateSql, [
+        state.organization_id,
+        `[photo_analysis] ${description.trim()}`
+      ]);
+      const transStateId = stateRes.rows[0].id;
+
+      // Link to the photo
+      await client.query(`
+        INSERT INTO state_links (state_id, entity_type, entity_id)
+        VALUES ($1, 'state_photo', $2)
+      `, [transStateId, photo.id]);
+
+      // Link to the LLM config
+      await client.query(`
+        INSERT INTO state_links (state_id, entity_type, entity_id)
+        VALUES ($1, 'photo_analysis_param', $2)
+      `, [transStateId, llmConfig.id]);
+
+    } catch (err) {
+      console.error(`[RSP] Failed async photo analysis for ${photo.id}:`, err);
     }
   }
 
@@ -295,27 +367,34 @@ async function processPendingRecord(client, record) {
   let inferenceConfig = llmConfig.inference_config;
   let configId = llmConfig.id;
 
-  const visionConfigRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.amazon.nova-pro-v1:0' LIMIT 1`);
-  if (visionConfigRes.rows.length > 0) {
-    modelId = visionConfigRes.rows[0].model_id;
-    systemPrompt = visionConfigRes.rows[0].system_prompt;
-    inferenceConfig = visionConfigRes.rows[0].inference_config;
-    configId = visionConfigRes.rows[0].id;
-  } else if (images.length > 0 && modelId.includes('haiku')) {
-    throw new Error('No explicit vision model configured.');
+  if (images.length > 0 && modelId.includes('haiku')) {
+    const visionConfigRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.amazon.nova-pro-v1:0' LIMIT 1`);
+    if (visionConfigRes.rows.length > 0) {
+      modelId = visionConfigRes.rows[0].model_id;
+      systemPrompt = visionConfigRes.rows[0].system_prompt;
+      inferenceConfig = visionConfigRes.rows[0].inference_config;
+      configId = visionConfigRes.rows[0].id;
+    } else {
+      throw new Error('No explicit vision model configured.');
+    }
   }
 
   const userPrompt = `
+You are an Expert Agricultural Systems Architect and Master Farm Manager. Your role is to carefully analyze farm operations, synthesize complex biological, structural, and ecological data, and extract high-value, actionable insights.
+
 Analyze the attached farm observation.
 State Text: ${getCombinedStateText(state) || 'None'}
 Action Context: ${actionContext}
 
-Your task is to extract three epistemic dimensions:
-1. CLAIM: The explicit, observable assertion made by the human, supported strictly by the evidence in the photos. If no text exists, simply state the objective facts visible.
-2. SIGNIFICANCE: The implicit value or intent. How does this observation impact the expected target state, explain systemic variation, or affect our understanding of the experiment/process?
-3. ENTROPY: The systemic learning. Does this observation resolve a mystery (Phronesis/Entropy Reduction) or does it identify a new anomaly/open question (Entropy Increase)?
+Extract three distinct epistemic dimensions. CRITICAL INSTRUCTIONS:
+- Be extremely concise and information-dense. 
+- Use direct, declarative statements. 
+- Do NOT repeat information across dimensions. Ensure each dimension offers unique analytical value.
+- Do NOT use filler phrases (e.g., "This observation indicates...", "This observation increases entropy by...").
 
-Extract these three dimensions clearly and concisely.
+1. CLAIM: The raw, objective, observable assertion (based strictly on text + photos).
+2. SIGNIFICANCE: Why is this observation important for achieving our goal? What mechanisms or conditions may have produced the observed outcome? What historical actions, environmental changes, inputs, or state transitions should be reviewed to identify likely causes? What hypotheses does this observation suggest, and what future observations or experiments could help distinguish between them?
+3. ENTROPY: The delta in systemic learning. Does this resolve a mystery (reduction) or expose a new anomaly (increase)? State the exact mystery/anomaly cleanly.
 `;
 
   const toolConfig = {
@@ -327,9 +406,9 @@ Extract these three dimensions clearly and concisely.
           json: {
             type: 'object',
             properties: {
-              claim: { type: 'string', description: 'The explicit, observable assertion.' },
-              significance: { type: 'string', description: 'How it impacts target state or explains variation.' },
-              entropy: { type: 'string', description: 'The systemic learning or mystery resolution.' }
+              claim: { type: 'string', description: 'Raw, objective facts without preamble.' },
+              significance: { type: 'string', description: 'Exploration of mechanisms, likely causes, required historical reviews, and hypotheses testing for future observations.' },
+              entropy: { type: 'string', description: 'Delta in learning (mystery resolved or new anomaly exposed) without filler.' }
             },
             required: ['claim', 'significance', 'entropy']
           }
