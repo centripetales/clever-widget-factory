@@ -85,3 +85,10 @@ response.json
 data/embedding-texts/
 lambda/core/shared/
 .env.production
+
+# Local development scratchpads & temporary files
+scratch/
+out.json
+.test-duckweed-state-id
+lambda/**/test-*.js
+lambda/**/run-worker-local.js
