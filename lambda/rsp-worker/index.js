@@ -310,6 +310,7 @@ async function processPendingRecord(client, record) {
   }
 
   // Phase 1: Run Photo Analysis for any photos missing descriptions
+  let analyzedAny = false;
   for (const photo of (state.photos || [])) {
     if (photo.has_analysis) continue;
     const imgData = photoMap.get(photo.photo_url);
@@ -357,8 +358,25 @@ async function processPendingRecord(client, record) {
         VALUES ($1, 'photo_analysis_param', $2)
       `, [transStateId, llmConfig.id]);
 
+      analyzedAny = true;
     } catch (err) {
       console.error(`[RSP] Failed async photo analysis for ${photo.id}:`, err);
+    }
+  }
+
+  // If we analyzed any photos, broadcast invalidation immediately so the frontend
+  // renders the new AI descriptions without waiting for perspectives to finish.
+  if (analyzedAny) {
+    try {
+      await broadcastInvalidation({
+        entityType: 'state',
+        entityId: state.id,
+        mutationType: 'updated',
+        organizationId: state.organization_id
+      });
+      console.log('[RSP] Broadcasted invalidation for state photo analysis update:', state.id);
+    } catch (broadcastErr) {
+      console.error('[RSP] Failed to broadcast state photo analysis update:', broadcastErr);
     }
   }
 
