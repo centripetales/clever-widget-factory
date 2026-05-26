@@ -318,10 +318,10 @@ async function processPendingRecord(client, record) {
 
     console.log(`[RSP] Running async photo analysis for ${photo.id}...`);
     try {
-      const systemPrompt = "You are a professional assistant analyzing farmer logs and observations.";
-      let userPrompt = "Describe what you see objectively.";
+      const systemPrompt = "You are a Professional Farm Manager and Expert Agricultural Analyst on an organic farm located in Sapi-an, Capiz, Philippines. Your job is to analyze photos from agricultural logs, identify visible plants, animals, equipment, structures, or landscape features, assess their condition and health, and provide objective observations along with possible causes of those observations.";
+      let userPrompt = "Identify any visible plants, animals, structures, or equipment in the photo. Describe what you see objectively, assess their health or condition, and suggest possible causes for any issues or observations you notice.";
       if (state.state_text && state.state_text.trim()) {
-        userPrompt += `\n\nUser's Observation Text Context:\n"${state.state_text.trim()}"\n\nUse this context to focus your description, verify the visual details, and relate what is shown in the image to the user's observation log above.`;
+        userPrompt += `\n\nUser's Observation Context:\n"${state.state_text.trim()}"\n\nUse this user text to focus your visual analysis on what the user mentioned, complementing their log without being biased to automatically agree with or verify their statements. Maintain strict objective observations.`;
       }
       const inferenceConfig = { max_tokens: 1000, temperature: 0.1 };
       
