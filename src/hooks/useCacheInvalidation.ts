@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './useWebSocket';
 import {
@@ -7,11 +7,20 @@ import {
   actionsQueryKey,
   completedActionsQueryKey,
   allActionsQueryKey,
+  actionQueryKey,
   missionsQueryKey,
   explorationsQueryKey,
   experiencesQueryKey,
   statesQueryKey,
 } from '@/lib/queryKeys';
+
+// Shared map of stateId → { estimatedSeconds, startedAt } for active perspective jobs
+export const perspectivesProcessingMap = new Map<string, { estimatedSeconds: number; startedAt: number }>();
+export const perspectivesProcessingListeners = new Set<() => void>();
+
+function notifyProcessingListeners() {
+  perspectivesProcessingListeners.forEach(fn => fn());
+}
 
 interface CacheInvalidatePayload {
   entityType: string;
@@ -19,22 +28,27 @@ interface CacheInvalidatePayload {
   mutationType: 'created' | 'updated' | 'deleted';
 }
 
+interface PerspectivesProcessingPayload {
+  stateId: string;
+  estimatedSeconds: number;
+}
+
 /**
  * Subscribes to `cache:invalidate` WebSocket messages and invalidates
  * the corresponding TanStack Query caches so all connected clients
  * see fresh data without a manual refresh.
+ *
+ * Also handles `perspectives:processing` to populate perspectivesProcessingMap
+ * and `perspectives:complete` (via cache:invalidate for entity type 'state').
  */
 export function useCacheInvalidation() {
   const { subscribe } = useWebSocket();
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    const unsubscribe = subscribe('cache:invalidate', (payload: CacheInvalidatePayload) => {
-      const { entityType } = payload;
+    const unsubscribeInvalidate = subscribe('cache:invalidate', (payload: CacheInvalidatePayload) => {
+      const { entityType, entityId } = payload;
 
-      // Map entity types to the query keys that should be invalidated.
-      // Some entity types map to multiple keys (e.g. actions have three list variants).
-      // Issues and experiences use prefix matching because their keys include filter params.
       switch (entityType) {
         case 'tool':
           queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
@@ -48,10 +62,12 @@ export function useCacheInvalidation() {
           queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
+          if (entityId) {
+            queryClient.invalidateQueries({ queryKey: actionQueryKey(entityId) });
+          }
           break;
 
         case 'issue':
-          // Issue system removed — no-op, issues no longer tracked in cache
           break;
 
         case 'mission':
@@ -63,23 +79,24 @@ export function useCacheInvalidation() {
           break;
 
         case 'experience':
-          // experiencesQueryKey() produces ['experiences', ...filters] — invalidate any key starting with 'experiences'
           queryClient.invalidateQueries({ queryKey: [experiencesQueryKey()[0]] });
           break;
 
         case 'checkout':
         case 'checkin':
-          // Checkout system deprecated — just invalidate tools cache
           queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
           break;
 
         case 'state':
-          // States (observations) — invalidate any key starting with 'states'
+          // Clear any active processing indicator for this state
+          if (entityId && perspectivesProcessingMap.has(entityId)) {
+            perspectivesProcessingMap.delete(entityId);
+            notifyProcessingListeners();
+          }
           queryClient.invalidateQueries({ queryKey: [statesQueryKey()[0]] });
           break;
 
         case 'policy':
-          // Policies are managed within explorations — invalidate explorations cache
           queryClient.invalidateQueries({ queryKey: explorationsQueryKey() });
           break;
 
@@ -89,6 +106,15 @@ export function useCacheInvalidation() {
       }
     });
 
-    return unsubscribe;
+    const unsubscribeProcessing = subscribe('perspectives:processing', (payload: PerspectivesProcessingPayload) => {
+      const { stateId, estimatedSeconds } = payload;
+      perspectivesProcessingMap.set(stateId, { estimatedSeconds, startedAt: Date.now() });
+      notifyProcessingListeners();
+    });
+
+    return () => {
+      unsubscribeInvalidate();
+      unsubscribeProcessing();
+    };
   }, [subscribe, queryClient]);
 }

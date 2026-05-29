@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useCognitoAuth';
+import { perspectivesProcessingMap, perspectivesProcessingListeners } from '@/hooks/useCacheInvalidation';
 import { useLearningObjectives, useObservationVerification } from '@/hooks/useLearning';
 import type { VerificationResponse, LearningObjective } from '@/hooks/useLearning';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
@@ -37,52 +38,84 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
   const { toast } = useToast();
   const { uploadFiles } = useFileUpload();
   const { user } = useAuth();
-  
+
   const handleEagerUpload = useCallback(async (file: File) => {
     const result = await uploadFiles(file, { bucket: 'mission-attachments' });
     const r = Array.isArray(result) ? result[0] : result;
     return { url: r.url };
   }, [uploadFiles]);
-  
+
   // Fetch states for this entity
   const { data: states, isLoading, error } = useStates({ entity_type, entity_id });
-  
+
   // Fetch learning objectives when entity is an action
   const { data: learningData } = useLearningObjectives(
     entity_type === 'action' ? entity_id : undefined,
     entity_type === 'action' ? user?.userId : undefined
   );
-  
+
   // Observation verification mutation
   const verificationMutation = useObservationVerification();
-  
+
   // Mutations
-  const { createState, updateState, deleteState, isCreating, isUpdating, isDeleting } = 
+  const { createState, updateState, deleteState, isCreating, isUpdating, isDeleting } =
     useStateMutations({ entity_type, entity_id });
-  
+
+  // Live countdown for perspectives:processing WS events
+  // Returns remaining seconds for a given stateId, or null if not processing
+  const [perspectivesTick, setPerspectivesTick] = useState(0);
+  useEffect(() => {
+    const listener = () => setPerspectivesTick(t => t + 1);
+    perspectivesProcessingListeners.add(listener);
+    return () => { perspectivesProcessingListeners.delete(listener); };
+  }, []);
+  useEffect(() => {
+    if (perspectivesProcessingMap.size === 0) return;
+    const interval = setInterval(() => setPerspectivesTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [perspectivesTick]);
+  const getPerspectivesRemaining = useCallback((stateId: string): number | null => {
+    const entry = perspectivesProcessingMap.get(stateId);
+    if (!entry) return null;
+    const elapsed = (Date.now() - entry.startedAt) / 1000;
+    const remaining = Math.max(0, Math.ceil(entry.estimatedSeconds - elapsed));
+    return remaining;
+  }, [perspectivesTick]);
+
   // UI state
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingStateId, setEditingStateId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
-  
+
+  // Copy-to-clipboard state for perspectives
+  const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
+  const handleCopy = useCallback((text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMap(prev => ({ ...prev, [key]: true }));
+    setTimeout(() => {
+      setCopiedMap(prev => ({ ...prev, [key]: false }));
+    }, 2000);
+  }, []);
+
   // Form state
   const [stateText, setStateText] = useState('');
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  
+
   // Demonstration checklist state
   const [selectedObjectiveIds, setSelectedObjectiveIds] = useState<Set<string>>(new Set());
   const [verificationResults, setVerificationResults] = useState<VerificationResponse | null>(null);
-  
+
   // Photo gallery state
   const [galleryPhotos, setGalleryPhotos] = useState<Array<{ photo_url: string; photo_description?: string | null }>>([]);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
-  
+
   // Expanded photos state — tracks which observation cards show all photos
   const [expandedPhotoStates, setExpandedPhotoStates] = useState<Set<string>>(new Set());
-  
+  const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
+
   const toggleExpandedPhotos = (stateId: string) => {
     setExpandedPhotoStates(prev => {
       const next = new Set(prev);
@@ -95,20 +128,32 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
     });
   };
 
+  const toggleExpandedAi = (photoId: string) => {
+    setExpandedAiPhotos(prev => {
+      const next = new Set(prev);
+      if (next.has(photoId)) {
+        next.delete(photoId);
+      } else {
+        next.add(photoId);
+      }
+      return next;
+    });
+  };
+
   const openGallery = (photos: Array<{ photo_url: string; photo_description?: string | null }>, index: number) => {
     setGalleryPhotos(photos);
     setGalleryIndex(index);
     setGalleryOpen(true);
   };
-  
+
   // Derive incomplete learning objectives from all axes
   const incompleteObjectives: LearningObjective[] = learningData?.axes
     ?.flatMap(axis => axis.objectives.filter(obj => obj.status !== 'completed'))
     ?? [];
-  
+
   // Show demonstration checklist only for actions with incomplete objectives (not when editing)
   const showDemonstrationChecklist = entity_type === 'action' && incompleteObjectives.length > 0 && !editingStateId;
-  
+
   const toggleObjective = (objectiveId: string) => {
     setSelectedObjectiveIds(prev => {
       const next = new Set(prev);
@@ -153,21 +198,21 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
 
     try {
       setUploadingPhotos(true);
-      
+
       // CRITICAL: Store current photos state to preserve blob URLs during upload
       const photosSnapshot = [...photos];
-      
+
       // Process photos: upload new ones, keep existing ones
       let uploadedPhotos: Array<{ photo_url: string; photo_description: string; photo_order: number }> = [];
-      
+
       if (photosSnapshot.length > 0) {
         const newPhotos = photosSnapshot.filter(p => !p.isExisting && p.file && !p.photo_url);
         const readyPhotos = photosSnapshot.filter(p => p.photo_url);
-        
+
         if (newPhotos.length > 0) {
           setUploadProgress(`Uploading ${newPhotos.length} new photo${newPhotos.length > 1 ? 's' : ''}...`);
         }
-        
+
         // Upload new photos that haven't been eagerly uploaded yet
         for (let i = 0; i < newPhotos.length; i++) {
           const photo = newPhotos[i];
@@ -175,14 +220,14 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
             console.error('New photo missing file object:', photo);
             continue;
           }
-          
+
           setUploadProgress(`Uploading photo ${i + 1} of ${newPhotos.length}...`);
-          
+
           try {
             const uploadResults = await uploadFiles([photo.file], { bucket: 'mission-attachments' });
             const resultsArray = Array.isArray(uploadResults) ? uploadResults : [uploadResults];
             const photoUrl = resultsArray[0].url;
-            
+
             uploadedPhotos.push({
               photo_url: photoUrl,
               photo_description: photo.photo_description || '',
@@ -193,7 +238,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
             // Continue with other photos instead of failing the whole save
           }
         }
-        
+
         // Add all photos that already have URLs (existing + eagerly uploaded)
         readyPhotos.forEach(photo => {
           uploadedPhotos.push({
@@ -203,9 +248,9 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
           });
         });
       }
-      
+
       setUploadProgress('Saving observation...');
-      
+
       if (editingStateId) {
         // Update existing observation
         await updateState({
@@ -215,7 +260,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
             photos: uploadedPhotos
           }
         });
-        
+
         toast({
           title: 'Observation updated',
           description: 'Your observation has been updated successfully.'
@@ -244,7 +289,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
         };
 
         const savedObservation = await createState(data);
-        
+
         toast({
           title: 'Observation saved',
           description: 'Your observation has been saved successfully.'
@@ -263,7 +308,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
         setEditingStateId(null);
         setShowAddForm(false);
         setSelectedObjectiveIds(new Set());
-        
+
         // Trigger verification in the background if objectives were selected
         if (selectedObjectiveIds.size > 0 && savedObservation?.id && user?.userId) {
           // Capture values before form reset clears them
@@ -295,7 +340,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
         // Return early — form is already reset above
         return;
       }
-      
+
     } catch (error) {
       console.error('Failed to save observation:', error);
       toast({
@@ -313,7 +358,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
     // Load the observation data for editing
     setEditingStateId(state.id);
     setStateText(state.observation_text || '');
-    
+
     // Load existing photos into PhotoItem format
     const existingPhotos: PhotoItem[] = (state.photos || []).map((photo, index) => ({
       id: `photo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -325,18 +370,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
       isUploading: false,
     }));
     setPhotos(existingPhotos);
-    
+
     setShowAddForm(true);
-    
-    // Scroll to the form after React has re-rendered
-    setTimeout(() => {
-      const formElement = document.querySelector('[data-edit-form]');
-      if (formElement) {
-        formElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else {
-        console.warn('[StatesInline] Form element not found in DOM');
-      }
-    }, 300);
   };
 
   const handleDelete = async (id: string) => {
@@ -359,8 +394,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
 
   // Get labels based on entity type
   const textLabel = entity_type === 'action' ? 'Action and Reasoning' : 'Observation Text';
-  const textPlaceholder = entity_type === 'action' 
-    ? 'What did you do, and why?' 
+  const textPlaceholder = entity_type === 'action'
+    ? 'What did you do, and why?'
     : 'Describe what you observed...';
 
   if (isLoading) {
@@ -379,11 +414,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
     );
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Add/Edit Form */}
-      {showAddForm ? (
-        <Card data-edit-form className="border-2 border-primary">
+  const renderForm = (isEdit: boolean) => (
+    <Card data-edit-form={isEdit ? "true" : undefined} className={`border-2 ${isEdit ? "border-amber-400" : "border-primary"}`}>
           <CardContent className="pt-6 space-y-4">
             {editingStateId && (
               <div className="bg-primary/10 p-3 rounded-md mb-4">
@@ -391,7 +423,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                 <p className="text-xs text-muted-foreground mt-1">You can edit text, remove photos, edit descriptions, or add new photos.</p>
               </div>
             )}
-            
+
             <div>
               <Label>Photos</Label>
               <PhotoUploadPanel
@@ -445,7 +477,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
               <Card className="border-2 border-muted">
                 <CardContent className="pt-4 space-y-3">
                   <Label className="text-sm font-medium">Verification Results</Label>
-                  
+
                   {verificationResults.confirmed.length > 0 && (
                     <div className="space-y-1">
                       {verificationResults.confirmed.map((id) => {
@@ -460,7 +492,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       })}
                     </div>
                   )}
-                  
+
                   {verificationResults.unconfirmed.length > 0 && (
                     <div className="space-y-1">
                       {verificationResults.unconfirmed.map((id) => {
@@ -475,7 +507,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       })}
                     </div>
                   )}
-                  
+
                   {verificationResults.aiDetected.length > 0 && (
                     <div className="space-y-1">
                       {verificationResults.aiDetected.map((id) => {
@@ -492,7 +524,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       })}
                     </div>
                   )}
-                  
+
                   <Button
                     variant="outline"
                     size="sm"
@@ -507,42 +539,49 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
 
             {/* Form buttons — hidden when showing verification results */}
             {!verificationResults && (
-            <div className="flex gap-2 justify-end">
-              <Button
-                variant="outline"
-                onClick={resetForm}
-                disabled={isCreating || isUpdating || uploadingPhotos}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleSubmit}
-                disabled={isCreating || isUpdating || uploadingPhotos || verificationMutation.isPending || (stateText.trim().length === 0 && photos.length === 0)}
-              >
-                {uploadingPhotos ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {uploadProgress}
-                  </>
-                ) : verificationMutation.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Verifying skills...
-                  </>
-                ) : isCreating || isUpdating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {editingStateId ? 'Updating...' : 'Saving...'}
-                  </>
-                ) : (
-                  editingStateId ? 'Update Observation' : 'Save Observation'
-                )}
-              </Button>
-            </div>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={resetForm}
+                  disabled={isCreating || isUpdating || uploadingPhotos}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSubmit}
+                  disabled={isCreating || isUpdating || uploadingPhotos || verificationMutation.isPending || (stateText.trim().length === 0 && photos.length === 0)}
+                >
+                  {uploadingPhotos ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      {uploadProgress}
+                    </>
+                  ) : verificationMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Verifying skills...
+                    </>
+                  ) : isCreating || isUpdating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      {editingStateId ? 'Updating...' : 'Saving...'}
+                    </>
+                  ) : (
+                    editingStateId ? 'Update Observation' : 'Save Observation'
+                  )}
+                </Button>
+              </div>
             )}
           </CardContent>
         </Card>
-      ) : (
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Add Form */}
+      {showAddForm && !editingStateId ? (
+        renderForm(false)
+      ) : !editingStateId ? (
         <Button
           variant="outline"
           onClick={() => setShowAddForm(true)}
@@ -551,7 +590,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
           <Plus className="h-4 w-4 mr-2" />
           Add Observation
         </Button>
-      )}
+      ) : null}
 
       {/* States List */}
       {/* Non-blocking verification indicator — shown while background verification is in progress */}
@@ -565,7 +604,9 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
       {/* States List */}
       {states && states.length > 0 ? (
         <div className="space-y-3">
-          {states.map((state) => (
+          {states.map((state) => state.id === editingStateId ? (
+            <div key={state.id}>{renderForm(true)}</div>
+          ) : (
             <Card key={state.id}>
               <CardContent className="pt-4">
                 <div className="flex justify-between items-start mb-2">
@@ -598,7 +639,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                 <div className="flex gap-3">
                   {/* Photos — compact (first only) or expanded (all) */}
                   {state.photos && state.photos.length > 0 && !expandedPhotoStates.has(state.id) && (
-                    <div className="flex-shrink-0 w-1/3">
+                    <div className="flex-shrink-0 w-1/3 relative group/img-container">
                       <img
                         src={getThumbnailUrl(state.photos[0].photo_url) || ''}
                         alt={state.photos[0].photo_description || 'Photo'}
@@ -614,6 +655,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                           }
                         }}
                       />
+                      {/* AI Description badge moved to inline accordion */}
                       {state.photos.length > 1 && (
                         <button
                           type="button"
@@ -633,19 +675,207 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                         {state.observation_text.replace(/<[^>]*>/g, '').trim()}
                       </p>
                     )}
-                    
-                    {/* Photo descriptions (compact view only — expanded view shows them inline) */}
-                    {!expandedPhotoStates.has(state.id) && state.photos && state.photos.some(p => p.photo_description) && (
-                      <div className="mt-2 space-y-1">
-                        {state.photos.map((photo, idx) => 
-                          photo.photo_description ? (
-                            <p key={photo.id || idx} className="text-xs text-muted-foreground">
-                              📷 {state.photos.length > 1 ? `${idx + 1}. ` : ''}{photo.photo_description}
-                            </p>
-                          ) : null
-                        ).filter(Boolean)}
+
+                    {/* Unified photo descriptions block — hidden when expanded photo view is active */}
+                    {state.photos && state.photos.length > 0 && !expandedPhotoStates.has(state.id) && (
+                      <div className="mt-2 space-y-1.5 border-t border-muted/30 pt-2">
+                        {state.photos.map((photo, idx) => {
+                          const hasHuman = !!photo.photo_description?.trim();
+                          const hasAi = !!photo.transcription?.trim();
+                          if (!hasHuman && !hasAi) return null;
+                          return (
+                            <div key={photo.id || idx} className="text-xs text-muted-foreground">
+                              <div className="flex flex-wrap items-center gap-y-1">
+                                <span className="font-medium mr-1">📷 {state.photos.length > 1 ? `${idx + 1}. ` : ''}</span>
+                                {hasHuman && (
+                                  <span className="text-foreground">{photo.photo_description}</span>
+                                )}
+                              </div>
+                              {hasAi && (
+                                <div className="flex flex-col mt-1 pl-0.5">
+                                  <div className="flex items-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpandedAi(photo.id)}
+                                      className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
+                                    >
+                                      <span>AI Description</span>
+                                      <span className={`absolute ${idx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
+                                        <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                          <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const rawText = photo.transcription?.replace(/^\[photo_analysis\]\s*/, '') || '';
+                                              handleCopy(rawText, `${photo.id}-AI`);
+                                            }}
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                          >
+                                            {copiedMap[`${photo.id}-AI`] ? (
+                                              <>
+                                                <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                                <span className="text-green-500 font-bold">Copied!</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                                <span>Copy</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                        <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
+                                          {photo.transcription?.replace(/^\[photo_analysis\]\s*/, '')}
+                                        </span>
+                                        <details className="text-[10px] text-muted-foreground/60 dark:text-muted-foreground/45 select-none cursor-pointer">
+                                          <summary className="hover:text-foreground font-semibold flex items-center gap-1 focus:outline-none">
+                                            <span>Metadata Details</span>
+                                          </summary>
+                                          <div className="mt-1.5 space-y-1 bg-zinc-50/50 dark:bg-zinc-800/10 p-2 rounded border border-zinc-200/50 dark:border-zinc-700/20 cursor-default">
+                                            <div className="flex justify-between border-b border-zinc-150 dark:border-zinc-850 pb-1">
+                                              <span className="font-semibold text-zinc-700 dark:text-zinc-350">Model:</span>
+                                              <span className="font-mono text-indigo-650 dark:text-indigo-405">{(photo as any).model_id || 'us.amazon.nova-pro-v1:0'}</span>
+                                            </div>
+                                            <div>
+                                              <span className="block font-semibold text-zinc-700 dark:text-zinc-350 mb-0.5">Prompt:</span>
+                                              <span className="block bg-zinc-50 dark:bg-zinc-950 p-2 rounded italic text-[10px] leading-relaxed border border-zinc-150 dark:border-zinc-850 max-h-[140px] overflow-y-auto whitespace-pre-line text-zinc-650 dark:text-zinc-350">
+                                                {(photo as any).system_prompt || 'No active prompt registered.'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        </details>
+                                      </span>
+                                    </button>
+                                  </div>
+                                  {expandedAiPhotos.has(photo.id) && (
+                                    <p className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed mt-1">
+                                      {photo.transcription?.replace(/^\[photo_analysis\]\s*/, '')}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
+                    
+                    {/* Perspectives Badge */}
+                    {(() => {
+                      const wsRemaining = getPerspectivesRemaining(state.id);
+                      const isPending = state.perspectives && state.perspectives.length > 0 && state.perspectives[0].status === 'PENDING';
+
+                      if (wsRemaining !== null) {
+                        // WS-driven: worker has started, show live countdown
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-100/60 text-zinc-400 border border-zinc-200/50 dark:bg-zinc-800/30 dark:text-zinc-500 dark:border-zinc-700/30 select-none">
+                              <svg className="animate-spin h-2.5 w-2.5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                              {wsRemaining > 0 ? `~${wsRemaining}s remaining` : 'Finishing…'}
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      if (isPending) {
+                        // Optimistic: mutation fired but worker hasn't started yet
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-100/60 text-zinc-400 border border-zinc-200/50 dark:bg-zinc-800/30 dark:text-zinc-500 dark:border-zinc-700/30 select-none">
+                              <svg className="animate-spin h-2.5 w-2.5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                              Generating perspectives…
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      if (state.perspectives && state.perspectives.length > 0 && state.perspectives.some(p => p.content)) {
+                        return (
+                          <div className="mt-2 flex items-center">
+                            <button
+                              type="button"
+                              className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50/50 text-indigo-600/70 border border-indigo-200/50 hover:bg-indigo-100/50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30 dark:hover:bg-indigo-900/40 transition-all select-none flex-shrink-0"
+                            >
+                              <span>Perspectives</span>
+                              <span className="absolute left-0 bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left after:absolute after:left-0 after:right-0 after:top-full after:h-2.5 after:content-['']" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                  <span className="font-semibold text-zinc-900 dark:text-white">Perspectives</span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const allText = ['CLAIM', 'SIGNIFICANCE', 'ENTROPY']
+                                        .map(type => {
+                                          const p = state.perspectives!.find(x => x.perspective_type === type);
+                                          return p && p.content ? `${type}:\n${p.content}` : '';
+                                        })
+                                        .filter(Boolean)
+                                        .join('\n\n');
+                                      handleCopy(allText, `${state.id}-ALL`);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                  >
+                                    {copiedMap[`${state.id}-ALL`] ? (
+                                      <>
+                                        <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                        <span className="text-green-500 font-bold">All Copied!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                        <span>Copy All</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                                <div className="space-y-2.5">
+                                  {['CLAIM', 'SIGNIFICANCE', 'ENTROPY'].map(type => {
+                                    const perspective = state.perspectives!.find(p => p.perspective_type === type);
+                                    if (!perspective || !perspective.content) return null;
+                                    const copyKey = `${state.id}-${type}`;
+                                    const isCopied = !!copiedMap[copyKey];
+                                    return (
+                                      <div key={type}>
+                                        <div className="flex items-center justify-between mb-0.5">
+                                          <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{type}</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleCopy(perspective.content, copyKey);
+                                            }}
+                                            className="inline-flex items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all cursor-pointer select-none border border-transparent"
+                                          >
+                                            {isCopied ? (
+                                              <>
+                                                <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                                <span className="text-green-500 font-semibold">Copied!</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                                <span>Copy</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                        <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
+                                          {perspective.content}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </span>
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return null;
+                    })()}
+
                   </div>
                 </div>
 
@@ -654,7 +884,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                   <div className="mt-2 space-y-2">
                     {state.photos.map((photo, idx) => (
                       <div key={photo.id} className="flex gap-2 items-stretch border rounded p-2">
-                        <div className="flex-shrink-0 w-24 relative">
+                        <div className="flex-shrink-0 w-24 relative group/img-container">
                           <img
                             src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
                             alt={photo.photo_description || `Photo ${idx + 1}`}
@@ -669,11 +899,78 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                               }
                             }}
                           />
+                          {/* AI badge removed in favor of inline accordion */}
                         </div>
-                        <div className="flex-1 min-w-0 flex items-center">
-                          {photo.photo_description ? (
-                            <p className="text-sm text-muted-foreground">{photo.photo_description}</p>
-                          ) : (
+                        <div className="flex-1 min-w-0 flex flex-col justify-center gap-1">
+                          {photo.photo_description?.trim() && (
+                            <div className="text-sm text-foreground">
+                              <span>{photo.photo_description}</span>
+                            </div>
+                          )}
+                          {photo.transcription?.trim() ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpandedAi(photo.id)}
+                                  className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
+                                >
+                                  <span>AI Description</span>
+                                  <span className={`absolute ${idx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
+                                      <span className="font-semibold text-zinc-900 dark:text-white">AI Description</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const rawText = photo.transcription?.replace(/^\[photo_analysis\]\s*/, '') || '';
+                                          handleCopy(rawText, `${photo.id}-AI`);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:text-indigo-300 dark:hover:bg-indigo-950/40 transition-all cursor-pointer select-none border border-transparent"
+                                      >
+                                        {copiedMap[`${photo.id}-AI`] ? (
+                                          <>
+                                            <svg className="w-2.5 h-2.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                            <span className="text-green-500 font-bold">Copied!</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" strokeWidth="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" strokeWidth="2"/></svg>
+                                            <span>Copy</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    </div>
+                                    <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
+                                      {photo.transcription?.replace(/^\[photo_analysis\]\s*/, '')}
+                                    </span>
+                                    <details className="text-[10px] text-muted-foreground/60 dark:text-muted-foreground/45 select-none cursor-pointer">
+                                      <summary className="hover:text-foreground font-semibold flex items-center gap-1 focus:outline-none">
+                                        <span>Metadata Details</span>
+                                      </summary>
+                                      <div className="mt-1.5 space-y-1 bg-zinc-50/50 dark:bg-zinc-800/10 p-2 rounded border border-zinc-200/50 dark:border-zinc-700/20 cursor-default">
+                                        <div className="flex justify-between border-b border-zinc-150 dark:border-zinc-850 pb-1">
+                                          <span className="font-semibold text-zinc-700 dark:text-zinc-350">Model:</span>
+                                          <span className="font-mono text-indigo-650 dark:text-indigo-405">{(photo as any).model_id || 'us.amazon.nova-pro-v1:0'}</span>
+                                        </div>
+                                        <div>
+                                          <span className="block font-semibold text-zinc-700 dark:text-zinc-350 mb-0.5">Prompt:</span>
+                                          <span className="block bg-zinc-50 dark:bg-zinc-950 p-2 rounded italic text-[10px] leading-relaxed border border-zinc-150 dark:border-zinc-850 max-h-[120px] overflow-y-auto whitespace-pre-line text-zinc-650 dark:text-zinc-350">
+                                            {(photo as any).system_prompt || 'No active prompt registered.'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </details>
+                                  </span>
+                                </button>
+                              </div>
+                              {expandedAiPhotos.has(photo.id) && (
+                                <span className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed">
+                                  {photo.transcription?.replace(/^\[photo_analysis\]\s*/, '')}
+                                </span>
+                              )}
+                            </div>
+                          ) : !photo.photo_description?.trim() && (
                             <p className="text-xs text-muted-foreground italic">No description</p>
                           )}
                         </div>

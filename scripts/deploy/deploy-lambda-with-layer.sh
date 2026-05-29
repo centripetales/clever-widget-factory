@@ -12,7 +12,7 @@ fi
 
 LAMBDA_DIR="$1"
 FUNCTION_NAME="$2"
-LAYER_ARN="${3:-arn:aws:lambda:us-west-2:131745734428:layer:cwf-common-nodejs:26}"
+LAYER_ARN="${3:-arn:aws:lambda:us-west-2:131745734428:layer:cwf-common-nodejs:28}"
 TIMEOUT_SECONDS="${4:-30}"
 REGION="us-west-2"
 ROLE_ARN="arn:aws:iam::131745734428:role/lambda-execution-role"
@@ -83,6 +83,8 @@ $([ -n "$BEDROCK_REGION" ] && echo "overlay['BEDROCK_REGION'] = '$BEDROCK_REGION
 $([ -n "$SARI_SARI_AGENT_ID" ] && echo "overlay['SARI_SARI_AGENT_ID'] = '$SARI_SARI_AGENT_ID'")
 $([ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && echo "overlay['SARI_SARI_AGENT_ALIAS_ID'] = '$SARI_SARI_AGENT_ALIAS_ID'")
 $([ -n "$ML_LAMBDA_NAME" ] && echo "overlay['ML_LAMBDA_NAME'] = '$ML_LAMBDA_NAME'")
+$([ -n "$WS_API_ENDPOINT" ] && echo "overlay['WS_API_ENDPOINT'] = '$WS_API_ENDPOINT'")
+$([ -n "$PERSPECTIVES_QUEUE_URL" ] && echo "overlay['PERSPECTIVES_QUEUE_URL'] = '$PERSPECTIVES_QUEUE_URL'")
 existing.update(overlay)
 # Output as KEY=VALUE format for AWS CLI
 print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
@@ -102,6 +104,8 @@ print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
     [ -n "$BEDROCK_REGION" ] && ENV_VARS="${ENV_VARS}BEDROCK_REGION=$BEDROCK_REGION,"
     [ -n "$SARI_SARI_AGENT_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ID=$SARI_SARI_AGENT_ID,"
     [ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ALIAS_ID=$SARI_SARI_AGENT_ALIAS_ID,"
+    [ -n "$WS_API_ENDPOINT" ] && ENV_VARS="${ENV_VARS}WS_API_ENDPOINT=$WS_API_ENDPOINT,"
+    [ -n "$PERSPECTIVES_QUEUE_URL" ] && ENV_VARS="${ENV_VARS}PERSPECTIVES_QUEUE_URL=$PERSPECTIVES_QUEUE_URL,"
     ENV_VARS="${ENV_VARS%,}}"
     echo "⚠️  Could not merge existing env vars, using .env.local only"
   else
@@ -131,6 +135,7 @@ else
   [ -n "$SARI_SARI_AGENT_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ID=$SARI_SARI_AGENT_ID,"
   [ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ALIAS_ID=$SARI_SARI_AGENT_ALIAS_ID,"
   [ -n "$ML_LAMBDA_NAME" ] && ENV_VARS="${ENV_VARS}ML_LAMBDA_NAME=$ML_LAMBDA_NAME,"
+  [ -n "$WS_API_ENDPOINT" ] && ENV_VARS="${ENV_VARS}WS_API_ENDPOINT=$WS_API_ENDPOINT,"
   # Remove trailing comma and close JSON
   ENV_VARS="${ENV_VARS%,}}"
   

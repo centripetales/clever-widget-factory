@@ -263,6 +263,17 @@ exports.handler = async (event) => {
         }
       }
 
+      // 4. Trigger RSP Worker via Outbox pattern if sharing is enabled
+      if (shared_with_partners) {
+        const idempotencyKey = require('crypto').createHash('sha256').update(stateId + '-' + Date.now()).digest('hex');
+        const insertOutboxSql = `
+          INSERT INTO rsp_outbox (state_id, idempotency_key, status, triggered_at)
+          VALUES ('${stateId}', '${idempotencyKey}', 'PENDING', NOW())
+          ON CONFLICT (idempotency_key) DO NOTHING
+        `;
+        await queryJSON(insertOutboxSql);
+      }
+
       // Broadcast cache invalidation
       try {
         await broadcastInvalidation({
@@ -368,6 +379,17 @@ exports.handler = async (event) => {
             `;
             await queryJSON(savePhotoRiskSql);
           }
+        }
+
+        // 4. Trigger RSP Worker via Outbox pattern if sharing is enabled
+        if (shared_with_partners) {
+          const idempotencyKey = require('crypto').createHash('sha256').update(stateId + '-' + Date.now()).digest('hex');
+          const insertOutboxSql = `
+            INSERT INTO rsp_outbox (state_id, idempotency_key, status, triggered_at)
+            VALUES ('${stateId}', '${idempotencyKey}', 'PENDING', NOW())
+            ON CONFLICT (idempotency_key) DO NOTHING
+          `;
+          await queryJSON(insertOutboxSql);
         }
       }
 
@@ -655,6 +677,17 @@ exports.handler = async (event) => {
             `;
             await queryJSON(savePhotoRiskSql);
           }
+        }
+
+        // 4. Trigger RSP Worker via Outbox pattern if sharing is enabled
+        if (isShared) {
+          const idempotencyKey = require('crypto').createHash('sha256').update(stateId + '-' + Date.now()).digest('hex');
+          const insertOutboxSql = `
+            INSERT INTO rsp_outbox (state_id, idempotency_key, status, triggered_at)
+            VALUES ('${stateId}', '${idempotencyKey}', 'PENDING', NOW())
+            ON CONFLICT (idempotency_key) DO NOTHING
+          `;
+          await queryJSON(insertOutboxSql);
         }
       };
 

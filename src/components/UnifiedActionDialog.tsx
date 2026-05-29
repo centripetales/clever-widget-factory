@@ -276,22 +276,66 @@ export function ActionForm({
   // Resolve: use prop if provided (dialog mode), otherwise use internal state (page mode)
   const maxwellOpen = onMaxwellOpenChange ? isMaxwellOpen : isMaxwellOpenInternal;
   const maxwellCtx = onMaxwellOpenChange ? maxwellContext : maxwellContextInternal;
+
+  // Fetch states for the action to extract learning takeaways for Copy Context and Maxwell context
+  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
+
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
       onMaxwellOpenChange(open);
     } else {
       setIsMaxwellOpenInternal(open);
       if (open && action) {
+        let implText = '';
+        if (actionStates && Array.isArray(actionStates)) {
+          implText = actionStates.map((state: any) => {
+            let text = state.observation_text || '';
+            if (state.photos && Array.isArray(state.photos)) {
+              const photoTexts = state.photos
+                .map((p: any) => p.transcription ? `Photo AI Analysis: ${p.transcription.replace('\\[photo_analysis\\] ', '')}` : '')
+                .filter(Boolean);
+              if (photoTexts.length > 0) {
+                text += (text ? '\n' : '') + photoTexts.join('\n');
+              }
+            }
+            return text;
+          }).join('\n\n');
+        }
         setMaxwellContextInternal({
           entityId: action.id,
           entityType: 'action',
           entityName: action.title || 'Untitled Action',
           policy: action.policy || '',
-          implementation: '',
+          implementation: implText,
         });
       }
     }
   };
+
+  // Sync implementation text into maxwell context when actionStates loads or changes
+  useEffect(() => {
+    if (isMaxwellOpenInternal && action && maxwellContextInternal) {
+      let implText = '';
+      if (actionStates && Array.isArray(actionStates)) {
+        implText = actionStates.map((state: any) => {
+          let text = state.observation_text || '';
+          if (state.photos && Array.isArray(state.photos)) {
+            const photoTexts = state.photos
+              .map((p: any) => p.transcription ? `Photo AI Analysis: ${p.transcription.replace('\\[photo_analysis\\] ', '')}` : '')
+              .filter(Boolean);
+            if (photoTexts.length > 0) {
+              text += (text ? '\n' : '') + photoTexts.join('\n');
+            }
+          }
+          return text;
+        }).join('\n\n');
+      }
+      
+      if (implText !== maxwellContextInternal.implementation) {
+        setMaxwellContextInternal(prev => prev ? { ...prev, implementation: implText } : null);
+      }
+    }
+  }, [actionStates, isMaxwellOpenInternal, action]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLocalUploading, setIsLocalUploading] = useState(false);
   const uploadCompletedTimeRef = useRef<number>(0);
@@ -304,9 +348,6 @@ export function ActionForm({
 
   // Derive observation count from TanStack cache (preferred over database count)
   const derivedObservationCount = useActionObservationCount(action?.id || '');
-
-  // Fetch states for the action to extract learning takeaways for Copy Context
-  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
 
   const preferName = (value?: string | null) => {
     if (!value) return null;
@@ -1533,14 +1574,12 @@ export function ActionForm({
                   {(formData.attachments || []).map((url, index) => {
                     const isPdf = url.toLowerCase().endsWith('.pdf');
                     const fullUrl = url.startsWith('http') ? url : `https://cwf-dev-assets.s3.us-west-2.amazonaws.com/${url}`;
-
-                    // Use local File object if available (just uploaded), otherwise fetch from S3
                     const file = attachmentFiles.get(url);
                     const thumbnailUrl = getThumbnailUrl(url);
                     const displayUrl = file ? URL.createObjectURL(file) : (thumbnailUrl || fullUrl);
 
                     return (
-                      <div key={index} className="relative">
+                      <div key={index} className="relative group/img-container">
                         {isPdf ? (
                           <div
                             className="h-16 w-16 flex items-center justify-center bg-muted rounded border cursor-pointer hover:bg-muted/80"
@@ -1562,7 +1601,7 @@ export function ActionForm({
                           size="sm"
                           variant="destructive"
                           onClick={() => removeAttachment(index)}
-                          className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0"
+                          className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 z-30"
                         >
                           ×
                         </Button>

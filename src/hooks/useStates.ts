@@ -98,9 +98,11 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
       const previousState = queryClient.getQueryData<Observation>(stateQueryKey(variables.id));
       
       // Optimistically update the specific state cache
+      // Also clear perspectives to signal they are being regenerated
+      const pendingSentinel = [{ perspective_type: 'PENDING', content: '', status: 'PENDING' }];
       queryClient.setQueryData<Observation>(stateQueryKey(variables.id), (old) => {
         if (!old) return old;
-        return { ...old, ...variables.data };
+        return { ...old, ...variables.data, perspectives: pendingSentinel };
       });
       
       // Optimistically update the states list cache
@@ -108,7 +110,7 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
         if (!old) return old;
         return old.map(state => 
           state.id === variables.id 
-            ? { ...state, ...variables.data }
+            ? { ...state, ...variables.data, perspectives: pendingSentinel }
             : state
         );
       });
@@ -119,7 +121,7 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
           if (!old) return old;
           return old.map(state => 
             state.id === variables.id 
-              ? { ...state, ...variables.data }
+              ? { ...state, ...variables.data, perspectives: pendingSentinel }
               : state
           );
         });

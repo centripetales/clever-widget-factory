@@ -13,6 +13,7 @@
 import { useState } from 'react';
 import { apiService } from '@/lib/apiService';
 import { useEnhancedToast } from './useEnhancedToast';
+import { compressImageSimple } from '@/lib/simpleImageCompression';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -132,10 +133,45 @@ export const useImageUpload = () => {
     }
 
     try {
+      let fileToUpload = file;
+      let originalSize = file.size;
+      let compressedSize = file.size;
+      let compressionRatio = 0;
+
+      if (fileType === 'image') {
+        const compressionToast = enhancedToast.showCompressionStart(file.name, file.size);
+        try {
+          const compressionResult = await compressImageSimple(file, {
+            maxSizeMB: 0.5,
+            maxWidthOrHeight: 1024,
+          });
+          fileToUpload = compressionResult.file;
+          compressedSize = compressionResult.compressedSize;
+          compressionRatio = compressionResult.compressionRatio;
+
+          if (compressionRatio > 0) {
+            enhancedToast.showCompressionComplete({
+              ...compressionResult,
+              timings: { total: 0 },
+              stages: [],
+              originalFormat: file.type.split('/')[1] || 'unknown',
+              finalFormat: 'jpeg',
+              algorithm: 'Canvas compression',
+            });
+          }
+        } catch (compressionError) {
+          console.warn('Image compression failed, uploading original:', compressionError);
+          enhancedToast.showCompressionError(
+            'Compression failed, uploading original image.',
+            file.name,
+          );
+        }
+      }
+
       // Step 1: Get presigned POST credentials from backend
       const presignedResponse = await apiService.post('/upload/presigned-url', {
-        filename: file.name,
-        contentType: file.type,
+        filename: fileToUpload.name,
+        contentType: fileToUpload.type,
       });
 
       const { publicUrl, postUrl, postFields } = presignedResponse;
@@ -145,22 +181,22 @@ export const useImageUpload = () => {
       }
 
       // Step 2: Upload directly to S3 via multipart/form-data POST
-      const result = await uploadToS3(postUrl, postFields, file, (pct) => {
-        onProgress?.('uploading', pct, file.name);
+      const result = await uploadToS3(postUrl, postFields, fileToUpload, (pct) => {
+        onProgress?.('uploading', pct, fileToUpload.name);
       });
 
       if (!result.ok) {
         throw new Error(`S3 upload failed: ${result.status} ${result.statusText}`);
       }
 
-      enhancedToast.showUploadSuccess(file.name, publicUrl);
+      enhancedToast.showUploadSuccess(fileToUpload.name, publicUrl);
 
       return {
         url: publicUrl,
-        fileName: file.name,
-        originalSize: file.size,
-        compressedSize: file.size,
-        compressionRatio: 0,
+        fileName: fileToUpload.name,
+        originalSize: originalSize,
+        compressedSize: compressedSize,
+        compressionRatio: compressionRatio,
         fileType: getFileType(file.type),
       };
     } catch (error) {

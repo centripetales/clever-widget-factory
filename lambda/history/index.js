@@ -147,7 +147,40 @@ exports.handler = async (event) => {
             SELECT json_agg(json_build_object(
               'id', sp.id,
               'photo_url', sp.photo_url,
-              'photo_description', sp.photo_description
+              'photo_description', sp.photo_description,
+              'transcription', (
+                SELECT s_trans.state_text 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'model_id', (
+                SELECT COALESCE(pap.model_id, lgc.model_id)
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'system_prompt', (
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              )
             ) ORDER BY sp.photo_order)
             FROM state_photos sp
             WHERE sp.state_id = s.id
@@ -303,7 +336,40 @@ exports.handler = async (event) => {
             SELECT json_agg(json_build_object(
               'id', sp.id,
               'photo_url', sp.photo_url,
-              'photo_description', sp.photo_description
+              'photo_description', sp.photo_description,
+              'transcription', (
+                SELECT s_trans.state_text 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'model_id', (
+                SELECT COALESCE(pap.model_id, lgc.model_id)
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
+              'system_prompt', (
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              )
             ) ORDER BY sp.photo_order)
             FROM state_photos sp
             WHERE sp.state_id = s.id

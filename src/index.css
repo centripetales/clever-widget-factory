@@ -211,6 +211,20 @@ All colors MUST be HSL.
     75% { transform: translateX(4px); }
   }
 
+  /* Collapse transition utilities */
+  .collapse-transition {
+    overflow: hidden;
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+  }
+  .collapse-transition.collapsed {
+    max-height: 0;
+    opacity: 0;
+  }
+  .collapse-transition.open {
+    max-height: 1000px; /* sufficiently large */
+    opacity: 1;
+  }
+
   /* Fill bar animation for progress bar */
   @keyframes fillBar {
     from { width: 0; }

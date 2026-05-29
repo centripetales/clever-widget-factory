@@ -9,6 +9,14 @@ export interface Observation {
   updated_at: string;
   photos: ObservationPhoto[];
   links: ObservationLink[];
+  perspectives?: {
+    perspective_type: string;
+    content: string;
+    status?: string; // 'PENDING' used as optimistic sentinel
+    created_at?: string | null;
+    model_id?: string | null;
+    system_prompt?: string | null;
+  }[];
 }
 
 export interface ObservationPhoto {
@@ -17,6 +25,10 @@ export interface ObservationPhoto {
   photo_url: string;
   photo_description: string | null;
   photo_order: number;
+  transcription?: string | null;
+  model_id?: string | null;
+  system_prompt?: string | null;
+  transcription_created_at?: string | null;
 }
 
 export interface ObservationLink {

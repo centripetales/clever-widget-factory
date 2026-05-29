@@ -120,7 +120,16 @@ exports.handler = async (event) => {
               SELECT json_agg(
                 json_build_object(
                   'photo_url',         sp.photo_url,
-                  'photo_description', sp.photo_description
+                  'photo_description', sp.photo_description,
+                  'transcription', (
+                    SELECT s_trans.state_text 
+                    FROM state_links sl_trans
+                    JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                    WHERE sl_trans.entity_type = 'state_photo' 
+                      AND sl_trans.entity_id = sp.id 
+                      AND s_trans.state_text LIKE '[photo_analysis]%'
+                    LIMIT 1
+                  )
                 ) ORDER BY sp.photo_order
               )
               FROM state_photos sp
