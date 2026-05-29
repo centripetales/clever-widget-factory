@@ -7,6 +7,7 @@ import {
   actionsQueryKey,
   completedActionsQueryKey,
   allActionsQueryKey,
+  actionQueryKey,
   missionsQueryKey,
   explorationsQueryKey,
   experiencesQueryKey,
@@ -61,6 +62,9 @@ export function useCacheInvalidation() {
           queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
+          if (entityId) {
+            queryClient.invalidateQueries({ queryKey: actionQueryKey(entityId) });
+          }
           break;
 
         case 'issue':

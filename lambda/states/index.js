@@ -175,23 +175,34 @@ async function listStates(event, authContext, headers) {
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
+              'transcription_created_at', (
+                SELECT s_trans.created_at 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
               'model_id', (
-                SELECT pap.model_id
+                SELECT COALESCE(pap.model_id, lgc.model_id)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
               'system_prompt', (
-                SELECT pap.system_prompt
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
@@ -215,12 +226,16 @@ async function listStates(event, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content)
+              'content', COALESCE(c.content, sig.content, e.content),
+              'created_at', sp.created_at,
+              'model_id', lgc.model_id,
+              'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
             LEFT JOIN claim_perspectives c ON c.id = sp.id
             LEFT JOIN significance_perspectives sig ON sig.id = sp.id
             LEFT JOIN entropy_perspectives e ON e.id = sp.id
+            LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
         ) as perspectives
@@ -276,23 +291,34 @@ async function getState(id, authContext, headers) {
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
+              'transcription_created_at', (
+                SELECT s_trans.created_at 
+                FROM state_links sl_trans
+                JOIN states s_trans ON sl_trans.state_id = s_trans.id
+                WHERE sl_trans.entity_type = 'state_photo' 
+                  AND sl_trans.entity_id = sp.id 
+                  AND s_trans.state_text LIKE '[photo_analysis]%'
+                LIMIT 1
+              ),
               'model_id', (
-                SELECT pap.model_id
+                SELECT COALESCE(pap.model_id, lgc.model_id)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
               'system_prompt', (
-                SELECT pap.system_prompt
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
@@ -316,12 +342,16 @@ async function getState(id, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content)
+              'content', COALESCE(c.content, sig.content, e.content),
+              'created_at', sp.created_at,
+              'model_id', lgc.model_id,
+              'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
             LEFT JOIN claim_perspectives c ON c.id = sp.id
             LEFT JOIN significance_perspectives sig ON sig.id = sp.id
             LEFT JOIN entropy_perspectives e ON e.id = sp.id
+            LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
         ) as perspectives
@@ -456,6 +486,53 @@ async function updateState(event, id, authContext, headers) {
   const client = await getDbClient();
   
   try {
+    const { action, photo_id, requested_model } = body;
+
+    // Handle custom photo reanalysis request
+    if (action === 'reanalyze_photo' && photo_id) {
+      console.log(`[Reanalyze] Triggering re-analysis for photo ${photo_id} using model ${requested_model}`);
+      
+      await client.query('BEGIN');
+      
+      // 1. Delete existing [photo_analysis] states linked to this photo
+      const oldStatesRes = await client.query(`
+        SELECT state_id FROM state_links 
+        WHERE entity_type = 'state_photo' AND entity_id = $1
+      `, [photo_id]);
+      const oldStateIds = oldStatesRes.rows.map(r => r.state_id);
+      
+      if (oldStateIds.length > 0) {
+        await client.query(`DELETE FROM state_links WHERE state_id = ANY($1)`, [oldStateIds]);
+        await client.query(`DELETE FROM states WHERE id = ANY($1) AND state_text LIKE '[photo_analysis]%'`, [oldStateIds]);
+      }
+      
+      // 2. Set requested_model on the state_photo
+      await client.query(`
+        UPDATE state_photos 
+        SET requested_model = $1 
+        WHERE id = $2
+      `, [requested_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0', photo_id]);
+      
+      await client.query('COMMIT');
+      
+      // 3. Queue SQS perspective run
+      try {
+        const pClient = await getDbClient();
+        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+        pClient.release();
+        
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: id, organizationId })
+        }));
+        console.log('[Reanalyze] Queued perspective run successfully.');
+      } catch (pErr) {
+        console.error('[Reanalyze] Failed to queue perspectives:', pErr);
+      }
+      
+      return await getState(id, authContext, headers);
+    }
+
     await client.query('BEGIN');
 
     // Check permissions before update

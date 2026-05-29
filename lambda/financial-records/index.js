@@ -361,15 +361,16 @@ async function getRecord(id, authContext) {
   const photosResult = await pool.query(
     'SELECT sp.*, ' +
     '  s_trans.state_text AS transcription, ' +
-    '  pap.model_id, ' +
+    '  COALESCE(pap.model_id, lgc.model_id) AS model_id, ' +
     '  pap.version, ' +
-    '  pap.system_prompt ' +
+    '  COALESCE(pap.system_prompt, lgc.system_prompt) AS system_prompt ' +
     ' FROM state_photos sp' +
     ' JOIN state_links sl ON sl.state_id = sp.state_id' +
     ' LEFT JOIN state_links sl_trans ON sl_trans.entity_type = \'state_photo\' AND sl_trans.entity_id = sp.id' +
     ' LEFT JOIN states s_trans ON sl_trans.state_id = s_trans.id AND s_trans.state_text LIKE \'[photo_analysis]%\'' +
     ' LEFT JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = \'photo_analysis_param\'' +
     ' LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id' +
+    ' LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id' +
     ' WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'' +
     ' ORDER BY sp.photo_order',
     [id]

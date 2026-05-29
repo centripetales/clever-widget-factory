@@ -158,22 +158,24 @@ exports.handler = async (event) => {
                 LIMIT 1
               ),
               'model_id', (
-                SELECT pap.model_id
+                SELECT COALESCE(pap.model_id, lgc.model_id)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
               'system_prompt', (
-                SELECT pap.system_prompt
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
@@ -345,22 +347,24 @@ exports.handler = async (event) => {
                 LIMIT 1
               ),
               'model_id', (
-                SELECT pap.model_id
+                SELECT COALESCE(pap.model_id, lgc.model_id)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'
                 LIMIT 1
               ),
               'system_prompt', (
-                SELECT pap.system_prompt
+                SELECT COALESCE(pap.system_prompt, lgc.system_prompt)
                 FROM state_links sl_trans
                 JOIN states s_trans ON sl_trans.state_id = s_trans.id
                 JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = 'photo_analysis_param'
-                JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id
+                LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id
                 WHERE sl_trans.entity_type = 'state_photo' 
                   AND sl_trans.entity_id = sp.id 
                   AND s_trans.state_text LIKE '[photo_analysis]%'

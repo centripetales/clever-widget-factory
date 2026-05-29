@@ -180,10 +180,17 @@ function parseLLMJson(text) {
   }
 }
 
-// Combined observation text getter
+// Combined observation text getter (includes human caption and AI visual descriptions)
 function getCombinedStateText(state) {
-  const photoTexts = (state.photos || []).map(p => p.photo_description).filter(Boolean).join('\n');
-  return [state.state_text, photoTexts].filter(Boolean).join('\n');
+  const photoTexts = (state.photos || []).map(p => {
+    const humanDesc = p.photo_description || '';
+    const aiDesc = p.ai_description ? p.ai_description.replace('[photo_analysis]', '').trim() : '';
+    if (humanDesc && aiDesc) {
+      return `Human Caption: ${humanDesc}\nVisual Description: ${aiDesc}`;
+    }
+    return humanDesc || aiDesc;
+  }).filter(Boolean).join('\n\n');
+  return [state.state_text, photoTexts].filter(Boolean).join('\n\n');
 }
 
 
@@ -229,12 +236,21 @@ async function processPendingRecord(client, record) {
             'photo_order', sp.photo_order,
             'gps_latitude', pme.gps_latitude,
             'gps_longitude', pme.gps_longitude,
+            'requested_model', sp.requested_model,
             'has_analysis', EXISTS(
               SELECT 1 FROM state_links sl2 
               JOIN states s2 ON sl2.state_id = s2.id 
               WHERE sl2.entity_type = 'state_photo' 
                 AND sl2.entity_id = sp.id 
                 AND s2.state_text LIKE '[photo_analysis]%'
+            ),
+            'ai_description', (
+              SELECT s2.state_text FROM state_links sl2
+              JOIN states s2 ON sl2.state_id = s2.id
+              WHERE sl2.entity_type = 'state_photo'
+                AND sl2.entity_id = sp.id
+                AND s2.state_text LIKE '[photo_analysis]%'
+              LIMIT 1
             )
           )
         ) 
@@ -262,9 +278,12 @@ async function processPendingRecord(client, record) {
   const actionLink = linksRes.rows.find(link => link.entity_type === 'action');
   let actionContext = 'None';
   if (actionLink) {
-    const actionRes = await client.query('SELECT title, description, expected_state FROM actions WHERE id = $1', [actionLink.entity_id]);
+    const actionRes = await client.query('SELECT title, description, expected_state, policy FROM actions WHERE id = $1', [actionLink.entity_id]);
     if (actionRes.rows.length > 0) {
-      actionContext = `Action Title: "${actionRes.rows[0].title}"\nExisting State: "${actionRes.rows[0].description}"\nTarget State: "${actionRes.rows[0].expected_state || 'None'}"`;
+      const a = actionRes.rows[0];
+      // Strip HTML from policy field so the LLM sees clean text
+      const policyText = a.policy ? a.policy.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim() : null;
+      actionContext = `Action Title: "${a.title}"\nExisting State: "${a.description}"\nTarget State: "${a.expected_state || 'None'}"${policyText ? `\nStated Method / Best Practice:\n${policyText}` : ''}`;
       const priorStatesRes = await client.query(`
         SELECT s.state_text, s.captured_at 
         FROM state_links sl
@@ -281,7 +300,7 @@ async function processPendingRecord(client, record) {
     }
   }
 
-  // Resolve LLM config
+  // Resolve default LLM config — use Sonnet 4 (same model used by capability + states lambdas)
   const configRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.anthropic.claude-sonnet-4-20250514-v1:0' LIMIT 1`);
   const llmConfig = configRes.rows.length > 0 ? configRes.rows[0] : (await client.query('SELECT * FROM llm_generation_configs ORDER BY created_at DESC LIMIT 1')).rows[0];
   if (!llmConfig) throw new Error('No LLM generation config found in llm_generation_configs');
@@ -318,15 +337,41 @@ async function processPendingRecord(client, record) {
 
     console.log(`[RSP] Running async photo analysis for ${photo.id}...`);
     try {
-      const systemPrompt = "You are a Professional Farm Manager and Expert Agricultural Analyst on an organic farm located in Sapi-an, Capiz, Philippines. Your job is to analyze photos from agricultural logs, identify visible plants, animals, equipment, structures, or landscape features, assess their condition and health, and provide objective observations along with possible causes of those observations.";
-      let userPrompt = "Identify any visible plants, animals, structures, or equipment in the photo. Describe what you see objectively, assess their health or condition, and suggest possible causes for any issues or observations you notice.";
-      if (state.state_text && state.state_text.trim()) {
-        userPrompt += `\n\nUser's Observation Context:\n"${state.state_text.trim()}"\n\nUse this user text to focus your visual analysis on what the user mentioned, complementing their log without being biased to automatically agree with or verify their statements. Maintain strict objective observations.`;
+      // Resolve photo-specific model config (default to cheap Nova Lite as requested, allow override)
+      let currentConfig;
+      const novaLiteRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.amazon.nova-lite-v1:0' LIMIT 1`);
+      currentConfig = novaLiteRes.rows.length > 0 ? novaLiteRes.rows[0] : llmConfig;
+      
+      if (photo.requested_model) {
+        console.log(`[RSP] Photo requested specific model: ${photo.requested_model}`);
+        const specificRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = $1 LIMIT 1`, [photo.requested_model]);
+        if (specificRes.rows.length > 0) {
+          currentConfig = specificRes.rows[0];
+        }
       }
-      const inferenceConfig = { max_tokens: 1000, temperature: 0.1 };
+
+      let systemPrompt = "";
+      let userPrompt = "";
+
+      const isNovaLite = currentConfig.model_id && currentConfig.model_id.includes('nova-lite');
+
+      if (isNovaLite) {
+        systemPrompt = "You are a helpful assistant. Your job is to describe the provided photo objectively and pull any text visible in the image.";
+        userPrompt = "Describe the photo objectively in detail, and extract/transcribe any text or numbers that are visible in the image.";
+        if (state.state_text && state.state_text.trim()) {
+          userPrompt += `\n\nUser's Observation Context:\n"${state.state_text.trim()}"\n\nUse this observation context only to help locate or describe relevant items, but do not hallucinate details.`;
+        }
+      } else {
+        systemPrompt = "You are a professional agricultural data extractor on an organic farm. Your objective is to extract dense, purely factual visual information from images. Do not provide judgments, health assessments, diagnoses, or theories. Document objective observations concisely to minimize token usage.";
+        userPrompt = "Extract all factual visual data from this image. List visible plants, animals, structures, text, and equipment. Use dense, compact formatting with zero redundancy. Do not assess condition or suggest causes.";
+        if (state.state_text && state.state_text.trim()) {
+          userPrompt += `\n\nUser's Observation Context:\n"${state.state_text.trim()}"\n\nUse the context strictly to locate relevant items, but do not hallucinate details. Maintain dense, compact, factual formatting.`;
+        }
+      }
+      const inferenceConfig = currentConfig.inference_config || { max_tokens: 1000, temperature: 0.1 };
       
       const description = await invokeBedrock(
-        llmConfig.model_id, 
+        currentConfig.model_id, 
         systemPrompt, 
         userPrompt, 
         inferenceConfig, 
@@ -358,7 +403,7 @@ async function processPendingRecord(client, record) {
       await client.query(`
         INSERT INTO state_links (state_id, entity_type, entity_id)
         VALUES ($1, 'photo_analysis_param', $2)
-      `, [transStateId, llmConfig.id]);
+      `, [transStateId, currentConfig.id]);
 
       analyzedAny = true;
     } catch (err) {
@@ -388,34 +433,31 @@ async function processPendingRecord(client, record) {
   let configId = llmConfig.id;
 
   if (images.length > 0 && modelId.includes('haiku')) {
-    const visionConfigRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.amazon.nova-pro-v1:0' LIMIT 1`);
-    if (visionConfigRes.rows.length > 0) {
-      modelId = visionConfigRes.rows[0].model_id;
-      systemPrompt = visionConfigRes.rows[0].system_prompt;
-      inferenceConfig = visionConfigRes.rows[0].inference_config;
-      configId = visionConfigRes.rows[0].id;
-    } else {
-      throw new Error('No explicit vision model configured.');
-    }
+    throw new Error('Haiku does not support images. Please use Sonnet or Nova Pro.');
   }
 
   const userPrompt = `
-You are an Expert Agricultural Systems Architect and Master Farm Manager. Your role is to carefully analyze farm operations, synthesize complex biological, structural, and ecological data, and extract high-value, actionable insights.
+You are an Expert Agricultural Systems Architect and Master Farm Manager embedded in a living operational record. Your role is to extract structured epistemic value from farm observations — not to give advice, not to speculate beyond what is stated.
 
-Analyze the attached farm observation.
-State Text: ${getCombinedStateText(state) || 'None'}
+Analyze the following observation:
+Observation: ${getCombinedStateText(state) || 'None'}
 Action Context: ${actionContext}
 
-Extract three distinct epistemic dimensions. CRITICAL INSTRUCTIONS:
-- Be extremely concise and information-dense. 
-- Use direct, declarative statements. 
-- Do NOT repeat information across dimensions. Ensure each dimension offers unique analytical value.
-- Do NOT use filler phrases (e.g., "This observation indicates...", "This observation increases entropy by...").
+Extract three distinct epistemic dimensions. CRITICAL RULES:
+- Be concise and information-dense. Every sentence must carry unique information.
+- Do NOT repeat information across dimensions.
+- Do NOT speculate. If data was not collected, note the absence cleanly — do not infer what the data would have shown.
+- Do NOT use filler openers (e.g. "This observation...", "It is important...", "This suggests...").
+- Do NOT moralize or judge decisions. Record gaps as neutral facts.
+- Write in direct declarative statements only.
 
-1. CLAIM: The raw, objective, observable assertion (based strictly on text + photos).
-2. SIGNIFICANCE: Why is this observation important for achieving our goal? What mechanisms or conditions may have produced the observed outcome? What historical actions, environmental changes, inputs, or state transitions should be reviewed to identify likely causes? What hypotheses does this observation suggest, and what future observations or experiments could help distinguish between them?
-3. ENTROPY: The delta in systemic learning. Does this resolve a mystery (reduction) or expose a new anomaly (increase)? State the exact mystery/anomaly cleanly.
+1. CLAIM: The raw, objective, observable assertion strictly as stated or visible. No interpretation.
+
+2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the stated method/policy for this action, or (b) widely accepted best practice for this type of task — whichever applies. When the policy does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both policy and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
+
+3. ENTROPY: The net change in system knowledge. Did this observation resolve an open question (reduce) or expose a new unknown (increase)? Name the specific question or unknown. Be precise.
 `;
+
 
   const toolConfig = {
     tools: [{
@@ -426,9 +468,9 @@ Extract three distinct epistemic dimensions. CRITICAL INSTRUCTIONS:
           json: {
             type: 'object',
             properties: {
-              claim: { type: 'string', description: 'Raw, objective facts without preamble.' },
-              significance: { type: 'string', description: 'Exploration of mechanisms, likely causes, required historical reviews, and hypotheses testing for future observations.' },
-              entropy: { type: 'string', description: 'Delta in learning (mystery resolved or new anomaly exposed) without filler.' }
+              claim: { type: 'string', description: 'Raw, objective, directly observable facts as stated. No interpretation or inference.' },
+              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' },
+              entropy: { type: 'string', description: 'Net change in system knowledge: which specific question was resolved (reduction) or which new unknown was exposed (increase). Be precise.' }
             },
             required: ['claim', 'significance', 'entropy']
           }
@@ -439,7 +481,8 @@ Extract three distinct epistemic dimensions. CRITICAL INSTRUCTIONS:
   };
 
   try {
-    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, images, toolConfig);
+    // perspectives should not need to look at images directly; they rely on text + AI descriptions
+    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig);
 
     await client.query('BEGIN');
 
@@ -501,6 +544,17 @@ Extract three distinct epistemic dimensions. CRITICAL INSTRUCTIONS:
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, error_message) VALUES ($1, 'CLAIM', $2, 'FAILED', $3)`,
       [state.id, llmConfig.id, err.message]
     );
+    // Broadcast perspectives:complete — triggers cache invalidation on frontend to remove 'Finishing...'
+    try {
+      await broadcastInvalidation({
+        entityType: 'state',
+        entityId: state.id,
+        mutationType: 'updated',
+        organizationId: state.organization_id
+      });
+    } catch (bErr) {
+      console.error('[RSP] Failed to broadcast invalidation on error:', bErr.message);
+    }
     throw err; // re-throw so pending_perspectives gets FAILED status
   }
 
@@ -587,7 +641,23 @@ exports.handler = async (event) => {
                   'photo_description', sp.photo_description,
                   'photo_order', sp.photo_order,
                   'gps_latitude', pme.gps_latitude,
-                  'gps_longitude', pme.gps_longitude
+                  'gps_longitude', pme.gps_longitude,
+                  'requested_model', sp.requested_model,
+                  'has_analysis', EXISTS(
+                    SELECT 1 FROM state_links sl2 
+                    JOIN states s2 ON sl2.state_id = s2.id 
+                    WHERE sl2.entity_type = 'state_photo' 
+                      AND sl2.entity_id = sp.id 
+                      AND s2.state_text LIKE '[photo_analysis]%'
+                  ),
+                  'ai_description', (
+                    SELECT s2.state_text FROM state_links sl2
+                    JOIN states s2 ON sl2.state_id = s2.id
+                    WHERE sl2.entity_type = 'state_photo'
+                      AND sl2.entity_id = sp.id
+                      AND s2.state_text LIKE '[photo_analysis]%'
+                    LIMIT 1
+                  )
                 )
               ) 
               FROM state_photos sp 
@@ -635,10 +705,10 @@ exports.handler = async (event) => {
           }
         }
 
-        // Fetch default LLM Generation Config (using modern Claude 3.5 Haiku)
+        // Fetch default LLM Generation Config (using Claude 3.5 Sonnet)
         const configRes = await client.query(`
           SELECT * FROM llm_generation_configs 
-          WHERE model_id = 'us.anthropic.claude-3-5-haiku-20241022-v1:0'
+          WHERE model_id = 'us.anthropic.claude-3-5-sonnet-20241022-v2:0'
           LIMIT 1
         `);
         const llmConfig = configRes.rows.length > 0 ? configRes.rows[0] : (await client.query('SELECT * FROM llm_generation_configs ORDER BY created_at DESC LIMIT 1')).rows[0];
@@ -665,18 +735,8 @@ exports.handler = async (event) => {
           let inferenceConfig = llmConfig.inference_config;
           let configId = llmConfig.id;
 
-          const visionConfigRes = await client.query(`
-            SELECT * FROM llm_generation_configs 
-            WHERE model_id = 'us.amazon.nova-pro-v1:0'
-            LIMIT 1
-          `);
-          if (visionConfigRes.rows.length > 0) {
-            modelId = visionConfigRes.rows[0].model_id;
-            systemPrompt = visionConfigRes.rows[0].system_prompt;
-            inferenceConfig = visionConfigRes.rows[0].inference_config;
-            configId = visionConfigRes.rows[0].id;
-          } else if (images.length > 0 && modelId.includes('haiku')) {
-            throw new Error('No explicit vision model configured.');
+          if (images.length > 0 && modelId.includes('haiku')) {
+            throw new Error('Haiku does not support images. Please use Sonnet or Nova Pro.');
           }
 
           const userPrompt = `
@@ -717,7 +777,8 @@ Extract these three dimensions clearly and concisely.
             }
           };
 
-          const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, images, toolConfig);
+          // perspectives should not need to look at images directly; they rely on text + AI descriptions
+          const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig);
           
           await client.query('BEGIN');
           
@@ -806,6 +867,21 @@ Extract these three dimensions clearly and concisely.
           SET status = 'FAILED', last_error = $1 
           WHERE id = $2
         `, [err.message, record.id]);
+        
+        // Broadcast websocket invalidation to clear 'Finishing...' state on frontend
+        try {
+          const stateRes = await client.query('SELECT organization_id FROM states WHERE id = $1', [record.state_id]);
+          if (stateRes.rows.length > 0) {
+            await broadcastInvalidation({
+              entityType: 'state',
+              entityId: record.state_id,
+              mutationType: 'updated',
+              organizationId: stateRes.rows[0].organization_id
+            });
+          }
+        } catch (bErr) {
+          console.error('Failed to broadcast invalidation in manual mode catch:', bErr.message);
+        }
       }
     }
 
