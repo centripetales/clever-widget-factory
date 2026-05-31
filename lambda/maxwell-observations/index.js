@@ -1,6 +1,11 @@
 const { getAuthorizerContext, buildOrganizationFilter, hasPermission } = require('/opt/nodejs/authorizerContext');
 const { getDbClient } = require('/opt/nodejs/db');
 const { escapeLiteral } = require('/opt/nodejs/sqlUtils');
+const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
+
+const bedrockClient = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-west-2' });
+const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+
 
 async function queryJSON(sql) {
   const client = await getDbClient();
@@ -45,6 +50,95 @@ function buildActionGroupResponse(actionGroup, apiPath, httpMethod, statusCode, 
   };
 }
 
+async function handleAnalyzeInterventions(params, organizationId, buildActionGroupResponse, actionGroup, apiPath, httpMethod) {
+  const userDirective = params.user_directive;
+  
+  if (!userDirective) {
+    return buildActionGroupResponse(actionGroup, apiPath, httpMethod, 400, {
+      error: 'Missing required parameter: user_directive',
+    });
+  }
+
+  try {
+    const sql = `
+      SELECT 
+        s.id as location_id,
+        s.state_text as description,
+        s.captured_at,
+        sp.photo_description as last_observation,
+        pme.gps_latitude as lat,
+        pme.gps_longitude as lon,
+        (SELECT content FROM entropy_perspectives ep JOIN state_perspectives s_p ON ep.id = s_p.id WHERE s_p.state_id = s.id LIMIT 1) as entropy_context
+      FROM states s
+      JOIN state_photos sp ON s.id = sp.state_id
+      JOIN photo_metadata_extractions pme ON sp.photo_url = pme.photo_url
+      WHERE pme.gps_latitude IS NOT NULL
+        AND s.organization_id = '${escapeLiteral(organizationId)}'
+      ORDER BY s.captured_at DESC
+      LIMIT 20;
+    `;
+
+    const locations = await queryJSON(sql);
+
+    const prompt = `Human: You are Maxwell, the Decision Support Synthesis Engine for Clever Widget Factory.
+The user states: "${userDirective}"
+
+The current system time is: ${new Date().toISOString()}
+
+Here are the known physical locations in our GPS registry and their last known states (derived from our reality stratification pipeline). Pay careful attention to the "captured_at" timestamp.
+
+${JSON.stringify(locations, null, 2)}
+
+Your task:
+1. Filter the locations to ONLY those that match the user's intent.
+2. Detail the exact physical execution instructions the drone requires to fulfill this request at each valid location (e.g., flight altitude, camera angle).
+3. Recommend whether the drone should be dispatched to these GPS coordinates.
+4. Output your response STRICTLY as a JSON object with two keys:
+   - "synthesis_report": A human-readable markdown text detailing your hypotheses, expected outcomes, filtering logic, and proposed flight specifications.
+   - "proposed_flight_manifest": A machine-readable array of objects. Each object must have "location_id", "gps" (with lat and lon), and "flight_specs" (with approach_altitude_ft, camera_tilt_deg, focus_distance_ft).
+
+Do not wrap the JSON in Markdown code blocks, just output the raw JSON.
+
+Assistant:`;
+
+    const command = new InvokeModelCommand({
+      modelId: MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    
+    const response = await bedrockClient.send(command);
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    const llmOutput = responseBody.content[0].text.trim();
+    
+    let parsedOutput;
+    try {
+      // Remove possible markdown wrapping if the LLM ignores instructions
+      const cleanedOutput = llmOutput.replace(/^```json\n?/, '').replace(/```$/, '').trim();
+      parsedOutput = JSON.parse(cleanedOutput);
+    } catch (err) {
+      console.error('Failed to parse LLM JSON:', err, 'Raw Output:', llmOutput);
+      parsedOutput = {
+        synthesis_report: llmOutput,
+        proposed_flight_manifest: []
+      };
+    }
+
+    return buildActionGroupResponse(actionGroup, apiPath, httpMethod, 200, parsedOutput);
+  } catch (error) {
+    console.error('Analyze Interventions error:', error);
+    return buildActionGroupResponse(actionGroup, apiPath, httpMethod, 500, {
+      error: 'Internal error analyzing interventions: ' + error.message,
+    });
+  }
+}
+
+
 exports.handler = async (event) => {
   console.log('Maxwell observations event:', JSON.stringify(event, null, 2));
 
@@ -58,6 +152,10 @@ exports.handler = async (event) => {
 
   // Parse parameters from Bedrock Action Group format
   const params = parseActionGroupParams(event);
+
+  if (apiPath === '/analyzeInterventions') {
+    return await handleAnalyzeInterventions(params, organizationId, buildActionGroupResponse, actionGroup, apiPath, httpMethod);
+  }
   
   // Try to get entityId and entityType from session attributes first, then fall back to parameters
   // This handles the case where the Agent passes literal "{session.entityId}" strings

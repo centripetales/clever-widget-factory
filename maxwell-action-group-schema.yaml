@@ -39,3 +39,54 @@ paths:
       responses:
         "200":
           description: Observations retrieved successfully
+  /analyzeInterventions:
+    post:
+      operationId: analyzeInterventions
+      description: Analyzes unresolved high-entropy states and physical locations to propose a Decision Support Synthesis report and drone flight targets based on user directives.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_directive:
+                  type: string
+                  description: The specific command or hypothesis the user wants analyzed (e.g., 'Establish a benchmark for coconuts', 'Check impact of recent rain').
+              required:
+                - user_directive
+      responses:
+        "200":
+          description: Analysis generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  synthesis_report:
+                    type: string
+                    description: Human-readable markdown text detailing the hypotheses, expected outcomes, and proposed actor routing logic.
+                  proposed_flight_manifest:
+                    type: array
+                    description: Machine-readable array of physical targets for drone execution.
+                    items:
+                      type: object
+                      properties:
+                        location_id:
+                          type: string
+                        gps:
+                          type: object
+                          properties:
+                            lat:
+                              type: number
+                            lon:
+                              type: number
+                        flight_specs:
+                          type: object
+                          properties:
+                            approach_altitude_ft:
+                              type: number
+                            camera_tilt_deg:
+                              type: number
+                            focus_distance_ft:
+                              type: number

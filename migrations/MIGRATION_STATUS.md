@@ -205,3 +205,16 @@ If rollback is needed:
 ---
 
 **Migration completed successfully on 2025-02-05 by Kiro AI Assistant**
+
+## 2026-05-31: Drop Orphaned RSP Schemas (Migration 010)
+
+**Status**: ✅ Complete
+
+### Summary
+Cleaned up the data layer by dropping the `state_strata` and `telemetry_dashboard_cache` tables. These tables were introduced in Migration 006 but were superseded by the Phronesis Architecture (Migration 009) which introduced `state_perspectives` (`CLAIM`, `SIGNIFICANCE`, `ENTROPY`). The legacy tables were abandoned but not dropped, creating an architectural disconnect.
+
+### Changes Made
+- ✅ Executed `migrations/010-drop-orphaned-rsp-schemas.sql` via `cwf-db-migration` Lambda.
+- ✅ Dropped `state_strata` CASCADE.
+- ✅ Dropped `telemetry_dashboard_cache` CASCADE.
+- ✅ Retained `rsp_outbox` as it remains actively utilized by `lambda/actions/index.js` for async event queuing.
