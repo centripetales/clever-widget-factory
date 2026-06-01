@@ -1,6 +1,7 @@
 const { getAuthorizerContext, buildOrganizationFilter, hasPermission } = require('/opt/nodejs/authorizerContext');
 const { getDbClient } = require('/opt/nodejs/db');
 const { escapeLiteral } = require('/opt/nodejs/sqlUtils');
+const { broadcastWs } = require('/opt/nodejs/broadcastWs');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 const bedrockClient = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -21,6 +22,11 @@ function parseActionGroupParams(event) {
   const rawParams = event.parameters || [];
   for (const p of rawParams) {
     params[p.name] = p.value;
+  }
+  if (event.requestBody?.content?.['application/json']?.properties) {
+    for (const p of event.requestBody.content['application/json'].properties) {
+      params[p.name] = p.value;
+    }
   }
   return params;
 }
@@ -112,7 +118,19 @@ async function handleIdentifyDroneMonitoringTargets(params, organizationId, buil
       return buildActionGroupResponse(actionGroup, apiPath, httpMethod, 200, { raw_matches: semanticMatches });
     }
 
-    const SIMILARITY_THRESHOLD = 0.55; // Threshold to drop noisy/irrelevant context
+    // Broadcast the raw matches and SQL to the client for transparency
+    await broadcastWs({
+      type: 'maxwell:debug_query',
+      payload: {
+        directive: userDirective,
+        threshold_used: 0.45,
+        total_raw_matches: semanticMatches.length,
+        top_raw_matches: semanticMatches.slice(0, 10)
+      },
+      organizationId: organizationId
+    });
+
+    const SIMILARITY_THRESHOLD = 0.45; // Lowered threshold to ensure we don't aggressively drop context
     const filteredMatches = semanticMatches.filter(m => m.similarity > SIMILARITY_THRESHOLD);
 
     const assetIds = filteredMatches.filter(m => m.entity_type === 'tool' || m.entity_type === 'part').map(m => `'${m.entity_id}'`);

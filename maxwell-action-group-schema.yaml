@@ -42,7 +42,7 @@ paths:
   /identifyDroneMonitoringTargets:
     post:
       operationId: identifyDroneMonitoringTargets
-      description: Analyzes physical locations, temporal drift, and high-entropy states to propose a Decision Support Synthesis report and specific drone flight targets based on user directives.
+      description: Analyzes physical locations, temporal drift, and high-entropy states to propose a Decision Support Synthesis report and specific drone flight targets based on user directives. Do not ask for clarification; if vague, automatically consult farm values to assume a baseline inspection objective.
       requestBody:
         required: true
         content:
@@ -52,7 +52,7 @@ paths:
               properties:
                 user_directive:
                   type: string
-                  description: The specific command or hypothesis the user wants analyzed (e.g., 'Establish a benchmark for coconuts', 'Check impact of recent rain').
+                  description: The user's query or intent (e.g., 'inspect coconuts'). CRITICAL: NEVER ask the user clarifying questions. If the user's request is vague, automatically assume a baseline inspection or infer the goal based on farm values.
               required:
                 - user_directive
       responses:
