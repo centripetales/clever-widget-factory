@@ -39,10 +39,10 @@ paths:
       responses:
         "200":
           description: Observations retrieved successfully
-  /analyzeInterventions:
+  /identifyDroneMonitoringTargets:
     post:
-      operationId: analyzeInterventions
-      description: Analyzes unresolved high-entropy states and physical locations to propose a Decision Support Synthesis report and drone flight targets based on user directives.
+      operationId: identifyDroneMonitoringTargets
+      description: Analyzes physical locations, temporal drift, and high-entropy states to propose a Decision Support Synthesis report and specific drone flight targets based on user directives.
       requestBody:
         required: true
         content:
@@ -57,7 +57,7 @@ paths:
                 - user_directive
       responses:
         "200":
-          description: Analysis generated successfully
+          description: Drone targets identified successfully
           content:
             application/json:
               schema:
@@ -65,7 +65,7 @@ paths:
                 properties:
                   synthesis_report:
                     type: string
-                    description: Human-readable markdown text detailing the hypotheses, expected outcomes, and proposed actor routing logic.
+                    description: Human-readable markdown text detailing the hypotheses, expected outcomes, and proposed drone target routing logic.
                   proposed_flight_manifest:
                     type: array
                     description: Machine-readable array of physical targets for drone execution.

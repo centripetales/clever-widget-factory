@@ -125,6 +125,93 @@ exports.handler = async (event) => {
 
 
     // Tools endpoint
+    
+    // Tools Geolocation endpoint
+    if (httpMethod === 'GET' && path.match(/\/tools\/[a-f0-9-]+\/geolocation$/)) {
+      const toolId = path.split('/')[2];
+      const sql = `
+        SELECT 
+          pme.gps_latitude as lat, 
+          pme.gps_longitude as lon,
+          'tool_image' as source
+        FROM tools t
+        JOIN photo_metadata_extractions pme ON pme.photo_url LIKE '%' || split_part(t.image_url, '/', -1)
+        WHERE t.id = '${escapeLiteral(toolId)}'
+          AND t.image_url IS NOT NULL 
+          AND t.image_url != ''
+          AND pme.gps_latitude IS NOT NULL
+        UNION ALL
+        SELECT 
+          pme.gps_latitude as lat, 
+          pme.gps_longitude as lon,
+          'state_photo' as source
+        FROM state_photos sp
+        JOIN state_links sl ON sl.state_id = sp.state_id
+        JOIN photo_metadata_extractions pme ON pme.photo_url LIKE '%' || split_part(sp.photo_url, '/', -1)
+        WHERE sl.entity_id = '${escapeLiteral(toolId)}' 
+          AND sl.entity_type = 'tool'
+          AND pme.gps_latitude IS NOT NULL
+        LIMIT 1;
+      `;
+      const result = await queryJSON(sql);
+      if (result && result.length > 0) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ data: result[0] })
+        };
+      } else {
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ error: 'Geolocation not found' })
+        };
+      }
+    }
+
+    // Parts Geolocation endpoint
+    if (httpMethod === 'GET' && path.match(/\/parts\/[a-f0-9-]+\/geolocation$/)) {
+      const partId = path.split('/')[2];
+      const sql = `
+        SELECT 
+          pme.gps_latitude as lat, 
+          pme.gps_longitude as lon,
+          'part_image' as source
+        FROM parts p
+        JOIN photo_metadata_extractions pme ON pme.photo_url LIKE '%' || split_part(p.image_url, '/', -1)
+        WHERE p.id = '${escapeLiteral(partId)}'
+          AND p.image_url IS NOT NULL 
+          AND p.image_url != ''
+          AND pme.gps_latitude IS NOT NULL
+        UNION ALL
+        SELECT 
+          pme.gps_latitude as lat, 
+          pme.gps_longitude as lon,
+          'state_photo' as source
+        FROM state_photos sp
+        JOIN state_links sl ON sl.state_id = sp.state_id
+        JOIN photo_metadata_extractions pme ON pme.photo_url LIKE '%' || split_part(sp.photo_url, '/', -1)
+        WHERE sl.entity_id = '${escapeLiteral(partId)}' 
+          AND sl.entity_type = 'part'
+          AND pme.gps_latitude IS NOT NULL
+        LIMIT 1;
+      `;
+      const result = await queryJSON(sql);
+      if (result && result.length > 0) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ data: result[0] })
+        };
+      } else {
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ error: 'Geolocation not found' })
+        };
+      }
+    }
+
     if (path.endsWith('/tools') || path.match(/\/tools\/[a-f0-9-]+$/)) {
       if (httpMethod === 'POST' && path.endsWith('/tools')) {
         const body = JSON.parse(event.body || '{}');
@@ -394,7 +481,8 @@ exports.handler = async (event) => {
             active_checkouts.expected_return_date,
             active_checkouts.intended_usage as checkout_intended_usage,
             active_checkouts.notes as checkout_notes,
-            active_checkouts.action_id as checkout_action_id
+            active_checkouts.action_id as checkout_action_id,
+            tool_gps.gps_latitude, tool_gps.gps_longitude
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
           LEFT JOIN LATERAL (
@@ -409,6 +497,28 @@ exports.handler = async (event) => {
             WHERE cognito_user_id = active_checkouts.user_id
             LIMIT 1
           ) om_checkout ON true
+          LEFT JOIN LATERAL (
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, s_sub.captured_at as sort_time
+            FROM state_links sl_sub
+            JOIN states s_sub ON sl_sub.state_id = s_sub.id
+            JOIN state_photos sp_sub ON s_sub.id = sp_sub.state_id
+            JOIN photo_metadata_extractions pme_sub ON pme_sub.photo_url LIKE '%' || split_part(sp_sub.photo_url, '/', -1)
+            WHERE sl_sub.entity_id = tools.id
+              AND sl_sub.entity_type = 'tool'
+              AND pme_sub.gps_latitude IS NOT NULL
+            
+            UNION ALL
+            
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, tools.created_at as sort_time
+            FROM photo_metadata_extractions pme_sub
+            WHERE tools.image_url IS NOT NULL
+              AND tools.image_url != ''
+              AND pme_sub.photo_url LIKE '%' || split_part(tools.image_url, '/', -1)
+              AND pme_sub.gps_latitude IS NOT NULL
+              
+            ORDER BY sort_time DESC
+            LIMIT 1
+          ) tool_gps ON true
           ${whereClause}
           ORDER BY tools.id, tools.name 
           LIMIT ${limit} OFFSET ${offset}
@@ -687,9 +797,32 @@ exports.handler = async (event) => {
               REPLACE(parts.image_url, 'https://oskwnlhuuxjfuwnjuavn.supabase.co/storage/v1/object/public/', 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/')
             ELSE parts.image_url 
           END as image_url,
-          parts.created_at, parts.updated_at 
+          parts.created_at, parts.updated_at,
+          part_gps.gps_latitude, part_gps.gps_longitude
         FROM parts
         LEFT JOIN tools parent_tool ON parts.parent_structure_id = parent_tool.id
+          LEFT JOIN LATERAL (
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, s_sub.captured_at as sort_time
+            FROM state_links sl_sub
+            JOIN states s_sub ON sl_sub.state_id = s_sub.id
+            JOIN state_photos sp_sub ON s_sub.id = sp_sub.state_id
+            JOIN photo_metadata_extractions pme_sub ON pme_sub.photo_url LIKE '%' || split_part(sp_sub.photo_url, '/', -1)
+            WHERE sl_sub.entity_id = parts.id
+              AND sl_sub.entity_type = 'part'
+              AND pme_sub.gps_latitude IS NOT NULL
+            
+            UNION ALL
+            
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, parts.created_at as sort_time
+            FROM photo_metadata_extractions pme_sub
+            WHERE parts.image_url IS NOT NULL
+              AND parts.image_url != ''
+              AND pme_sub.photo_url LIKE '%' || split_part(parts.image_url, '/', -1)
+              AND pme_sub.gps_latitude IS NOT NULL
+              
+            ORDER BY sort_time DESC
+            LIMIT 1
+          ) part_gps ON true
         WHERE parts.sellable = true
         ORDER BY parts.name 
         LIMIT ${limit} OFFSET ${offset}
@@ -726,9 +859,32 @@ exports.handler = async (event) => {
               REPLACE(parts.image_url, 'https://oskwnlhuuxjfuwnjuavn.supabase.co/storage/v1/object/public/', 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/')
             ELSE parts.image_url 
           END as image_url,
-          parts.created_at, parts.updated_at 
+          parts.created_at, parts.updated_at,
+          part_gps.gps_latitude, part_gps.gps_longitude
         FROM parts
         LEFT JOIN tools parent_tool ON parts.parent_structure_id = parent_tool.id
+          LEFT JOIN LATERAL (
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, s_sub.captured_at as sort_time
+            FROM state_links sl_sub
+            JOIN states s_sub ON sl_sub.state_id = s_sub.id
+            JOIN state_photos sp_sub ON s_sub.id = sp_sub.state_id
+            JOIN photo_metadata_extractions pme_sub ON pme_sub.photo_url LIKE '%' || split_part(sp_sub.photo_url, '/', -1)
+            WHERE sl_sub.entity_id = parts.id
+              AND sl_sub.entity_type = 'part'
+              AND pme_sub.gps_latitude IS NOT NULL
+            
+            UNION ALL
+            
+            SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, parts.created_at as sort_time
+            FROM photo_metadata_extractions pme_sub
+            WHERE parts.image_url IS NOT NULL
+              AND parts.image_url != ''
+              AND pme_sub.photo_url LIKE '%' || split_part(parts.image_url, '/', -1)
+              AND pme_sub.gps_latitude IS NOT NULL
+              
+            ORDER BY sort_time DESC
+            LIMIT 1
+          ) part_gps ON true
         ${whereClause}
         ORDER BY parts.name 
         LIMIT ${limit} OFFSET ${offset}

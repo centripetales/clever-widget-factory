@@ -1,7 +1,8 @@
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, MapPin, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
 import { InventoryHistoryDialog } from "@/components/InventoryHistoryDialog";
@@ -20,7 +21,7 @@ export const StockDetails = ({
   onBack,
 }: StockDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
-  
+
   const getStockStatusBadge = () => {
     if (stock.current_quantity === 0) {
       return <Badge variant="destructive">Out of Stock</Badge>;
@@ -62,7 +63,7 @@ export const StockDetails = ({
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="details" className="space-y-4">
               <Card>
                 <CardHeader>
@@ -103,6 +104,42 @@ export const StockDetails = ({
                   )}
                 </CardContent>
               </Card>
+
+              {stock.gps_latitude && stock.gps_longitude && (
+                <Card className="relative group overflow-hidden">
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="secondary"
+                        className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Maximize2 className="h-4 w-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-[90vw] w-[90vw] h-[90vh] p-0 border-none bg-transparent overflow-hidden">
+                      <iframe 
+                        width="100%" 
+                        height="100%" 
+                        frameBorder="0" 
+                        style={{ border: 0, borderRadius: 'var(--radius)' }}
+                        src={`https://maps.google.com/maps?q=${stock.gps_latitude},${stock.gps_longitude}&hl=en&z=17&t=k&output=embed`}
+                        allowFullScreen
+                      ></iframe>
+                    </DialogContent>
+                  </Dialog>
+                  <CardContent className="p-0 h-64">
+                    <iframe 
+                      width="100%" 
+                      height="100%" 
+                      frameBorder="0" 
+                      style={{ border: 0 }}
+                      src={`https://maps.google.com/maps?q=${stock.gps_latitude},${stock.gps_longitude}&hl=en&z=17&t=k&output=embed`}
+                      allowFullScreen
+                    ></iframe>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
@@ -118,7 +155,7 @@ export const StockDetails = ({
         <div className="space-y-6">
           {stock.image_url && (
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 flex flex-col gap-4">
                 <img
                   src={getThumbnailUrl(stock.image_url) || ''}
                   alt={stock.name}
