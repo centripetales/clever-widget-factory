@@ -1,7 +1,8 @@
-import { ArrowLeft, Plus, Zap } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Tool } from "@/hooks/tools/useToolsData";
 import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
@@ -113,6 +114,42 @@ export const ToolDetails = ({
                   )}
                 </CardContent>
               </Card>
+
+              {tool.gps_latitude && tool.gps_longitude && (
+                <Card className="relative group overflow-hidden">
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="secondary"
+                        className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Maximize2 className="h-4 w-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-[90vw] w-[90vw] h-[90vh] p-0 border-none bg-transparent overflow-hidden">
+                      <iframe 
+                        width="100%" 
+                        height="100%" 
+                        frameBorder="0" 
+                        style={{ border: 0, borderRadius: 'var(--radius)' }}
+                        src={`https://maps.google.com/maps?q=${tool.gps_latitude},${tool.gps_longitude}&hl=en&z=17&t=k&output=embed`}
+                        allowFullScreen
+                      ></iframe>
+                    </DialogContent>
+                  </Dialog>
+                  <CardContent className="p-0 h-64">
+                    <iframe 
+                      width="100%" 
+                      height="100%" 
+                      frameBorder="0" 
+                      style={{ border: 0 }}
+                      src={`https://maps.google.com/maps?q=${tool.gps_latitude},${tool.gps_longitude}&hl=en&z=17&t=k&output=embed`}
+                      allowFullScreen
+                    ></iframe>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
@@ -140,9 +177,9 @@ export const ToolDetails = ({
                             </div>
                             <Badge variant="outline" className="capitalize">
                               {record.change_type === 'created' ? 'Created' :
-                               record.change_type === 'action_created' ? 'Action' :
-                               record.change_type === 'status_change' ? 'Status Changed' :
-                               record.change_type === 'updated' ? 'Updated' : record.change_type}
+                                record.change_type === 'action_created' ? 'Action' :
+                                  record.change_type === 'status_change' ? 'Status Changed' :
+                                    record.change_type === 'updated' ? 'Updated' : record.change_type}
                             </Badge>
                           </div>
 
@@ -213,7 +250,7 @@ export const ToolDetails = ({
         <div className="space-y-6">
           {tool.image_url && (
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 flex flex-col gap-4">
                 <img
                   src={getThumbnailUrl(tool.image_url) || ''}
                   alt={tool.name}

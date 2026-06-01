@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
 import { AssetHistoryDialog } from "./AssetHistoryDialog";
@@ -12,6 +12,7 @@ import { PrismIcon } from "@/components/icons/PrismIcon";
 import { useMemo, memo, useRef } from "react";
 
 import { CombinedAsset } from '@/hooks/useCombinedAssets';
+import { useToast } from "@/hooks/use-toast";
 
 interface CheckoutInfo {
   user_name: string;
@@ -41,28 +42,28 @@ interface CombinedAssetCardProps {
 const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAssetCardProps) => {
   // Compare primitive props
   if (prevProps.canEdit !== nextProps.canEdit ||
-      prevProps.isAdmin !== nextProps.isAdmin ||
-      prevProps.currentUserId !== nextProps.currentUserId ||
-      prevProps.currentUserEmail !== nextProps.currentUserEmail ||
-      prevProps.itemCount !== nextProps.itemCount ||
-      prevProps.checkoutInfo?.user_id !== nextProps.checkoutInfo?.user_id) {
+    prevProps.isAdmin !== nextProps.isAdmin ||
+    prevProps.currentUserId !== nextProps.currentUserId ||
+    prevProps.currentUserEmail !== nextProps.currentUserEmail ||
+    prevProps.itemCount !== nextProps.itemCount ||
+    prevProps.checkoutInfo?.user_id !== nextProps.checkoutInfo?.user_id) {
     return false;
   }
 
   // Deep compare the asset object
   const prevAsset = prevProps.asset;
   const nextAsset = nextProps.asset;
-  
+
   // Check if asset reference is the same (fast path)
   if (prevAsset === nextAsset) {
     return true;
   }
-  
+
   // Check if asset ID is different (different asset)
   if (prevAsset.id !== nextAsset.id) {
     return false;
   }
-  
+
   // Check key properties that are most likely to change
   const keyChanges = {
     name: prevAsset.name !== nextAsset.name,
@@ -73,30 +74,30 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
     updated_at: prevAsset.updated_at !== nextAsset.updated_at
   };
-  
+
   const hasKeyChanges = Object.values(keyChanges).some(Boolean);
   if (hasKeyChanges) {
     return false;
   }
-  
+
   // Check all other properties
   if (prevAsset.description !== nextAsset.description ||
-      prevAsset.category !== nextAsset.category ||
-      prevAsset.serial_number !== nextAsset.serial_number ||
-      prevAsset.minimum_quantity !== nextAsset.minimum_quantity ||
-      prevAsset.unit !== nextAsset.unit ||
-      prevAsset.cost_per_unit !== nextAsset.cost_per_unit ||
-      prevAsset.cost_evidence_url !== nextAsset.cost_evidence_url ||
-      prevAsset.supplier !== nextAsset.supplier ||
-      prevAsset.image_url !== nextAsset.image_url ||
-      prevAsset.storage_location !== nextAsset.storage_location ||
-      prevAsset.storage_vicinity !== nextAsset.storage_vicinity ||
-      prevAsset.parent_structure_id !== nextAsset.parent_structure_id ||
-      prevAsset.parent_structure_name !== nextAsset.parent_structure_name ||
-      prevAsset.legacy_storage_vicinity !== nextAsset.legacy_storage_vicinity ||
-      prevAsset.area_display !== nextAsset.area_display ||
-      prevAsset.accountable_person_id !== nextAsset.accountable_person_id ||
-      prevAsset.created_at !== nextAsset.created_at) {
+    prevAsset.category !== nextAsset.category ||
+    prevAsset.serial_number !== nextAsset.serial_number ||
+    prevAsset.minimum_quantity !== nextAsset.minimum_quantity ||
+    prevAsset.unit !== nextAsset.unit ||
+    prevAsset.cost_per_unit !== nextAsset.cost_per_unit ||
+    prevAsset.cost_evidence_url !== nextAsset.cost_evidence_url ||
+    prevAsset.supplier !== nextAsset.supplier ||
+    prevAsset.image_url !== nextAsset.image_url ||
+    prevAsset.storage_location !== nextAsset.storage_location ||
+    prevAsset.storage_vicinity !== nextAsset.storage_vicinity ||
+    prevAsset.parent_structure_id !== nextAsset.parent_structure_id ||
+    prevAsset.parent_structure_name !== nextAsset.parent_structure_name ||
+    prevAsset.legacy_storage_vicinity !== nextAsset.legacy_storage_vicinity ||
+    prevAsset.area_display !== nextAsset.area_display ||
+    prevAsset.accountable_person_id !== nextAsset.accountable_person_id ||
+    prevAsset.created_at !== nextAsset.created_at) {
     return false;
   }
 
@@ -120,6 +121,7 @@ export const CombinedAssetCard = memo(({
   onAddObservation,
   itemCount
 }: CombinedAssetCardProps) => {
+  const { toast } = useToast();
   const checkoutDateDisplay = useMemo(() => {
     if (!checkoutInfo?.checkout_date) return null;
     const parsedDate = new Date(checkoutInfo.checkout_date);
@@ -138,7 +140,7 @@ export const CombinedAssetCard = memo(({
     });
     return `${datePart} at ${timePart}`;
   }, [checkoutInfo?.checkout_date]);
-  
+
   function getStatusBadge() {
     if (asset.type === 'asset') {
       if (asset.is_checked_out) {
@@ -167,7 +169,7 @@ export const CombinedAssetCard = memo(({
   const statusBadge = useMemo(() => {
     return getStatusBadge();
   }, [asset.type, asset.is_checked_out, asset.status, asset.minimum_quantity, asset.current_quantity]);
-  
+
   const iconColor = useMemo(() => {
     return getIconColor();
   }, [asset.type]);
@@ -237,7 +239,7 @@ export const CombinedAssetCard = memo(({
             </div>
           )}
         </div>
-        
+
         {(asset.type === 'asset' || asset.category) && (
           <div className="flex flex-wrap gap-1 -mt-1">
             {asset.type === 'asset' && asset.is_checked_out && statusBadge}
@@ -267,28 +269,74 @@ export const CombinedAssetCard = memo(({
               <span className="font-medium">Serial:</span> {asset.serial_number}
             </div>
           )}
-          
-          
+
+
           {asset.type === 'stock' && (() => {
             const areaDisplay = asset.area_display || asset.parent_structure_name;
             const locationParts = [];
             if (areaDisplay) locationParts.push(areaDisplay);
             if (asset.storage_location) locationParts.push(asset.storage_location);
             const locationStr = locationParts.length > 0 ? ` at ${locationParts.join(' - ')}` : '';
-            
+
             return (
               <div>
                 {asset.current_quantity} {asset.unit || 'pieces'}{locationStr}
                 {asset.minimum_quantity && (
                   <span className="text-xs ml-1">(min: {asset.minimum_quantity})</span>
                 )}
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span 
+                        className={`inline-flex items-center ml-2 cursor-pointer ${asset.gps_latitude && asset.gps_longitude ? 'text-primary' : 'text-gray-300 hover:text-gray-400'}`} 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!asset.gps_latitude || !asset.gps_longitude) {
+                            toast({ 
+                              title: "GPS Unavailable", 
+                              description: "This asset image needs gps coordinates to use this feature." 
+                            });
+                          }
+                        }}
+                      >
+                        <MapPin className="h-4 w-4" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{asset.gps_latitude && asset.gps_longitude ? 'GPS coordinates available' : 'Missing GPS coordinates'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             );
           })()}
 
-          {asset.type === 'asset' && (asset.area_display || asset.parent_structure_name || asset.storage_location) && (
-            <div>
+          {asset.type === 'asset' && (asset.area_display || asset.parent_structure_name || asset.storage_location || asset.gps_latitude || asset.gps_longitude) && (
+            <div className="flex items-center">
               {[asset.area_display || asset.parent_structure_name, asset.storage_location].filter(Boolean).join(' - ')}
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span 
+                      className={`inline-flex items-center ml-2 cursor-pointer ${asset.gps_latitude && asset.gps_longitude ? 'text-primary' : 'text-gray-300 hover:text-gray-400'}`} 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!asset.gps_latitude || !asset.gps_longitude) {
+                          toast({ 
+                            title: "GPS Unavailable", 
+                            description: "This asset image needs gps coordinates to use this feature." 
+                          });
+                        }
+                      }}
+                    >
+                      <MapPin className="h-4 w-4" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{asset.gps_latitude && asset.gps_longitude ? 'GPS coordinates available' : 'Missing GPS coordinates'}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           )}
 
@@ -296,7 +344,7 @@ export const CombinedAssetCard = memo(({
             <div>
               <span className="font-medium">Checked out to:</span> {checkoutInfo.user_name}
               {asset.checkout_action_id && (
-                <Link 
+                <Link
                   to={`/actions?id=${asset.checkout_action_id}`}
                   className="inline-flex items-center gap-1 ml-2 text-xs text-primary hover:underline"
                   onClick={(e) => e.stopPropagation()}
@@ -312,7 +360,7 @@ export const CombinedAssetCard = memo(({
 
           {asset.accountable_person_name && (
             <div>
-              <span className="font-medium">Accountable:</span> 
+              <span className="font-medium">Accountable:</span>
               <span style={{ color: asset.accountable_person_color || '#6B7280' }} className="ml-1">
                 {asset.accountable_person_name}
               </span>
@@ -465,7 +513,7 @@ export const CombinedAssetCard = memo(({
               </div>
             </>
           )}
-          
+
           {/* Common edit/admin buttons */}
           {canEdit && (
             <>
@@ -489,7 +537,7 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              
+
               {isAdmin && (
                 <TooltipProvider>
                   <Tooltip>
@@ -520,4 +568,5 @@ export const CombinedAssetCard = memo(({
   );
 });
 
+CombinedAssetCard.displayName = 'CombinedAssetCard';
 CombinedAssetCard.displayName = 'CombinedAssetCard';

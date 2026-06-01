@@ -41,6 +41,8 @@ export interface CombinedAsset {
   sellable?: boolean; // For stock items - whether available in Sari Sari store
   created_at: string;
   updated_at: string;
+  gps_latitude?: number;
+  gps_longitude?: number;
 }
 
 type AssetsQueryOptions = {
@@ -57,12 +59,12 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { createTool, createPart } = useAssetMutations();
-  
+
   const { data: toolsData = [], isLoading: toolsLoading } = useQuery({
     ...toolsQueryConfig,
     ...offlineQueryConfig,
   });
-  
+
   const { data: partsData = [], isLoading: partsLoading } = useQuery({
     ...partsQueryConfig,
     ...offlineQueryConfig,
@@ -96,9 +98,9 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     });
     return set;
   }, [assetIssueFlags]);
-  
+
   const loading = toolsLoading || partsLoading || issuesLoading;
-  
+
   const { getUserName, getUserColor } = useUserNames([]);
 
   const fetchAssets = async (fetchOptions?: { search?: string; page?: number; limit?: number; append?: boolean; searchDescriptions?: boolean; showLowStock?: boolean }) => {
@@ -151,7 +153,7 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     if (loading && (toolsData.length === 0 && partsData.length === 0)) {
       return [];
     }
-    
+
     // Process data directly from TanStack Query
     let filteredToolsData = toolsData || [];
     if (showRemovedItems) {
@@ -160,7 +162,7 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
       // We need to check if the tool was removed by looking at tools that are not checked out
       // and have status 'removed', OR tools that are checked out but we can't determine original status
       // For now, we'll filter by status === 'removed' (checked-out removed tools will be excluded)
-      filteredToolsData = filteredToolsData.filter(tool => {
+      filteredToolsData = filteredToolsData.filter((tool: any) => {
         // Check if status is explicitly 'removed'
         if (tool.status === 'removed') return true;
         // If checked out, we can't determine original status from current data
@@ -169,67 +171,67 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
       });
     } else {
       // Show only active items (exclude removed)
-      filteredToolsData = filteredToolsData.filter(tool => tool.status !== 'removed');
+      filteredToolsData = filteredToolsData.filter((tool: any) => tool.status !== 'removed');
     }
-    
+
     let filteredPartsData = partsData || [];
     // Note: Parts don't have a 'removed' status - they are deleted instead
     // When showRemovedItems is true, hide all stock items since deleted parts can't be retrieved
     if (showRemovedItems) {
       filteredPartsData = [];
     }
-    
+
     // Apply low stock filter
     if (options?.showLowStock) {
-      filteredPartsData = filteredPartsData.filter(part => {
-        const isLowStock = part.current_quantity != null && 
-          part.minimum_quantity != null && 
+      filteredPartsData = filteredPartsData.filter((part: any) => {
+        const isLowStock = part.current_quantity != null &&
+          part.minimum_quantity != null &&
           part.current_quantity < part.minimum_quantity;
         return isLowStock;
       });
       // When low stock filter is active, exclude all tools/assets
       filteredToolsData = [];
     }
-    
+
     // Apply search filter
     if (options?.search && options.search.trim()) {
       const searchTerm = options.search.trim().toLowerCase();
-      
-      filteredToolsData = filteredToolsData.filter(tool => 
+
+      filteredToolsData = filteredToolsData.filter((tool: any) =>
         tool.name?.toLowerCase().includes(searchTerm) ||
         tool.serial_number?.toLowerCase().includes(searchTerm) ||
         tool.category?.toLowerCase().includes(searchTerm) ||
         tool.storage_location?.toLowerCase().includes(searchTerm) ||
         (options.searchDescriptions && tool.description?.toLowerCase().includes(searchTerm))
       );
-      
-      filteredPartsData = filteredPartsData.filter(part => 
+
+      filteredPartsData = filteredPartsData.filter((part: any) =>
         part.name?.toLowerCase().includes(searchTerm) ||
         part.category?.toLowerCase().includes(searchTerm) ||
         part.storage_location?.toLowerCase().includes(searchTerm) ||
         (options.searchDescriptions && part.description?.toLowerCase().includes(searchTerm))
       );
     }
-    
+
     // Apply pagination to each type separately (unless skipPagination is true)
     let paginatedParts = filteredPartsData;
     let paginatedTools = filteredToolsData;
-    
+
     if (!options?.skipPagination) {
       const limit = options?.limit || 50;
       const page = options?.page || 0;
       paginatedParts = filteredPartsData.slice(0, (page + 1) * limit);
       paginatedTools = filteredToolsData.slice(0, (page + 1) * limit);
     }
-    
+
     const allAssets: CombinedAsset[] = [
-      ...paginatedParts.map(part => ({
+      ...paginatedParts.map((part: any) => ({
         ...part,
         type: 'stock' as const,
         has_issues: assetsWithIssues.has(part.id),
         is_checked_out: false
       })),
-      ...paginatedTools.map(tool => ({
+      ...paginatedTools.map((tool: any) => ({
         ...tool,
         type: 'asset' as const,
         has_issues: assetsWithIssues.has(tool.id),
@@ -240,10 +242,10 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         checkout_action_id: tool.checkout_action_id
       }))
     ];
-    
+
     return allAssets;
   }, [showRemovedItems, toolsData, partsData, assetsWithIssues, loading, options?.search, options?.searchDescriptions, options?.showLowStock, options?.limit, options?.page, options?.skipPagination]);
-  
+
   return {
     assets: processedAssets,
     loading,

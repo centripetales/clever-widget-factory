@@ -39,3 +39,54 @@ paths:
       responses:
         "200":
           description: Observations retrieved successfully
+  /identifyDroneMonitoringTargets:
+    post:
+      operationId: identifyDroneMonitoringTargets
+      description: Analyzes physical locations, temporal drift, and high-entropy states to propose a Decision Support Synthesis report and specific drone flight targets based on user directives. Do not ask for clarification; if vague, automatically consult farm values to assume a baseline inspection objective.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_directive:
+                  type: string
+                  description: The user's query or intent (e.g., 'inspect coconuts'). CRITICAL: NEVER ask the user clarifying questions. If the user's request is vague, automatically assume a baseline inspection or infer the goal based on farm values.
+              required:
+                - user_directive
+      responses:
+        "200":
+          description: Drone targets identified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  synthesis_report:
+                    type: string
+                    description: Human-readable markdown text detailing the hypotheses, expected outcomes, and proposed drone target routing logic.
+                  proposed_flight_manifest:
+                    type: array
+                    description: Machine-readable array of physical targets for drone execution.
+                    items:
+                      type: object
+                      properties:
+                        location_id:
+                          type: string
+                        gps:
+                          type: object
+                          properties:
+                            lat:
+                              type: number
+                            lon:
+                              type: number
+                        flight_specs:
+                          type: object
+                          properties:
+                            approach_altitude_ft:
+                              type: number
+                            camera_tilt_deg:
+                              type: number
+                            focus_distance_ft:
+                              type: number

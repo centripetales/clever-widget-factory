@@ -33,6 +33,10 @@ export interface Tool {
   expected_return_date?: string;
   checkout_intended_usage?: string;
   checkout_notes?: string;
+  
+  // Geolocation fields populated by list API
+  gps_latitude?: number;
+  gps_longitude?: number;
 }
 
 export const useToolsData = (showRemovedItems: boolean = false) => {
