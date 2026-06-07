@@ -40,6 +40,10 @@ const FILTER_YEAR = (() => {
   const yearArg = args.find(a => a.startsWith('--year='));
   return yearArg ? parseInt(yearArg.split('=')[1], 10) : null;
 })();
+const FILTER_SINCE = (() => {
+  const sinceArg = args.find(a => a.startsWith('--since='));
+  return sinceArg ? sinceArg.split('=')[1] : null;
+})();
 const LIMIT = (() => {
   const limitArg = args.find(a => a.startsWith('--limit='));
   return limitArg ? parseInt(limitArg.split('=')[1], 10) : null;
@@ -80,7 +84,7 @@ async function main() {
   console.log('🚀 Initializing Batch Expense Visual Analysis...');
   console.log(`   Environment: AWS Region us-west-2`);
   console.log(`   Config: ${DRY_RUN ? 'DRY RUN (no DB mutations)' : 'LIVE RUN'}`);
-  console.log(`   Filter: ${FILTER_MAY ? 'Month of May Only' : FILTER_YEAR ? `Year ${FILTER_YEAR} Only` : 'All Months'}`);
+  console.log(`   Filter: ${FILTER_MAY ? 'Month of May Only' : FILTER_YEAR ? `Year ${FILTER_YEAR} Only` : FILTER_SINCE ? `Since ${FILTER_SINCE}` : 'All Months'}`);
   console.log(`   Limit: ${LIMIT || 'No Limit'}`);
   console.log('-----------------------------------------------------\n');
 
@@ -147,6 +151,9 @@ async function main() {
     }
     if (FILTER_YEAR) {
       query += ` AND EXTRACT(YEAR FROM fr.transaction_date) = ${FILTER_YEAR}`;
+    }
+    if (FILTER_SINCE) {
+      query += ` AND fr.transaction_date >= '${FILTER_SINCE}'::date`;
     }
 
     query += ` ORDER BY fr.transaction_date DESC, fr.created_at DESC;`;
