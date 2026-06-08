@@ -34,7 +34,7 @@ export default function ObservationsList() {
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState<'all' | 'most-recent-day' | '24h' | '7d' | '30d'>('most-recent-day');
+  const [dateFilter, setDateFilter] = useState<'all' | 'most-recent-day' | '7d' | '30d'>('most-recent-day');
 
   // Copy-to-clipboard state for perspectives
   const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
@@ -164,9 +164,7 @@ export default function ObservationsList() {
         const diffMs = now.getTime() - obsDate.getTime();
         const diffHours = diffMs / (1000 * 60 * 60);
 
-        if (dateFilter === '24h') {
-          matchesDate = diffHours <= 24;
-        } else if (dateFilter === '7d') {
+        if (dateFilter === '7d') {
           matchesDate = diffHours <= 24 * 7;
         } else if (dateFilter === '30d') {
           matchesDate = diffHours <= 24 * 30;
@@ -224,11 +222,10 @@ export default function ObservationsList() {
                   <SelectValue placeholder="Most Recent Day" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="most-recent-day">Most Recent Day</SelectItem>
-                  <SelectItem value="all">All Time</SelectItem>
-                  <SelectItem value="24h">Last 24 Hours</SelectItem>
+                  <SelectItem value="most-recent-day">Today</SelectItem>
                   <SelectItem value="7d">Last 7 Days</SelectItem>
                   <SelectItem value="30d">Last 30 Days</SelectItem>
+                  <SelectItem value="all">All Time</SelectItem>
                 </SelectContent>
               </Select>
             </div>
