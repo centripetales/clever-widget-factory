@@ -428,7 +428,7 @@ exports.handler = async (event) => {
           AND sl.entity_id::text      = '${escapeLiteral(entityId)}'
           AND s.organization_id::text = '${escapeLiteral(organizationId)}'
           ${dateFilterClause}
-        ORDER BY s.captured_at DESC
+        ORDER BY s.captured_at ASC
       ) t;
     `;
 

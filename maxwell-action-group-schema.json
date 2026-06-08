@@ -1,1 +1,134 @@
-{"openapi": "3.0.0", "info": {"title": "GetEntityObservations", "version": "1.0"}, "paths": {"/getEntityObservations": {"get": {"operationId": "getEntityObservations", "description": "Retrieves observations recorded against a CWF entity (tool, part, or action)", "parameters": [{"name": "entityId", "in": "query", "required": false, "schema": {"type": "string"}, "description": "UUID of the entity"}, {"name": "entityType", "in": "query", "required": false, "schema": {"type": "string", "enum": ["tool", "part", "action"]}, "description": "Type of the entity"}, {"name": "dateFrom", "in": "query", "required": false, "schema": {"type": "string"}, "description": "ISO date string to filter observations from (inclusive)"}, {"name": "dateTo", "in": "query", "required": false, "schema": {"type": "string"}, "description": "ISO date string to filter observations to (inclusive)"}], "responses": {"200": {"description": "Observations retrieved successfully"}}}}}}
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "GetEntityObservations",
+    "version": "1.0"
+  },
+  "paths": {
+    "/getEntityObservations": {
+      "get": {
+        "operationId": "getEntityObservations",
+        "description": "Retrieves observations recorded against a CWF entity (tool, part, or action)",
+        "parameters": [
+          {
+            "name": "entityId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID of the entity"
+          },
+          {
+            "name": "entityType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tool",
+                "part",
+                "action"
+              ]
+            },
+            "description": "Type of the entity"
+          },
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISO date string to filter observations from (inclusive)"
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISO date string to filter observations to (inclusive)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observations retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "observations": {
+                      "type": "array",
+                      "description": "List of observations recorded for the entity",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "observation_text": {
+                            "type": "string",
+                            "description": "The actual text/transcription of the observation"
+                          },
+                          "observed_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "ISO timestamp when the observation was captured"
+                          },
+                          "observed_by_name": {
+                            "type": "string",
+                            "description": "Name or ID of the user who recorded the observation"
+                          },
+                          "photos": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "photo_url": {
+                                  "type": "string"
+                                },
+                                "photo_description": {
+                                  "type": "string"
+                                },
+                                "transcription": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "metrics": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "metric_name": {
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "number"
+                                },
+                                "unit": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

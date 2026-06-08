@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, CheckCircle, XCircle, Wrench, Box, Flag, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User } from 'lucide-react';
+import { LogOut, CheckCircle, XCircle, Wrench, Box, Flag, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
@@ -112,6 +112,13 @@ export default function Dashboard() {
   };
 
   const menuItems = [
+    {
+      title: "Observations",
+      description: "Monitor, search, and record farm observations",
+      icon: Camera,
+      path: "/observations",
+      color: "bg-teal-600"
+    },
     {
       title: "Assets",
       description: "Unified view of assets and stock",

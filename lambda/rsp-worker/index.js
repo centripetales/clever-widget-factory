@@ -328,8 +328,9 @@ async function processPendingRecord(client, record) {
     }
   }
 
-  // Phase 1: Run Photo Analysis for any photos missing descriptions
+  // Phase 1: Run Photo Analysis (Disabled as per user request to remove generic image descriptions)
   let analyzedAny = false;
+  /*
   for (const photo of (state.photos || [])) {
     if (photo.has_analysis) continue;
     const imgData = photoMap.get(photo.photo_url);
@@ -426,6 +427,7 @@ async function processPendingRecord(client, record) {
       console.error('[RSP] Failed to broadcast state photo analysis update:', broadcastErr);
     }
   }
+  */
 
   let modelId = llmConfig.model_id;
   let systemPrompt = llmConfig.system_prompt;

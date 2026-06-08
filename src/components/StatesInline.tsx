@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Edit2, Trash2, Loader2, CheckCircle2, XCircle, Search } from 'lucide-react';
+import { Plus, Edit2, Trash2, Loader2, CheckCircle2, XCircle, Search, Sparkles } from 'lucide-react';
 import { format } from 'date-fns';
 import type { CreateObservationData, Observation } from '@/types/observations';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
@@ -139,6 +140,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
       return next;
     });
   };
+
+
 
   const openGallery = (photos: Array<{ photo_url: string; photo_description?: string | null }>, index: number) => {
     setGalleryPhotos(photos);
@@ -614,6 +617,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                     {state.captured_by_name || 'Unknown'} • {format(new Date(state.captured_at), 'MMM d, yyyy h:mm a')}
                   </div>
                   <div className="flex gap-1">
+
                     <Button
                       variant="ghost"
                       size="icon"
@@ -670,11 +674,15 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
 
                   {/* Text content */}
                   <div className="flex-1 min-w-0">
-                    {state.observation_text && (
+                    {state.observation_text ? (
                       <p className="text-sm whitespace-pre-wrap">
                         {state.observation_text.replace(/<[^>]*>/g, '').trim()}
                       </p>
-                    )}
+                    ) : state.photos?.find((p: any) => p.photo_description?.trim())?.photo_description ? (
+                      <p className="text-sm whitespace-pre-wrap italic text-muted-foreground">
+                        {state.photos.find((p: any) => p.photo_description?.trim())!.photo_description}
+                      </p>
+                    ) : null}
 
                     {/* Unified photo descriptions block — hidden when expanded photo view is active */}
                     {state.photos && state.photos.length > 0 && !expandedPhotoStates.has(state.id) && (
@@ -793,14 +801,21 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       if (state.perspectives && state.perspectives.length > 0 && state.perspectives.some(p => p.content)) {
                         return (
                           <div className="mt-2 flex items-center">
-                            <button
-                              type="button"
-                              className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50/50 text-indigo-600/70 border border-indigo-200/50 hover:bg-indigo-100/50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30 dark:hover:bg-indigo-900/40 transition-all select-none flex-shrink-0"
-                            >
-                              <span>Perspectives</span>
-                              <span className="absolute left-0 bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left after:absolute after:left-0 after:right-0 after:top-full after:h-2.5 after:content-['']" onClick={(e) => e.stopPropagation()}>
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="relative cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50/50 text-indigo-600/70 border border-indigo-200/50 hover:bg-indigo-100/50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30 dark:hover:bg-indigo-900/40 transition-all select-none flex-shrink-0"
+                                >
+                                  <span>Perspectives</span>
+                                </button>
+                              </PopoverTrigger>
+                              <PopoverContent 
+                                className="p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl z-50 text-left"
+                                style={{ width: '400px', maxWidth: '90vw' }}
+                              >
                                 <div className="flex items-center justify-between mb-2 border-b border-zinc-100 dark:border-zinc-800 pb-1">
-                                  <span className="font-semibold text-zinc-900 dark:text-white">Perspectives</span>
+                                  <span className="font-semibold text-zinc-900 dark:text-white text-xs">Perspectives</span>
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -867,8 +882,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                                     );
                                   })}
                                 </div>
-                              </span>
-                            </button>
+                              </PopoverContent>
+                            </Popover>
                           </div>
                         );
                       }

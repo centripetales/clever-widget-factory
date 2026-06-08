@@ -136,7 +136,15 @@ async function listStates(event, authContext, headers) {
   
   try {
     const queryParams = event.queryStringParameters || {};
-    const { entity_type, entity_id } = queryParams;
+    const { entity_type, entity_id, limit: limitParam } = queryParams;
+    
+    let limit = 200;
+    if (limitParam) {
+      const parsedLimit = parseInt(limitParam, 10);
+      if (!isNaN(parsedLimit) && parsedLimit > 0) {
+        limit = Math.min(parsedLimit, 1000);
+      }
+    }
     
     const orgFilter = buildOrganizationFilter(authContext, 's');
 
@@ -245,9 +253,10 @@ async function listStates(event, authContext, headers) {
       WHERE ${whereClause}${entityFilter}
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
-        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[photo_analysis]%')
+        
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
       ORDER BY s.captured_at DESC
+      LIMIT ${limit}
     `;
 
 
@@ -376,9 +385,13 @@ async function getState(id, authContext, headers) {
 
 async function createState(event, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
-  const { state_text, captured_at, photos = [], links = [] } = body;
+  const { action, state_text, captured_at, photos = [], links = [] } = body;
   const organizationId = authContext.organization_id;
   const userId = authContext.user_id;
+
+  if (action === 'analyze_photo') {
+    return await analyzePhoto(body, authContext, headers);
+  }
 
   // Note: Validation is handled on frontend - observations can have text, photos, or metrics
   // Metrics are saved separately via snapshots endpoint after state creation
@@ -855,4 +868,113 @@ async function runPhotoAnalysis(dbClient, organizationId, insertedPhotos) {
     warnings.push(`Bedrock model access failed: ${outerError.message}`);
   }
   return warnings;
+}
+
+async function analyzePhoto(body, authContext, headers) {
+  const { photo_url, model_id = 'us.amazon.nova-lite-v1:0' } = body;
+  if (!photo_url) {
+    return errorResponse(400, 'photo_url is required', headers);
+  }
+  
+  const client = await getDbClient();
+  try {
+    const paramsResult = await client.query(`
+      SELECT system_prompt 
+      FROM photo_analysis_params 
+      WHERE prompt_key = 'photo_analysis'
+      LIMIT 1
+    `);
+    
+    let systemPrompt = "Describe the photo objectively in detail, and extract/transcribe any text, numbers, or GUIDs that are visible in the image.";
+    if (paramsResult.rows.length > 0 && paramsResult.rows[0].system_prompt) {
+      systemPrompt = paramsResult.rows[0].system_prompt;
+    }
+    
+    systemPrompt += "\n\nCRITICAL: If there is any physical label, tag, QR code, or serial number in the photo, you MUST extract it exactly and place it at the very top of your response as: [GUID: <value>]. Example: [GUID: C-14].";
+    
+    console.log(`[AnalyzePhoto] Fetching photo from URL: ${photo_url}`);
+    const fetchResponse = await fetch(photo_url);
+    if (!fetchResponse.ok) {
+      throw new Error(`Failed to fetch photo from URL: ${fetchResponse.status} ${fetchResponse.statusText}`);
+    }
+    
+    const arrayBuffer = await fetchResponse.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64Data = buffer.toString('base64');
+    
+    let format = 'jpeg';
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+      format = 'png';
+    } else if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) {
+      format = 'webp';
+    }
+    
+    const bedrockClient = new BedrockRuntimeClient({ region: 'us-west-2' });
+    
+    const payload = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              image: {
+                format: format,
+                source: {
+                  bytes: base64Data
+                }
+              }
+            },
+            {
+              text: "Please analyze this image, extract any GUID/tag, and write an objective description."
+            }
+          ]
+        }
+      ],
+      system: [
+        {
+          text: systemPrompt
+        }
+      ],
+      inferenceConfig: {
+        maxTokens: 1000,
+        temperature: 0.1
+      }
+    };
+    
+    console.log(`[AnalyzePhoto] Invoking Bedrock model ${model_id}...`);
+    const command = new InvokeModelCommand({
+      modelId: model_id,
+      body: JSON.stringify(payload),
+      contentType: 'application/json',
+      accept: 'application/json'
+    });
+    
+    const bedrockResponse = await bedrockClient.send(command);
+    const responseBody = JSON.parse(new TextDecoder().decode(bedrockResponse.body));
+    
+    const description = responseBody?.output?.message?.content?.[0]?.text;
+    if (!description || !description.trim()) {
+      throw new Error('Empty response returned from model');
+    }
+    
+    const guids = [];
+    const guidRegex = /\[GUID:\s*([^\]]+)\]/i;
+    const match = description.match(guidRegex);
+    if (match && match[1]) {
+      guids.push(match[1].trim());
+    }
+    
+    const cleanDescription = description.replace(/\[GUID:\s*([^\]]+)\]/gi, '').trim();
+    
+    return successResponse({
+      description: cleanDescription,
+      extracted_guids: guids
+    }, headers);
+    
+  } catch (error) {
+    console.error('[AnalyzePhoto] Error during photo analysis:', error);
+    return errorResponse(500, `Photo analysis failed: ${error.message}`, headers);
+  } finally {
+    client.release();
+  }
 }

@@ -10,9 +10,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { X, GripVertical, Loader2, AlertCircle, Camera } from 'lucide-react';
+import { X, GripVertical, Loader2, AlertCircle, Camera, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { apiService } from '@/lib/apiService';
 
 export interface PhotoItem {
   id?: string;
@@ -38,6 +39,7 @@ export interface PhotoUploadPanelProps {
   className?: string;
   /** When provided, uploads files immediately on selection. Return the public URL. */
   onEagerUpload?: (file: File) => Promise<{ url: string }>;
+  onPhotoAnalyzed?: (index: number, description: string, extractedGuids: string[]) => void;
 }
 
 /**
@@ -107,10 +109,13 @@ export function PhotoUploadPanel({
   disabled = false,
   className,
   onEagerUpload,
+  onPhotoAnalyzed,
 }: PhotoUploadPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const photosRef = useRef(photos);
@@ -459,6 +464,7 @@ export function PhotoUploadPanel({
                     disabled={disabled}
                   />
                 )}
+
               </div>
 
               <Button
