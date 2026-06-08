@@ -385,8 +385,6 @@ export function PhotoUploadPanel({
           {photos.map((photo, index) => (
             <div
               key={photo.id || index}
-              draggable={!disabled}
-              onDragStart={() => handleDragStart(index)}
               onDragOver={(e) => handleDragOver(e, index)}
               onDrop={(e) => handleDrop(e, index)}
               onDragEnd={handleDragEnd}
@@ -396,7 +394,13 @@ export function PhotoUploadPanel({
                 dragIndex === index && 'opacity-50'
               )}
             >
-              <div className="flex items-center cursor-grab active:cursor-grabbing">
+              {/* Drag handle is the only draggable element — keeps the row itself non-draggable
+                  so long-press on text/images doesn't trigger reorder drag */}
+              <div
+                draggable={!disabled}
+                onDragStart={() => handleDragStart(index)}
+                className="flex items-center cursor-grab active:cursor-grabbing"
+              >
                 <GripVertical className="h-4 w-4 text-muted-foreground" />
               </div>
 
