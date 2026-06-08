@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+// AssetType filter removed — added clutter and friction
 import { useToast } from '@/hooks/use-toast';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { perspectivesProcessingMap, perspectivesProcessingListeners } from '@/hooks/useCacheInvalidation';
@@ -28,13 +29,11 @@ import {
   Sparkles,
   Bot
 } from 'lucide-react';
-
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | 'tool' | 'part' | 'unlinked'>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'most-recent-day' | '24h' | '7d' | '30d'>('most-recent-day');
 
   // Copy-to-clipboard state for perspectives
@@ -148,17 +147,7 @@ export default function ObservationsList() {
 
     const matchesSearch = textMatches || authorMatches || assetMatches;
 
-    // 2. Asset Type Filter
-    let matchesAssetType = true;
-    if (assetTypeFilter === 'tool') {
-      matchesAssetType = obs.links?.some((l) => l.entity_type === 'tool') ?? false;
-    } else if (assetTypeFilter === 'part') {
-      matchesAssetType = obs.links?.some((l) => l.entity_type === 'part') ?? false;
-    } else if (assetTypeFilter === 'unlinked') {
-      matchesAssetType = !obs.links || obs.links.length === 0;
-    }
-
-    // 3. Date Filter
+    // 2. Date Filter
     let matchesDate = true;
     if (dateFilter !== 'all') {
       if (dateFilter === 'most-recent-day') {
@@ -185,7 +174,7 @@ export default function ObservationsList() {
       }
     }
 
-    return matchesSearch && matchesAssetType && matchesDate;
+    return matchesSearch && matchesDate;
   });
 
   return (
@@ -213,9 +202,9 @@ export default function ObservationsList() {
       {/* Filters Toolbar */}
       <Card className="mb-6">
         <CardContent className="pt-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Text Search */}
-            <div className="relative md:col-span-2">
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search observation, author, or asset tag..."
@@ -223,24 +212,6 @@ export default function ObservationsList() {
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-9"
               />
-            </div>
-
-            {/* Asset Type Select */}
-            <div>
-              <Select
-                value={assetTypeFilter}
-                onValueChange={(val: any) => setAssetTypeFilter(val)}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="All Asset Types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Asset Types</SelectItem>
-                  <SelectItem value="tool">Tools Only</SelectItem>
-                  <SelectItem value="part">Parts & Livestock</SelectItem>
-                  <SelectItem value="unlinked">Floating (Unlinked)</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
 
             {/* Timeframe Select */}
