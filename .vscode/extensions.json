@@ -1,40 +1,6 @@
 {
   "recommendations": [
     // TypeScript & React
-    "dbaeumer.vscode-eslint",
-    "esbenp.prettier-vscode",
-    
-    // Tailwind CSS
-    "bradlc.vscode-tailwindcss",
-    
-    // Testing (Vitest)
-    "vitest.explorer",
-    
-    // AWS Development
-    "amazonwebservices.aws-toolkit-vscode",
-    
-    // Git
-    "eamodio.gitlens",
-    
-    // Path Intellisense
-    "christian-kohler.path-intellisense",
-    
-    // Auto Rename Tag
-    "formulahendry.auto-rename-tag",
-    
-    // Error Lens (inline error display)
-    "usernamehw.errorlens",
-    
-    // Import Cost (show package size)
-    "wix.vscode-import-cost",
-    
-    // Better Comments
-    "aaron-bond.better-comments",
-    
-    // Markdown
-    "yzhang.markdown-all-in-one",
-    
-    // Shell Script
-    "timonwong.shellcheck"
+    "amazonwebservices.aws-toolkit-vscode"
   ]
 }

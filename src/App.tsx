@@ -29,6 +29,7 @@ import Dashboard from "./pages/Dashboard";
 import InventorySummary from "./pages/InventorySummary";
 import CombinedAssets from "./pages/CombinedAssets";
 import AddObservation from "./pages/AddObservation";
+import ObservationsList from "./pages/ObservationsList";
 import Missions from "./pages/Missions";
 import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
@@ -141,6 +142,22 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <CombinedAssets />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/observations"
+          element={
+            <ProtectedRoute>
+              <ObservationsList />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/observations/new"
+          element={
+            <ProtectedRoute>
+              <AddObservation />
             </ProtectedRoute>
           }
         />

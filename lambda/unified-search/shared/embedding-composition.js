@@ -97,6 +97,7 @@ function composeToolEmbeddingSource(tool) {
  */
 function composeActionEmbeddingSource(action) {
   const parts = [
+    action.title,
     action.description,
     action.evidence_description,
     action.policy,

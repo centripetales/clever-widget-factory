@@ -416,6 +416,67 @@ exports.handler = async (event) => {
         };
       }
       
+      if (httpMethod === 'GET' && path.match(/\/tools\/[a-f0-9-]+$/)) {
+        const toolId = path.split('/').pop();
+        const orgFilter = buildOrganizationFilter(authContext, 'tools');
+        let orgCondition = orgFilter.condition ? `AND ${orgFilter.condition}` : '';
+        const sql = `SELECT json_agg(row_to_json(result)) FROM (
+          SELECT 
+            tools.*,
+            parent_tool.name as parent_structure_name,
+            parent_tool.name as area_display,
+            CASE 
+              WHEN active_checkouts.id IS NOT NULL THEN 'checked_out'
+              ELSE tools.status
+            END as status,
+            CASE WHEN tools.image_url LIKE '%supabase.co%' THEN 
+              REPLACE(
+                tools.image_url, 
+                'https://oskwnlhuuxjfuwnjuavn.supabase.co/storage/v1/object/public/', 
+                'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/'
+              )
+            ELSE tools.image_url 
+            END as image_url,
+            CASE WHEN active_checkouts.id IS NOT NULL THEN true ELSE false END as is_checked_out,
+            active_checkouts.user_id as checked_out_user_id,
+            om_checkout.full_name as checked_out_to,
+            active_checkouts.checkout_date as checked_out_date,
+            active_checkouts.expected_return_date,
+            active_checkouts.intended_usage as checkout_intended_usage,
+            active_checkouts.notes as checkout_notes,
+            active_checkouts.action_id as checkout_action_id
+          FROM tools
+          LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
+          LEFT JOIN LATERAL (
+            SELECT * FROM checkouts
+            WHERE checkouts.tool_id = tools.id
+              AND checkouts.is_returned = false
+            ORDER BY checkouts.checkout_date DESC NULLS LAST, checkouts.created_at DESC
+            LIMIT 1
+          ) active_checkouts ON true
+          LEFT JOIN LATERAL (
+            SELECT full_name FROM organization_members
+            WHERE cognito_user_id = active_checkouts.user_id
+            LIMIT 1
+          ) om_checkout ON true
+          WHERE tools.id = '${escapeLiteral(toolId)}' ${orgCondition}
+        ) result;`;
+        
+        const result = await queryJSON(sql);
+        if (!result || result.length === 0 || !result[0] || !result[0].json_agg || result[0].json_agg.length === 0) {
+          return {
+            statusCode: 404,
+            headers,
+            body: JSON.stringify({ error: 'Tool not found' })
+          };
+        }
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ data: result[0].json_agg[0] })
+        };
+      }
+      
       if (httpMethod === 'GET') {
         const { limit = 50, offset = 0, category, status } = event.queryStringParameters || {};
         
@@ -833,6 +894,44 @@ exports.handler = async (event) => {
         statusCode: 200,
         headers,
         body: JSON.stringify({ data: result?.[0]?.json_agg || [] })
+      };
+    }
+    
+    // GET /parts/{id} - Get part by ID
+    if (httpMethod === 'GET' && path.match(/\/parts\/[a-f0-9-]+$/)) {
+      const partId = path.split('/').pop();
+      let whereClause = `WHERE parts.id::text = '${escapeLiteral(partId)}'`;
+      if (!hasDataReadAll && organizationId) {
+        whereClause += ` AND parts.organization_id::text = '${escapeLiteral(organizationId)}'`;
+      }
+      
+      const sql = `SELECT json_agg(row_to_json(t)) FROM (
+        SELECT 
+          parts.*,
+          parent_tool.name as parent_structure_name,
+          parent_tool.name as area_display,
+          CASE 
+            WHEN parts.image_url LIKE '%supabase.co%' THEN 
+              REPLACE(parts.image_url, 'https://oskwnlhuuxjfuwnjuavn.supabase.co/storage/v1/object/public/', 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/')
+            ELSE parts.image_url 
+          END as image_url
+        FROM parts
+        LEFT JOIN tools parent_tool ON parts.parent_structure_id = parent_tool.id
+        ${whereClause}
+      ) t;`;
+      
+      const result = await queryJSON(sql);
+      if (!result || result.length === 0 || !result[0] || !result[0].json_agg || result[0].json_agg.length === 0) {
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ error: 'Part not found' })
+        };
+      }
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ data: result[0].json_agg[0] })
       };
     }
     
@@ -3776,6 +3875,79 @@ exports.handler = async (event) => {
       }
     }
 
+    // GET /actions/{id} - Get action by ID
+    if (httpMethod === 'GET' && path.match(/\/actions\/[a-f0-9-]+$/)) {
+      const actionId = path.split('/').pop();
+      const sql = `SELECT json_agg(row_to_json(t)) FROM (
+        SELECT 
+          a.*,
+          COALESCE(om.full_name, p.full_name) as assigned_to_name,
+          COALESCE(p.favorite_color, om.favorite_color) as assigned_to_color,
+          CASE WHEN scores.context_id IS NOT NULL THEN true ELSE false END as has_score,
+          CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
+          COALESCE((
+            SELECT COUNT(*) 
+            FROM state_links sl
+            WHERE sl.entity_type = 'action' AND sl.entity_id = a.id
+          ), 0) as implementation_update_count,
+          e.exploration_code,
+          CASE WHEN a.asset_id IS NOT NULL THEN
+            json_build_object(
+              'id', assets.id,
+              'name', assets.name,
+              'category', assets.category
+            )
+          END as asset,
+          CASE WHEN a.linked_issue_id IS NOT NULL AND linked_issue.context_type = 'tool' THEN
+            json_build_object(
+              'id', issue_tools.id,
+              'name', issue_tools.name,
+              'category', issue_tools.category
+            )
+          END as issue_tool,
+          CASE WHEN a.mission_id IS NOT NULL THEN
+            json_build_object(
+              'id', missions.id,
+              'title', missions.title,
+              'mission_number', missions.mission_number
+            )
+          END as mission
+        FROM actions a
+        LEFT JOIN LATERAL (
+          SELECT full_name, favorite_color FROM organization_members
+          WHERE cognito_user_id::text = a.assigned_to::text
+          LIMIT 1
+        ) om ON true
+        LEFT JOIN profiles p ON a.assigned_to::text = p.user_id::text
+        LEFT JOIN analysis_contexts scores ON a.id = scores.context_id AND scores.context_service = 'action_score'
+        LEFT JOIN (
+          SELECT DISTINCT sl.entity_id as action_id
+          FROM state_links sl
+          WHERE sl.entity_type = 'action'
+        ) updates ON a.id = updates.action_id
+        LEFT JOIN tools assets ON a.asset_id = assets.id
+        LEFT JOIN issues linked_issue ON a.linked_issue_id = linked_issue.id
+        LEFT JOIN tools issue_tools ON linked_issue.context_id = issue_tools.id AND linked_issue.context_type = 'tool'
+        LEFT JOIN missions ON a.mission_id = missions.id
+        LEFT JOIN exploration e ON a.id = e.action_id
+        WHERE a.id = '${escapeLiteral(actionId)}'
+      ) t;`;
+      
+      const result = await queryJSON(sql);
+      if (!result || result.length === 0 || !result[0] || !result[0].json_agg || result[0].json_agg.length === 0) {
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ error: 'Action not found' })
+        };
+      }
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ data: result[0].json_agg[0] })
+      };
+    }
+
     // Actions endpoint with full details
     if (httpMethod === 'GET' && path.endsWith('/actions')) {
       const { limit, offset = 0, assigned_to, status, id, is_exploration } = event.queryStringParameters || {};
@@ -3811,7 +3983,7 @@ exports.handler = async (event) => {
           a.*,
           COALESCE(om.full_name, p.full_name) as assigned_to_name,
           COALESCE(p.favorite_color, om.favorite_color) as assigned_to_color,
-          CASE WHEN scores.action_id IS NOT NULL THEN true ELSE false END as has_score,
+          CASE WHEN scores.context_id IS NOT NULL THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
           COALESCE((
             SELECT COUNT(*) 
@@ -4124,7 +4296,7 @@ exports.handler = async (event) => {
             a.*,
             om.full_name as assigned_to_name,
             om.favorite_color as assigned_to_color,
-            CASE WHEN scores.action_id IS NOT NULL THEN true ELSE false END as has_score,
+            CASE WHEN scores.context_id IS NOT NULL THEN true ELSE false END as has_score,
             CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
             COALESCE((
               SELECT COUNT(*) 
