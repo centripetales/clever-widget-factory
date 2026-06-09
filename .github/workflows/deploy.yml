@@ -1,82 +1,44 @@
-name: Deploy to S3
+name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+    - name: Install dependencies
+      run: npm ci
 
-      - name: Build
-        env:
-          VITE_BASE_PATH: /
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-          VITE_AWS_COGNITO_USER_POOL_ID: ${{ secrets.VITE_AWS_COGNITO_USER_POOL_ID }}
-          VITE_AWS_COGNITO_CLIENT_ID: ${{ secrets.VITE_AWS_COGNITO_CLIENT_ID }}
-          VITE_AWS_REGION: ${{ secrets.VITE_AWS_REGION }}
-        run: npm run build
+    - name: Build
+      env:
+        VITE_BASE_PATH: /
+        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        VITE_AWS_COGNITO_USER_POOL_ID: ${{ secrets.VITE_AWS_COGNITO_USER_POOL_ID }}
+        VITE_AWS_COGNITO_CLIENT_ID: ${{ secrets.VITE_AWS_COGNITO_CLIENT_ID }}
+        VITE_AWS_REGION: ${{ secrets.VITE_AWS_REGION }}
+      run: npm run build -- --mode production
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: ./dist
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
 
-  deploy-centripetales:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: ./dist
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ./dist
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Sync to S3 (centripetales-bucket)
-        run: aws s3 sync ./dist s3://centripetales-bucket --delete
-
-      - name: Invalidate CloudFront (centripetales.com)
-        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CF_CENTRIPETALES_ID }} --paths "/*"
-
-  deploy-stargazer-farm:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: ./dist
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Sync to S3 (stargazer-farm-bucket)
-        run: aws s3 sync ./dist s3://stargazer-farm-bucket --delete
-
-      - name: Invalidate CloudFront (stargazer-farm.com)
-        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CF_STARGAZER_ID }} --paths "/*"
+    - name: Deploy to GitHub Pages
+      uses: actions/deploy-pages@v4
