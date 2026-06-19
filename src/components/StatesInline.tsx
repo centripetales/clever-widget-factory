@@ -24,11 +24,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Edit2, Trash2, Loader2, CheckCircle2, XCircle, Search, Sparkles } from 'lucide-react';
+import { Plus, Edit2, Trash2, Loader2, CheckCircle2, XCircle, Search, Sparkles, Handshake, Link } from 'lucide-react';
 import { format } from 'date-fns';
 import type { CreateObservationData, Observation } from '@/types/observations';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { PhotoGalleryDialog } from '@/components/shared/PhotoGalleryDialog';
+import { generateObservationUrl, copyToClipboard } from '@/lib/urlUtils';
 
 interface StatesInlineProps {
   entity_type: 'action' | 'part' | 'tool' | 'issue' | 'policy';
@@ -99,6 +100,59 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
       setCopiedMap(prev => ({ ...prev, [key]: false }));
     }, 2000);
   }, []);
+
+  const [linkCopiedMap, setLinkCopiedMap] = useState<Record<string, boolean>>({});
+  const [togglingSharedMap, setTogglingSharedMap] = useState<Record<string, boolean>>({});
+
+  const handleCopyLink = useCallback(async (stateId: string) => {
+    const url = generateObservationUrl(stateId);
+    const success = await copyToClipboard(url);
+    if (success) {
+      setLinkCopiedMap(prev => ({ ...prev, [stateId]: true }));
+      toast({
+        title: "Link copied!",
+        description: "Observation link has been copied to your clipboard",
+      });
+      setTimeout(() => {
+        setLinkCopiedMap(prev => ({ ...prev, [stateId]: false }));
+      }, 2000);
+    } else {
+      toast({
+        title: "Could not copy automatically",
+        description: url,
+        duration: 10000,
+      });
+    }
+  }, [toast]);
+
+  const handleToggleShared = useCallback(async (observation: Observation) => {
+    if (togglingSharedMap[observation.id]) return;
+    setTogglingSharedMap(prev => ({ ...prev, [observation.id]: true }));
+    const nextShared = !observation.shared_with_partners;
+    try {
+      await updateState({
+        id: observation.id,
+        data: {
+          shared_with_partners: nextShared
+        }
+      });
+      toast({
+        title: nextShared ? "Sharing activated" : "Sharing restricted",
+        description: nextShared
+          ? "Observation details are now safely shared with trusted partners."
+          : "Sharing revoked. Observation details are now private.",
+      });
+    } catch (error) {
+      console.error('Error toggling observation sharing state:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update observation sharing policy.",
+        variant: "destructive"
+      });
+    } finally {
+      setTogglingSharedMap(prev => ({ ...prev, [observation.id]: false }));
+    }
+  }, [updateState, togglingSharedMap, toast]);
 
   // Form state
   const [stateText, setStateText] = useState('');
@@ -613,10 +667,48 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
             <Card key={state.id}>
               <CardContent className="pt-4">
                 <div className="flex justify-between items-start mb-2">
-                  <div className="text-sm text-muted-foreground">
-                    {state.captured_by_name || 'Unknown'} • {format(new Date(state.captured_at), 'MMM d, yyyy h:mm a')}
+                  <div className="text-sm text-muted-foreground flex items-center gap-2">
+                    <span>{state.captured_by_name || 'Unknown'} • {format(new Date(state.captured_at), 'MMM d, yyyy h:mm a')}</span>
+                    {entity_type !== 'action' && state.shared_with_partners && (
+                      <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50 py-0 px-1.5 text-[10px]">
+                        Shared
+                      </Badge>
+                    )}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCopyLink(state.id)}
+                      className={`h-7 w-7 p-0 ${linkCopiedMap[state.id] ? 'border-green-500 border-2' : ''}`}
+                      title="Copy observation link"
+                    >
+                      {linkCopiedMap[state.id] ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      ) : (
+                        <Link className="h-4 w-4" />
+                      )}
+                    </Button>
+
+                    {entity_type !== 'action' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleToggleShared(state)}
+                        disabled={togglingSharedMap[state.id]}
+                        className={`h-7 w-7 p-0 transition-colors duration-200 ${state.shared_with_partners
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
+                            : 'hover:text-emerald-600 hover:bg-emerald-50'
+                          }`}
+                        title={state.shared_with_partners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                      >
+                        {togglingSharedMap[state.id] ? (
+                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        ) : (
+                          <Handshake className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
 
                     <Button
                       variant="ghost"
@@ -624,6 +716,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       onClick={() => handleEdit(state)}
                       disabled={isDeleting}
                       title="Edit observation"
+                      className="h-7 w-7 p-0"
                     >
                       <Edit2 className="h-4 w-4" />
                     </Button>
@@ -633,6 +726,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                       onClick={() => setDeleteConfirmId(state.id)}
                       disabled={isDeleting}
                       title="Delete observation"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

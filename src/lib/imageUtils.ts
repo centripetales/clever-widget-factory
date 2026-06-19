@@ -108,8 +108,11 @@ export function getThumbnailUrl(urlOrKey: string | null | undefined): string | n
   
   // Handle organization-scoped images
   if (key.startsWith('organizations/')) {
+    // Strip the /uploads/ segment if present — thumbnails are derived from the
+    // compressed image path (images/file.jpg), not the original (images/uploads/file.jpg).
+    const normalizedKey = key.replace(/\/images\/uploads\//, '/images/');
     // Convert to thumbnail path: organizations/{org}/images/file.jpg -> organizations/{org}/images/thumb/file.webp
-    const thumbnailKey = key
+    const thumbnailKey = normalizedKey
       .replace(/\/images\//, '/images/thumb/')
       .replace(/\.(jpg|jpeg|png)$/i, '.webp');
     

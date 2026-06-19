@@ -180,7 +180,7 @@ interface MaxwellChatDeps {
  */
 async function handleMaxwellChat(
   connectionId: string,
-  payload: { message: string; sessionId?: string; sessionAttributes?: Record<string, any> },
+  payload: { message: string; sessionId?: string; sessionAttributes?: Record<string, any>; history?: any[] },
   event: any,
   apiGwClient: MockApiGwClient,
   deps: MaxwellChatDeps
@@ -195,7 +195,7 @@ async function handleMaxwellChat(
     return { statusCode: 200 };
   }
 
-  const { message, sessionId, sessionAttributes = {} } = payload;
+  const { message, sessionId, sessionAttributes = {}, history } = payload;
 
   // Build enhanced message (simplified for test — mirrors real logic)
   const instructionPrefix = '[Instructions: tone prompt\n\ngeneral prompt]\n\n';
@@ -219,6 +219,15 @@ async function handleMaxwellChat(
   const effectiveSessionId =
     sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
+  const bedrockHistory = history && Array.isArray(history) && history.length > 0
+    ? {
+        messages: history.map(h => ({
+          role: h.role === 'user' ? 'user' : 'assistant',
+          content: [{ text: String(h.content || '') }]
+        }))
+      }
+    : undefined;
+
   const command = {
     agentId: 'test-agent-id',
     agentAliasId: 'test-alias-id',
@@ -227,6 +236,7 @@ async function handleMaxwellChat(
     enableTrace: true,
     sessionState: {
       sessionAttributes: stringifiedAttributes,
+      conversationHistory: bedrockHistory,
     },
   };
 
@@ -670,6 +680,43 @@ describe('Maxwell chat handler', () => {
     expect(messages[0].type).toBe('maxwell:error');
     expect(messages[0].payload.code).toBe('MAXWELL_ERROR');
     expect(messages[0].payload.message).toBeTruthy();
+  });
+
+  // -------------------------------------------------------------------------
+  // 11. Propagates conversation history context
+  // -------------------------------------------------------------------------
+  it('propagates conversation history context when history is provided', async () => {
+    const invokeAgentSpy = vi.fn().mockResolvedValue({
+      completion: (async function* () {
+        yield { chunk: { bytes: new TextEncoder().encode('Resolved') } };
+      })(),
+    });
+
+    const deps: MaxwellChatDeps = {
+      invokeAgent: invokeAgentSpy,
+    };
+
+    const history = [
+      { role: 'user', content: 'What is status?' },
+      { role: 'assistant', content: 'All system checks green.' }
+    ];
+
+    await handleMaxwellChat(
+      connectionId,
+      { message: 'What about inventory?', history },
+      baseEvent,
+      apiGwClient,
+      deps
+    );
+
+    expect(invokeAgentSpy).toHaveBeenCalledOnce();
+    const commandPassed = invokeAgentSpy.mock.calls[0][0];
+    expect(commandPassed.sessionState.conversationHistory).toEqual({
+      messages: [
+        { role: 'user', content: [{ text: 'What is status?' }] },
+        { role: 'assistant', content: [{ text: 'All system checks green.' }] }
+      ]
+    });
   });
 });
 

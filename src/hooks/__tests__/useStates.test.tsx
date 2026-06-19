@@ -508,10 +508,10 @@ describe('useStateMutations', () => {
       await result.current.createState(data);
 
       await waitFor(() => {
-        // Should invalidate filtered states cache (scoped to the specific entity)
-        expect(invalidateSpy).toHaveBeenCalledWith({
-          queryKey: ['states', 'action', 'action-1'],
-        });
+        // Verify filtered cache was updated with the real server record
+        const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'action', 'action-1']);
+        expect(filteredStates?.[0]?.id).toBe('state-1');
+
         // Should NOT invalidate the broad ['states'] key — this was the bug.
         // Broad invalidation caused a cascade of refetches across all useStates queries.
         expect(invalidateSpy).not.toHaveBeenCalledWith({
@@ -711,10 +711,9 @@ describe('useStateMutations', () => {
         queryKey: ['states'],
       });
 
-      // ASSERTION 3: The filtered key SHOULD be invalidated (to refresh with real server id)
-      expect(invalidateSpy).toHaveBeenCalledWith({
-        queryKey: ['states', 'action', 'action-1'],
-      });
+      // ASSERTION 3: The filtered cache should be updated with the real server record
+      const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'action', 'action-1']);
+      expect(filteredStates?.[0]?.id).toBe('state-server-1');
     });
   });
 });

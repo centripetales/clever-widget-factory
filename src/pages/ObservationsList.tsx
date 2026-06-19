@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { toolsQueryConfig, partsQueryConfig } from '@/lib/assetQueryConfigs';
@@ -27,14 +27,34 @@ import {
   HelpCircle,
   Play,
   Sparkles,
-  Bot
+  Bot,
+  Handshake,
+  Link,
+  CheckCircle2
 } from 'lucide-react';
+import { generateObservationUrl, copyToClipboard } from '@/lib/urlUtils';
+import { getThumbnailUrl } from '@/lib/imageUtils';
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { data: observations = [], isLoading: loadingObs, isError } = useStates();
+  const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations();
+
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const highlightId = queryParams.get('id');
+
+  const highlightRef = useRef<HTMLDivElement | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'most-recent-day' | '7d' | '30d'>('most-recent-day');
+
+  // Override dateFilter to 'all' if there is a highlightId
+  useEffect(() => {
+    if (highlightId) {
+      setDateFilter('all');
+    }
+  }, [highlightId]);
 
   // Copy-to-clipboard state for perspectives
   const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
@@ -45,6 +65,60 @@ export default function ObservationsList() {
       setCopiedMap(prev => ({ ...prev, [key]: false }));
     }, 2000);
   }, []);
+
+  // Copy link and toggle sharing states/callbacks
+  const [linkCopiedMap, setLinkCopiedMap] = useState<Record<string, boolean>>({});
+  const [togglingSharedMap, setTogglingSharedMap] = useState<Record<string, boolean>>({});
+
+  const handleCopyLink = useCallback(async (stateId: string) => {
+    const url = generateObservationUrl(stateId);
+    const success = await copyToClipboard(url);
+    if (success) {
+      setLinkCopiedMap(prev => ({ ...prev, [stateId]: true }));
+      toast({
+        title: "Link copied!",
+        description: "Observation link has been copied to your clipboard",
+      });
+      setTimeout(() => {
+        setLinkCopiedMap(prev => ({ ...prev, [stateId]: false }));
+      }, 2000);
+    } else {
+      toast({
+        title: "Could not copy automatically",
+        description: url,
+        duration: 10000,
+      });
+    }
+  }, [toast]);
+
+  const handleToggleShared = useCallback(async (observation: any) => {
+    if (togglingSharedMap[observation.id]) return;
+    setTogglingSharedMap(prev => ({ ...prev, [observation.id]: true }));
+    const nextShared = !observation.shared_with_partners;
+    try {
+      await updateState({
+        id: observation.id,
+        data: {
+          shared_with_partners: nextShared
+        }
+      });
+      toast({
+        title: nextShared ? "Sharing activated" : "Sharing restricted",
+        description: nextShared
+          ? "Observation details are now safely shared with trusted partners."
+          : "Sharing revoked. Observation details are now private.",
+      });
+    } catch (error) {
+      console.error('Error toggling observation sharing state:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update observation sharing policy.",
+        variant: "destructive"
+      });
+    } finally {
+      setTogglingSharedMap(prev => ({ ...prev, [observation.id]: false }));
+    }
+  }, [updateState, togglingSharedMap, toast]);
 
   // Live countdown for perspectives:processing WS events
   const [perspectivesTick, setPerspectivesTick] = useState(0);
@@ -66,9 +140,12 @@ export default function ObservationsList() {
     return remaining;
   }, [perspectivesTick]);
 
-  // Fetch observations
-  const { data: observations = [], isLoading: loadingObs, isError } = useStates();
-  const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations();
+
+  useEffect(() => {
+    if (highlightId && highlightRef.current && observations.length > 0) {
+      highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightId, observations, dateFilter]);
 
   // Fetch asset inventory lists to resolve asset names
   const { data: toolsList = [] } = useQuery({ ...toolsQueryConfig, ...offlineQueryConfig });
@@ -150,25 +227,25 @@ export default function ObservationsList() {
     // 2. Date Filter
     let matchesDate = true;
     if (dateFilter !== 'all') {
-      if (dateFilter === 'most-recent-day') {
-        if (observations.length > 0) {
-          const latestTime = Math.max(...observations.map(o => new Date(o.captured_at).getTime()));
+      if (observations.length > 0) {
+        const latestTime = Math.max(...observations.map(o => new Date(o.captured_at).getTime()));
+        
+        if (dateFilter === 'most-recent-day') {
           const latestDateStr = new Date(latestTime).toDateString();
           matchesDate = new Date(obs.captured_at).toDateString() === latestDateStr;
         } else {
-          matchesDate = false;
+          const obsDate = new Date(obs.captured_at);
+          const diffMs = latestTime - obsDate.getTime();
+          const diffHours = diffMs / (1000 * 60 * 60);
+
+          if (dateFilter === '7d') {
+            matchesDate = diffHours >= 0 && diffHours <= 24 * 7;
+          } else if (dateFilter === '30d') {
+            matchesDate = diffHours >= 0 && diffHours <= 24 * 30;
+          }
         }
       } else {
-        const obsDate = new Date(obs.captured_at);
-        const now = new Date();
-        const diffMs = now.getTime() - obsDate.getTime();
-        const diffHours = diffMs / (1000 * 60 * 60);
-
-        if (dateFilter === '7d') {
-          matchesDate = diffHours <= 24 * 7;
-        } else if (dateFilter === '30d') {
-          matchesDate = diffHours <= 24 * 30;
-        }
+        matchesDate = false;
       }
     }
 
@@ -271,8 +348,17 @@ export default function ObservationsList() {
       ) : (
         <div className="space-y-4">
           {filteredObservations.map((obs) => {
+            const isLinkedToAction = obs.links?.some((link: any) => link.entity_type === 'action');
             return (
-              <Card key={obs.id} className="overflow-hidden hover:shadow-md transition-shadow">
+              <Card 
+                key={obs.id} 
+                ref={obs.id === highlightId ? highlightRef : undefined}
+                className={`overflow-hidden hover:shadow-md transition-shadow ${
+                  obs.id === highlightId 
+                    ? 'border-amber-500 border-2 shadow-md bg-amber-50/10 dark:bg-amber-950/10' 
+                    : ''
+                }`}
+              >
                 <CardHeader className="pb-3 flex flex-row items-start justify-between gap-4">
                   <div className="space-y-1.5 w-full">
                     <div className="flex flex-wrap items-center gap-2">
@@ -283,6 +369,11 @@ export default function ObservationsList() {
                       <span className="text-xs text-muted-foreground">
                         {new Date(obs.captured_at).toLocaleString()}
                       </span>
+                      {obs.shared_with_partners && !isLinkedToAction && (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50 py-0 px-1.5 text-[10px]">
+                          Shared
+                        </Badge>
+                      )}
                     </div>
 
                     {/* Asset Badge Link */}
@@ -432,6 +523,39 @@ export default function ObservationsList() {
 
                   {/* Actions Dropdown / buttons */}
                   <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCopyLink(obs.id)}
+                      className={`h-8 w-8 p-0 ${linkCopiedMap[obs.id] ? 'border-green-500 border-2' : ''}`}
+                      title="Copy observation link"
+                    >
+                      {linkCopiedMap[obs.id] ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      ) : (
+                        <Link className="h-4 w-4" />
+                      )}
+                    </Button>
+
+                    {!isLinkedToAction && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleToggleShared(obs)}
+                        disabled={togglingSharedMap[obs.id]}
+                        className={`h-8 w-8 p-0 transition-colors duration-200 ${obs.shared_with_partners
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
+                            : 'hover:text-emerald-600 hover:bg-emerald-50'
+                          }`}
+                        title={obs.shared_with_partners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                      >
+                        {togglingSharedMap[obs.id] ? (
+                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        ) : (
+                          <Handshake className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
 
                     <Button
                       variant="ghost"
@@ -468,10 +592,16 @@ export default function ObservationsList() {
                         {obs.photos.map((photo: any, i) => (
                           <div key={i} className="relative flex-shrink-0">
                             <img
-                              src={photo.photo_url}
+                              src={getThumbnailUrl(photo.photo_url) || photo.photo_url}
                               alt={`Observation media ${i + 1}`}
                               className="w-24 h-24 object-cover rounded-lg border bg-muted cursor-pointer hover:opacity-90 transition-opacity"
                               onClick={() => window.open(photo.photo_url, '_blank')}
+                              onError={(e) => {
+                                // Thumbnail missing — fall back to full image
+                                if (e.currentTarget.src !== photo.photo_url) {
+                                  e.currentTarget.src = photo.photo_url;
+                                }
+                              }}
                             />
                           </div>
                         ))}

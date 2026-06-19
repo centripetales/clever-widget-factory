@@ -5,6 +5,8 @@ const { formatSqlValue } = require('/opt/nodejs/sqlUtils');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { composeStateEmbeddingSource } = require('/opt/nodejs/embedding-composition');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
+const crypto = require('crypto');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
@@ -88,6 +90,47 @@ async function resolveAndQueueEmbedding(stateId, organizationId) {
   }
 }
 
+/**
+ * Helper function to handle observation (state) sharing updates.
+ */
+async function handleSharingUpdate(dbClient, stateId, isShared, organizationId) {
+  const targetRisk = isShared ? 0.0 : 0.8;
+
+  // 1. Sets/updates state_risk_profiles aggregate_risk to 0.0 (shared) or 0.8 (private) for stateId.
+  await dbClient.query(`
+    INSERT INTO state_risk_profiles (state_id, aggregate_risk)
+    VALUES ($1, $2)
+    ON CONFLICT (state_id)
+    DO UPDATE SET aggregate_risk = $2, updated_at = NOW()
+  `, [stateId, targetRisk]);
+
+  // 2. Updates target risk profiles for all state_photos attached to the state in photo_metadata_extractions.
+  const photosRes = await dbClient.query(`
+    SELECT photo_url FROM state_photos WHERE state_id = $1
+  `, [stateId]);
+
+  if (photosRes.rows && photosRes.rows.length > 0) {
+    for (const row of photosRes.rows) {
+      await dbClient.query(`
+        INSERT INTO photo_metadata_extractions (photo_url, aggregate_risk)
+        VALUES ($1, $2)
+        ON CONFLICT (photo_url)
+        DO UPDATE SET aggregate_risk = $2, updated_at = NOW()
+      `, [row.photo_url, targetRisk]);
+    }
+  }
+
+  // 3. Adds a pending entry to rsp_outbox if sharing is enabled (isShared === true).
+  if (isShared) {
+    const idempotencyKey = crypto.createHash('sha256').update(stateId + '-' + Date.now()).digest('hex');
+    await dbClient.query(`
+      INSERT INTO rsp_outbox (state_id, idempotency_key, status, triggered_at)
+      VALUES ($1, $2, 'PENDING', NOW())
+      ON CONFLICT (idempotency_key) DO NOTHING
+    `, [stateId, idempotencyKey]);
+  }
+}
+
 const headers = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
@@ -167,6 +210,10 @@ async function listStates(event, authContext, headers) {
         s.created_at,
         s.updated_at,
         om.full_name as captured_by_name,
+        COALESCE(
+          (SELECT srp.aggregate_risk = 0.0 FROM state_risk_profiles srp WHERE srp.state_id = s.id),
+          false
+        ) as shared_with_partners,
         COALESCE(
           (SELECT json_agg(
             json_build_object(
@@ -285,6 +332,10 @@ async function getState(id, authContext, headers) {
         s.updated_at,
         om.full_name as captured_by_name,
         COALESCE(
+          (SELECT srp.aggregate_risk = 0.0 FROM state_risk_profiles srp WHERE srp.state_id = s.id),
+          false
+        ) as shared_with_partners,
+        COALESCE(
           (SELECT json_agg(
             json_build_object(
               'id', sp.id,
@@ -385,7 +436,7 @@ async function getState(id, authContext, headers) {
 
 async function createState(event, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
-  const { action, state_text, captured_at, photos = [], links = [] } = body;
+  const { action, state_text, captured_at, photos = [], links = [], shared_with_partners } = body;
   const organizationId = authContext.organization_id;
   const userId = authContext.user_id;
 
@@ -459,7 +510,27 @@ async function createState(event, authContext, headers) {
       }
     }
 
+    const hasActionLink = links.some(link => link.entity_type === 'action');
+    const isNarrativeState = state_text === 'Shared narrative and impact overview for action';
+    const canBeShared = !hasActionLink || isNarrativeState;
+    const actualSharedWithPartners = canBeShared ? (shared_with_partners === true || shared_with_partners === 'true') : false;
+
+    await handleSharingUpdate(client, state.id, actualSharedWithPartners, organizationId);
+
     await client.query('COMMIT');
+
+    // Broadcast cache invalidation
+    try {
+      await broadcastInvalidation({
+        entityType: 'state',
+        entityId: state.id,
+        mutationType: 'created',
+        organizationId,
+        excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+      });
+    } catch (err) {
+      console.error('Failed to broadcast cache invalidation:', err);
+    }
 
     try {
       const pClient = await getDbClient();
@@ -492,7 +563,7 @@ async function createState(event, authContext, headers) {
 
 async function updateState(event, id, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
-  const { state_text, captured_at, photos, links } = body;
+  const { state_text, captured_at, photos, links, shared_with_partners } = body;
   const organizationId = authContext.organization_id;
   const userId = authContext.user_id;
 
@@ -682,7 +753,48 @@ async function updateState(event, id, authContext, headers) {
       }
     }
 
+    if (shared_with_partners !== undefined) {
+      let hasActionLink = false;
+      if (links !== undefined) {
+        hasActionLink = links.some(link => link.entity_type === 'action');
+      } else {
+        const linksRes = await client.query(`
+          SELECT 1 FROM state_links 
+          WHERE state_id = $1 AND entity_type = 'action'
+          LIMIT 1
+        `, [id]);
+        hasActionLink = linksRes.rows.length > 0;
+      }
+
+      let isNarrativeState = false;
+      if (state_text !== undefined) {
+        isNarrativeState = state_text === 'Shared narrative and impact overview for action';
+      } else {
+        const stateRes = await client.query(`
+          SELECT state_text FROM states WHERE id = $1
+        `, [id]);
+        isNarrativeState = stateRes.rows[0]?.state_text === 'Shared narrative and impact overview for action';
+      }
+
+      const canBeShared = !hasActionLink || isNarrativeState;
+      const actualSharedWithPartners = canBeShared ? (shared_with_partners === true || shared_with_partners === 'true') : false;
+      await handleSharingUpdate(client, id, actualSharedWithPartners, organizationId);
+    }
+
     await client.query('COMMIT');
+
+    // Broadcast cache invalidation
+    try {
+      await broadcastInvalidation({
+        entityType: 'state',
+        entityId: id,
+        mutationType: 'updated',
+        organizationId,
+        excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+      });
+    } catch (err) {
+      console.error('Failed to broadcast cache invalidation:', err);
+    }
 
     try {
       const pClient = await getDbClient();
