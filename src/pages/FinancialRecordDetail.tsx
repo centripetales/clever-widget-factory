@@ -305,52 +305,50 @@ export default function FinancialRecordDetail() {
               disabled={isSaving}
             />
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-4">
               {!record.photos || record.photos.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No photos attached</p>
               ) : (
-                <div className="flex flex-col md:flex-row gap-6 items-stretch">
-                  {/* Left Column: Photo list/grid */}
-                  <div className={`grid gap-3 ${record.photos.length === 1 ? 'w-full md:w-1/3 max-w-[240px]' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 flex-1'}`}>
-                    {(record.photos || [])
-                      .sort((a, b) => a.photo_order - b.photo_order)
-                      .map((photo, index) => (
-                        <div key={index} className="flex flex-col">
-                          <div className="relative group/img-container">
-                            <img
-                              src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url}
-                              alt={(photo as any).photo_description || `photo ${index + 1}`}
-                              className="w-full aspect-square object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
-                              onClick={() => window.open(getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url, '_blank')}
-                              onError={(e) => {
-                                const originalUrl = getImageUrl(photo.photo_url);
-                                if (originalUrl && e.currentTarget.src !== originalUrl) {
-                                  e.currentTarget.src = originalUrl;
-                                } else {
-                                  e.currentTarget.style.display = 'none';
-                                }
-                              }}
-                            />
-                            {photo.transcription?.trim() && (
-                              <div className="absolute top-1 left-1 z-20">
-                                <span className="relative group/ai cursor-help inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-zinc-900/85 text-zinc-100 border border-zinc-700/50 hover:bg-zinc-800 transition-all select-none">
-                                  <span>AI</span>
-                                  <span className="absolute left-0 top-full mt-1.5 w-[280px] xs:w-[340px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover/ai:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left font-normal">
-                                    <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
-                                    <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-800 dark:text-zinc-200 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal">
-                                      {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
-                                    </span>
-                                  </span>
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                          {(photo as any).photo_description && (
-                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{(photo as any).photo_description}</p>
+                <div className="flex flex-col gap-4">
+                  {(record.photos || [])
+                    .sort((a, b) => a.photo_order - b.photo_order)
+                    .map((photo, index) => (
+                      <div key={photo.id || index} className="flex flex-col sm:flex-row gap-4 p-3 rounded-lg border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
+                        {/* Left part: Image/thumbnail */}
+                        <div className="relative w-40 h-40 flex-shrink-0 mx-auto sm:mx-0">
+                          <img
+                            src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url}
+                            alt={(photo as any).photo_description || `photo ${index + 1}`}
+                            className="w-full h-full object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
+                            onClick={() => window.open(getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || photo.photo_url, '_blank')}
+                            onError={(e) => {
+                              const originalUrl = getImageUrl(photo.photo_url);
+                              if (originalUrl && e.currentTarget.src !== originalUrl) {
+                                e.currentTarget.src = originalUrl;
+                              } else {
+                                e.currentTarget.style.display = 'none';
+                              }
+                            }}
+                          />
+                        </div>
+
+                        {/* Right part: AI description details */}
+                        <div className="flex-1 flex flex-col justify-start min-w-0">
+                          {photo.transcription?.trim() ? (
+                            <div className="p-3 rounded bg-indigo-50/30 dark:bg-indigo-950/15 border border-indigo-100/50 dark:border-indigo-900/20 h-full">
+                              <span className="block font-semibold text-xs text-indigo-900 dark:text-indigo-400 mb-1">AI Description:</span>
+                              <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed font-normal whitespace-pre-wrap">
+                                {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="p-3 rounded bg-zinc-100/50 dark:bg-zinc-800/20 border border-zinc-200/50 dark:border-zinc-750/30 h-full flex items-center justify-center">
+                              <p className="text-xs text-muted-foreground italic">AI description not yet available.</p>
+                            </div>
                           )}
                         </div>
-                      ))}
-                  </div>
+                      </div>
+                    ))}
                 </div>
               )}
             </div>

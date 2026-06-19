@@ -9,6 +9,7 @@ export interface Observation {
   updated_at: string;
   photos: ObservationPhoto[];
   links: ObservationLink[];
+  shared_with_partners?: boolean;
   perspectives?: {
     perspective_type: string;
     content: string;
@@ -41,6 +42,7 @@ export interface ObservationLink {
 export interface CreateObservationData {
   state_text?: string;  // Backend field name (general concept)
   captured_at?: string;
+  shared_with_partners?: boolean;
   photos: Array<{
     photo_url: string;
     photo_description?: string;
@@ -55,6 +57,7 @@ export interface CreateObservationData {
 export interface UpdateObservationData {
   state_text?: string;  // Backend field name (general concept)
   captured_at?: string;
+  shared_with_partners?: boolean;
   photos?: Array<{
     photo_url: string;
     photo_description?: string;

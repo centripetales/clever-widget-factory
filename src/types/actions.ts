@@ -82,6 +82,7 @@ export interface BaseAction {
     name: string;
     description?: string;
   } | null;
+  shared_with_partners?: boolean;
 }
 
 export interface Profile {

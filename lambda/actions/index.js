@@ -102,6 +102,7 @@ exports.handler = async (event) => {
                 JOIN state_risk_profiles srp ON s.id = srp.state_id
                 WHERE sl.entity_type = 'action'
                   AND sl.entity_id = a.id
+                  AND s.state_text = 'Shared narrative and impact overview for action'
                   AND srp.aggregate_risk = 0.0
               )
             ),
@@ -331,7 +332,9 @@ exports.handler = async (event) => {
           SELECT s.id 
           FROM states s
           JOIN state_links sl ON s.id = sl.state_id
-          WHERE sl.entity_type = 'action' AND sl.entity_id = '${actionId}'
+          WHERE sl.entity_type = 'action' 
+            AND sl.entity_id = '${actionId}'
+            AND s.state_text = 'Shared narrative and impact overview for action'
           LIMIT 1
         `;
         const states = await queryJSON(findStateSql);
@@ -630,7 +633,9 @@ exports.handler = async (event) => {
           SELECT s.id 
           FROM states s
           JOIN state_links sl ON s.id = sl.state_id
-          WHERE sl.entity_type = 'action' AND sl.entity_id = '${targetActionId}'
+          WHERE sl.entity_type = 'action' 
+            AND sl.entity_id = '${targetActionId}'
+            AND s.state_text = 'Shared narrative and impact overview for action'
           LIMIT 1
         `;
         const states = await queryJSON(findStateSql);
@@ -980,6 +985,7 @@ exports.handler = async (event) => {
                 JOIN state_risk_profiles srp ON s.id = srp.state_id
                 WHERE sl.entity_type = 'action'
                   AND sl.entity_id = a.id
+                  AND s.state_text = 'Shared narrative and impact overview for action'
                   AND srp.aggregate_risk = 0.0
               )
             ),

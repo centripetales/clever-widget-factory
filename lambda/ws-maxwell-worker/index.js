@@ -196,7 +196,7 @@ exports.handler = async (event) => {
     return;
   }
 
-  const { message, sessionId, sessionAttributes = {} } = payload;
+  const { message, sessionId, sessionAttributes = {}, history } = payload;
 
   // Build enhanced message with instruction prefix and entity context
   let enhancedMessage = buildInstructionPrefix(message);
@@ -241,6 +241,15 @@ exports.handler = async (event) => {
   // Generate a session ID if not provided (Bedrock requires it)
   const effectiveSessionId = sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
+  const bedrockHistory = history && Array.isArray(history) && history.length > 0
+    ? {
+        messages: history.map(h => ({
+          role: h.role === 'user' ? 'user' : 'assistant',
+          content: [{ text: String(h.content || '') }]
+        }))
+      }
+    : undefined;
+
   const command = new InvokeAgentCommand({
     agentId: AGENT_ID,
     agentAliasId: targetAliasId,
@@ -249,6 +258,7 @@ exports.handler = async (event) => {
     enableTrace: true,
     sessionState: {
       sessionAttributes: stringifiedAttributes,
+      conversationHistory: bedrockHistory,
     },
   });
 

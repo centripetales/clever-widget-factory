@@ -197,6 +197,11 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       : '';
     const enhancedText = modePrefix + text;
 
+    const history = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+    }));
+
     const userMsg: MaxwellMessage = {
       role: 'user',
       content: text,
@@ -216,6 +221,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
         message: enhancedText,
         sessionId: sessionId ?? undefined,
         mode,
+        history,
         sessionAttributes: {
           entityId: sessionAttributes.entityId,
           entityType: sessionAttributes.entityType,
@@ -241,6 +247,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
           message: enhancedText,
           sessionId,
           mode,
+          history,
           sessionAttributes,
         });
 
@@ -262,7 +269,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
         setIsLoading(false);
       }
     }
-  }, [isLoading, sessionId, sessionAttributes, status, wsSendMessage]);
+  }, [isLoading, messages, sessionId, sessionAttributes, status, wsSendMessage]);
 
   return { messages, isLoading, progressStep, error, sessionId, sendMessage, resetSession };
 }

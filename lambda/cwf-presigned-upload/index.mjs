@@ -40,7 +40,8 @@ export const handler = async (event) => {
         };
       }
 
-      key = `organizations/${organizationId}/images/uploads/${filename}`;
+      const random = Math.random().toString(36).substring(2, 9);
+      key = `organizations/${organizationId}/images/uploads/${random}-${filename}`;
       finalKey = key.replace('/uploads/', '/');
       console.log('Organization-scoped upload:', { organizationId, filename, key, finalKey });
     } else {
