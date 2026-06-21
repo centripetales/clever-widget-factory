@@ -11,10 +11,10 @@ erDiagram
     timestamp with time zone created_at
   }
   action_exploration {
-    uuid action_id NOT NULL
     uuid action_id PK NOT NULL
-    uuid exploration_id PK NOT NULL
+    uuid action_id NOT NULL
     uuid exploration_id NOT NULL
+    uuid exploration_id PK NOT NULL
     timestamp without time zone created_at
     timestamp without time zone updated_at
   }
@@ -51,23 +51,16 @@ erDiagram
     text title NOT NULL
     text description
     uuid assigned_to
-    uuid assigned_to
     text status NOT NULL
-    text evidence_description
     timestamp with time zone created_at NOT NULL
     timestamp with time zone updated_at NOT NULL
     timestamp with time zone completed_at
-    timestamp with time zone qa_approved_at
     text policy
-    text observations
-    text estimated_duration
-    text actual_duration
     ARRAY required_tools
     uuid linked_issue_id
     text issue_reference
     ARRAY attachments
     uuid asset_id
-    numeric score
     jsonb scoring_data
     jsonb required_stock
     boolean plan_commitment
@@ -80,6 +73,8 @@ erDiagram
     USER-DEFINED search_embedding
     uuid policy_id
     boolean is_exploration
+    text expected_state
+    jsonb skill_profile
   }
   analyses {
     uuid id PK NOT NULL
@@ -162,6 +157,59 @@ erDiagram
     uuid organization_id NOT NULL
     uuid action_id
   }
+  claim_perspectives {
+    uuid id NOT NULL
+    uuid id PK NOT NULL
+    text content NOT NULL
+  }
+  energeia_cache {
+    uuid id PK NOT NULL
+    uuid organization_id NOT NULL
+    uuid organization_id NOT NULL
+    integer k NOT NULL
+    integer time_window_days NOT NULL
+    jsonb payload NOT NULL
+    timestamp with time zone computed_at NOT NULL
+    timestamp with time zone created_at NOT NULL
+    timestamp with time zone updated_at NOT NULL
+  }
+  entity_changes {
+    uuid id PK NOT NULL
+    character varying entity_type NOT NULL
+    uuid entity_id NOT NULL
+    character varying mutation_type NOT NULL
+    uuid organization_id NOT NULL
+    character varying changed_by_connection_id
+    timestamp with time zone created_at NOT NULL
+  }
+  entropy_perspectives {
+    uuid id NOT NULL
+    uuid id PK NOT NULL
+    text content NOT NULL
+  }
+  epistemic_links {
+    uuid id PK NOT NULL
+    uuid source_state_id NOT NULL
+    uuid target_state_id NOT NULL
+    timestamp with time zone created_at NOT NULL
+  }
+  experience_components {
+    uuid id PK NOT NULL
+    uuid experience_id NOT NULL
+    character varying component_type NOT NULL
+    uuid state_id
+    uuid action_id
+    uuid organization_id NOT NULL
+    timestamp with time zone created_at
+  }
+  experiences {
+    uuid id PK NOT NULL
+    character varying entity_type NOT NULL
+    uuid entity_id NOT NULL
+    uuid organization_id NOT NULL
+    uuid created_by NOT NULL
+    timestamp with time zone created_at
+  }
   exploration {
     uuid id PK NOT NULL
     uuid action_id
@@ -183,6 +231,26 @@ erDiagram
     character varying model NOT NULL
     USER-DEFINED embedding
     timestamp with time zone created_at
+  }
+  financial_record_edits {
+    uuid id PK NOT NULL
+    uuid record_id NOT NULL
+    uuid edited_by NOT NULL
+    timestamp with time zone edited_at NOT NULL
+    character varying field_changed NOT NULL
+    text old_value
+    text new_value
+  }
+  financial_records {
+    uuid id PK NOT NULL
+    uuid organization_id NOT NULL
+    uuid created_by
+    date transaction_date NOT NULL
+    numeric amount NOT NULL
+    timestamp with time zone created_at NOT NULL
+    timestamp with time zone updated_at NOT NULL
+    character varying payment_method NOT NULL
+    numeric balance_after
   }
   five_whys_sessions {
     uuid id PK NOT NULL
@@ -256,6 +324,35 @@ erDiagram
     uuid organization_id NOT NULL
     USER-DEFINED search_embedding
   }
+  llm_generation_configs {
+    uuid id PK NOT NULL
+    character varying model_id NOT NULL
+    character varying version NOT NULL
+    text system_prompt NOT NULL
+    jsonb inference_config NOT NULL
+    timestamp with time zone created_at
+  }
+  metric_snapshots {
+    uuid snapshot_id PK NOT NULL
+    uuid state_id NOT NULL
+    uuid state_id NOT NULL
+    uuid metric_id NOT NULL
+    uuid metric_id NOT NULL
+    text value NOT NULL
+    text notes
+    timestamp with time zone created_at
+    timestamp with time zone updated_at
+  }
+  metrics {
+    uuid metric_id PK NOT NULL
+    uuid tool_id NOT NULL
+    character varying name NOT NULL
+    character varying unit
+    numeric benchmark_value
+    text details
+    timestamp without time zone created_at
+    uuid organization_id NOT NULL
+  }
   mission_attachments {
     uuid id PK NOT NULL
     uuid mission_id
@@ -292,7 +389,6 @@ erDiagram
     uuid organization_id NOT NULL
     uuid organization_id NOT NULL
     uuid user_id NOT NULL
-    uuid user_id NOT NULL
     text role NOT NULL
     uuid invited_by
     timestamp with time zone created_at NOT NULL
@@ -302,6 +398,7 @@ erDiagram
     text cognito_user_id
     text email
     text favorite_color
+    jsonb settings
   }
   organizations {
     uuid id PK NOT NULL
@@ -311,6 +408,7 @@ erDiagram
     boolean is_active NOT NULL
     timestamp with time zone created_at NOT NULL
     timestamp with time zone updated_at NOT NULL
+    jsonb ai_config
   }
   parts {
     uuid id PK NOT NULL
@@ -338,6 +436,7 @@ erDiagram
     USER-DEFINED search_embedding_v2
     boolean sellable NOT NULL
     text policy
+    bigint target_population_scale NOT NULL
   }
   parts_history {
     uuid id PK NOT NULL
@@ -373,6 +472,51 @@ erDiagram
     timestamp with time zone updated_at NOT NULL
     uuid organization_id NOT NULL
   }
+  pending_perspectives {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    character varying status NOT NULL
+    integer attempt_count
+    text last_error
+    timestamp with time zone created_at
+    timestamp with time zone processed_at
+  }
+  perspective_links {
+    uuid id PK NOT NULL
+    uuid source_perspective_id NOT NULL
+    character varying link_type NOT NULL
+    uuid target_perspective_id
+    uuid target_state_id
+    numeric similarity_score NOT NULL
+    timestamp with time zone created_at
+  }
+  photo_analysis_params {
+    uuid id PK NOT NULL
+    character varying prompt_key NOT NULL
+    character varying model_id NOT NULL
+    character varying version NOT NULL
+    text system_prompt
+    jsonb inference_config NOT NULL
+    timestamp with time zone created_at
+  }
+  photo_metadata_extractions {
+    uuid id PK NOT NULL
+    character varying photo_url NOT NULL
+    numeric gps_latitude
+    numeric gps_longitude
+    numeric gps_altitude
+    timestamp with time zone captured_at
+    character varying device_make
+    character varying device_model
+    jsonb raw_exif NOT NULL
+    numeric risk_liquid
+    numeric risk_exploit
+    numeric risk_geo
+    numeric risk_ident
+    numeric aggregate_risk
+    timestamp with time zone created_at
+    timestamp with time zone updated_at
+  }
   policy {
     uuid id PK NOT NULL
     character varying title NOT NULL
@@ -401,6 +545,16 @@ erDiagram
     text favorite_color
     text full_name
   }
+  rsp_outbox {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    text idempotency_key NOT NULL
+    character varying status NOT NULL
+    integer attempt_count NOT NULL
+    text last_error
+    timestamp with time zone triggered_at NOT NULL
+    timestamp with time zone processed_at
+  }
   scoring_prompts {
     uuid id PK NOT NULL
     text name NOT NULL
@@ -410,6 +564,80 @@ erDiagram
     timestamp with time zone created_at NOT NULL
     timestamp with time zone updated_at NOT NULL
     uuid organization_id NOT NULL
+  }
+  significance_perspectives {
+    uuid id NOT NULL
+    uuid id PK NOT NULL
+    text content NOT NULL
+  }
+  state_links {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    uuid state_id NOT NULL
+    text entity_type NOT NULL
+    uuid entity_id NOT NULL
+    timestamp with time zone created_at
+  }
+  state_perspectives {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    character varying perspective_type NOT NULL
+    uuid llm_generation_config_id NOT NULL
+    character varying status NOT NULL
+    text error_message
+    timestamp with time zone created_at
+  }
+  state_photos {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    uuid state_id NOT NULL
+    text photo_url NOT NULL
+    text photo_description
+    integer photo_order NOT NULL
+    text requested_model
+  }
+  state_risk_profiles {
+    uuid id PK NOT NULL
+    uuid state_id NOT NULL
+    uuid state_id NOT NULL
+    numeric risk_liquid
+    numeric risk_exploit
+    numeric risk_geo
+    numeric risk_ident
+    numeric aggregate_risk
+    timestamp with time zone created_at
+    timestamp with time zone updated_at
+  }
+  state_space_model_associations {
+    uuid id PK NOT NULL
+    uuid model_id NOT NULL
+    uuid model_id NOT NULL
+    text entity_type NOT NULL
+    uuid entity_id NOT NULL
+    timestamp with time zone created_at
+  }
+  state_space_models {
+    uuid id PK NOT NULL
+    uuid organization_id NOT NULL
+    uuid organization_id NOT NULL
+    text name NOT NULL
+    text description
+    text version
+    text author
+    json model_definition NOT NULL
+    boolean is_public
+    text created_by
+    timestamp with time zone created_at
+    timestamp with time zone updated_at
+  }
+  states {
+    uuid id PK NOT NULL
+    uuid organization_id NOT NULL
+    text state_text
+    uuid captured_by
+    timestamp with time zone captured_at NOT NULL
+    timestamp with time zone created_at
+    timestamp with time zone updated_at
   }
   storage_vicinities {
     uuid id PK NOT NULL
@@ -471,6 +699,7 @@ erDiagram
     text search_text
     USER-DEFINED search_embedding_v2
     text policy
+    bigint target_population_scale NOT NULL
   }
   unified_embeddings {
     uuid id PK NOT NULL
@@ -482,6 +711,16 @@ erDiagram
     uuid organization_id NOT NULL
     timestamp with time zone created_at
     timestamp with time zone updated_at
+    uuid action_id
+    text axis_key
+  }
+  websocket_connections {
+    uuid id PK NOT NULL
+    character varying connection_id NOT NULL
+    uuid user_id NOT NULL
+    uuid organization_id NOT NULL
+    timestamp with time zone connected_at NOT NULL
+    timestamp with time zone disconnected_at
   }
   worker_attributes {
     uuid id PK NOT NULL
@@ -522,11 +761,9 @@ erDiagram
   actions ||--o{ action_exploration : action_id
   exploration ||--o{ action_exploration : exploration_id
   actions ||--o{ action_implementation_updates : action_id
-  organization_members ||--o{ action_implementation_updates : updated_by
   actions ||--o{ action_scores : action_id
   organizations ||--o{ action_scores : organization_id
   missions ||--o{ actions : mission_id
-  organization_members ||--o{ actions : assigned_to
   organizations ||--o{ actions : organization_id
   policy ||--o{ actions : policy_id
   profiles ||--o{ actions : assigned_to
@@ -542,13 +779,31 @@ erDiagram
   actions ||--o{ checkouts : action_id
   organizations ||--o{ checkouts : organization_id
   tools ||--o{ checkouts : tool_id
+  state_perspectives ||--o{ claim_perspectives : id
+  organizations ||--o{ energeia_cache : organization_id
+  organizations ||--o{ entity_changes : organization_id
+  state_perspectives ||--o{ entropy_perspectives : id
+  states ||--o{ epistemic_links : source_state_id
+  states ||--o{ epistemic_links : target_state_id
+  actions ||--o{ experience_components : action_id
+  experiences ||--o{ experience_components : experience_id
+  organizations ||--o{ experience_components : organization_id
+  states ||--o{ experience_components : state_id
+  organization_members ||--o{ experiences : created_by
+  organizations ||--o{ experiences : organization_id
   actions ||--o{ exploration : action_id
   exploration ||--o{ exploration_embedding : exploration_id
+  financial_records ||--o{ financial_record_edits : record_id
+  organizations ||--o{ financial_records : organization_id
   issues ||--o{ five_whys_sessions : issue_id
   organizations ||--o{ five_whys_sessions : organization_id
   organizations ||--o{ issue_history : organization_id
   organizations ||--o{ issue_requirements : organization_id
   organizations ||--o{ issues : organization_id
+  metrics ||--o{ metric_snapshots : metric_id
+  states ||--o{ metric_snapshots : state_id
+  organizations ||--o{ metrics : organization_id
+  tools ||--o{ metrics : tool_id
   actions ||--o{ mission_attachments : task_id
   missions ||--o{ mission_attachments : mission_id
   organizations ||--o{ mission_attachments : organization_id
@@ -563,8 +818,22 @@ erDiagram
   parts_orders ||--o{ parts_history : order_id
   profiles ||--o{ parts_history : changed_by
   organizations ||--o{ parts_orders : organization_id
+  states ||--o{ pending_perspectives : state_id
+  state_perspectives ||--o{ perspective_links : source_perspective_id
+  state_perspectives ||--o{ perspective_links : target_perspective_id
+  states ||--o{ perspective_links : target_state_id
   policy ||--o{ policy_embedding : policy_id
+  states ||--o{ rsp_outbox : state_id
   organizations ||--o{ scoring_prompts : organization_id
+  state_perspectives ||--o{ significance_perspectives : id
+  states ||--o{ state_links : state_id
+  llm_generation_configs ||--o{ state_perspectives : llm_generation_config_id
+  states ||--o{ state_perspectives : state_id
+  states ||--o{ state_photos : state_id
+  states ||--o{ state_risk_profiles : state_id
+  state_space_models ||--o{ state_space_model_associations : model_id
+  organizations ||--o{ state_space_models : organization_id
+  organizations ||--o{ states : organization_id
   organizations ||--o{ storage_vicinities : organization_id
   organizations ||--o{ suppliers : organization_id
   organizations ||--o{ tool_audits : organization_id
@@ -574,6 +843,7 @@ erDiagram
   organizations ||--o{ tools : organization_id
   tools ||--o{ tools : parent_structure_id
   organizations ||--o{ unified_embeddings : organization_id
+  organizations ||--o{ websocket_connections : organization_id
   organizations ||--o{ worker_attributes : organization_id
   profiles ||--o{ worker_attributes : user_id
   organizations ||--o{ worker_performance : organization_id

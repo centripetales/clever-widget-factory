@@ -278,7 +278,7 @@ export function ActionForm({
   const maxwellCtx = onMaxwellOpenChange ? maxwellContext : maxwellContextInternal;
 
   // Fetch states for the action to extract learning takeaways for Copy Context and Maxwell context
-  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
+  const { data: actionStates } = useStates(organizationId ?? '', { entity_type: 'action', entity_id: action?.id });
 
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
@@ -347,7 +347,7 @@ export function ActionForm({
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Derive observation count from TanStack cache (preferred over database count)
-  const derivedObservationCount = useActionObservationCount(action?.id || '');
+  const derivedObservationCount = useActionObservationCount(organizationId ?? '', action?.id || '');
 
   const preferName = (value?: string | null) => {
     if (!value) return null;

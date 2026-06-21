@@ -13,6 +13,8 @@ import { offlineQueryConfig } from '@/lib/queryConfig';
 import { Bolt, Plus, Filter, Search, CheckCircle, AlertTriangle, ArrowLeft, X, SearchCheck, Info } from 'lucide-react';
 import { ActionScoreDialog } from '@/components/ActionScoreDialog';
 import { ActionListItemCard } from '@/components/ActionListItemCard';
+import { SharedOrgSelector } from '@/components/SharedOrgSelector';
+import { useSharedOrgs } from '@/hooks/useSharedOrgs';
 import { useActionScores, ActionScore } from '@/hooks/useActionScores';
 import { BaseAction } from '@/types/actions';
 import { useNavigate } from 'react-router-dom';
@@ -46,14 +48,17 @@ export default function Actions() {
   const [existingScore, setExistingScore] = useState<ActionScore | null>(null);
 
   const { getScoreForAction } = useActionScores();
+  const { selectedOrgs } = useSharedOrgs();
 
   const fetchUnresolvedActions = async (): Promise<BaseAction[]> => {
-    const result = await apiService.get('/actions?status=unresolved');
+    const url = `/actions?status=unresolved${selectedOrgs.length > 0 ? `&view_shared=${selectedOrgs.join(',')}` : ''}`;
+    const result = await apiService.get(url);
     return result.data || [];
   };
 
   const fetchCompletedActions = async (): Promise<BaseAction[]> => {
-    const result = await apiService.get('/actions?status=completed');
+    const url = `/actions?status=completed${selectedOrgs.length > 0 ? `&view_shared=${selectedOrgs.join(',')}` : ''}`;
+    const result = await apiService.get(url);
     return result.data || [];
   };
 
@@ -61,7 +66,7 @@ export default function Actions() {
 
   // Unresolved actions - fetched eagerly on mount
   const { data: unresolvedActions = [], isLoading: unresolvedLoading } = useQuery({
-    queryKey: actionsQueryKey(),
+    queryKey: [...actionsQueryKey(), selectedOrgs.join(',')],
     queryFn: fetchUnresolvedActions,
     ...offlineQueryConfig,
     refetchOnWindowFocus: false,
@@ -70,7 +75,7 @@ export default function Actions() {
 
   // Completed actions - fetched lazily when tab is clicked
   const { data: completedActions = [], isLoading: completedLoading } = useQuery({
-    queryKey: completedActionsQueryKey(),
+    queryKey: [...completedActionsQueryKey(), selectedOrgs.join(',')],
     queryFn: fetchCompletedActions,
     enabled: completedTabVisited,
     ...offlineQueryConfig,
@@ -290,6 +295,8 @@ export default function Actions() {
           <span className="break-words">New Action</span>
         </Button>
       </div>
+
+      <SharedOrgSelector />
 
       {/* Filters */}
       <Card>

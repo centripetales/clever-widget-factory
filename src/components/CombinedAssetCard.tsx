@@ -1,15 +1,16 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin, Handshake } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
 import { AssetHistoryDialog } from "./AssetHistoryDialog";
+import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { Link } from "react-router-dom";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import { PrismIcon } from "@/components/icons/PrismIcon";
 
-import { useMemo, memo, useRef } from "react";
+import { useMemo, memo, useState } from "react";
 
 import { CombinedAsset } from '@/hooks/useCombinedAssets';
 import { useToast } from "@/hooks/use-toast";
@@ -122,6 +123,7 @@ export const CombinedAssetCard = memo(({
   itemCount
 }: CombinedAssetCardProps) => {
   const { toast } = useToast();
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const checkoutDateDisplay = useMemo(() => {
     if (!checkoutInfo?.checkout_date) return null;
     const parsedDate = new Date(checkoutInfo.checkout_date);
@@ -400,6 +402,27 @@ export const CombinedAssetCard = memo(({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-12 px-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowShareDialog(true);
+                      }}
+                    >
+                      <Handshake className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Share Asset</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <AssetHistoryDialog assetId={asset.id} assetName={asset.name}>
                       <Button
                         variant="outline"
@@ -473,6 +496,26 @@ export const CombinedAssetCard = memo(({
                   </TooltipProvider>
                 )}
 
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-12 px-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowShareDialog(true);
+                        }}
+                      >
+                        <Handshake className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Share Stock</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {/* Stock History Button */}
                 <InventoryHistoryDialog partId={asset.id} partName={asset.name}>
@@ -564,6 +607,15 @@ export const CombinedAssetCard = memo(({
           )}
         </div>
       </CardContent>
+      {showShareDialog && (
+        <ShareConfigurationDialog 
+          open={showShareDialog} 
+          onOpenChange={setShowShareDialog} 
+          entityId={asset.id} 
+          entityType={asset.type === 'asset' ? 'tool' : 'part'} 
+          entityName={asset.name} 
+        />
+      )}
     </Card>
   );
 });

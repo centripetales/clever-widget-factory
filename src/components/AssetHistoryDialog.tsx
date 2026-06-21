@@ -12,6 +12,7 @@ import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { useStateMutations } from "@/hooks/useStates";
 import { MaxwellInlinePanel } from "@/components/MaxwellInlinePanel";
 import { PrismIcon } from "@/components/icons/PrismIcon";
+import { useOrganization } from "@/hooks/useOrganization";
 
 // Type guard functions
 const isAssetHistory = (entry: HistoryEntry): entry is AssetHistoryEntry => {
@@ -37,7 +38,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
   const { toolHistory, assetInfo, loading, fetchToolHistory } = useToolHistory();
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
-  const { deleteState, isDeleting } = useStateMutations();
+  const { organization } = useOrganization();
+  const { deleteState, isDeleting } = useStateMutations(organization?.id ?? '');
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
 

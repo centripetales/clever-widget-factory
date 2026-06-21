@@ -395,27 +395,27 @@ function AppContent() {
 }
 
 const App = () => (
-  <PersistQueryClientProvider
-    client={queryClient}
-    persistOptions={{
-      persister: queryCachePersister,
-      maxAge: QUERY_CACHE_MAX_AGE,
-    }}
-  >
-    <AuthProvider>
-      <OrganizationProvider>
-        <AppSettingsProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Sonner />
-            <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || "/"}>
+  <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || "/"}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: queryCachePersister,
+        maxAge: QUERY_CACHE_MAX_AGE,
+      }}
+    >
+      <AuthProvider>
+        <OrganizationProvider>
+          <AppSettingsProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Sonner />
               <AppContent />
-            </BrowserRouter>
-          </TooltipProvider>
-        </AppSettingsProvider>
-      </OrganizationProvider>
-    </AuthProvider>
-  </PersistQueryClientProvider>
+            </TooltipProvider>
+          </AppSettingsProvider>
+        </OrganizationProvider>
+      </AuthProvider>
+    </PersistQueryClientProvider>
+  </BrowserRouter>
 );
 
 export default App;

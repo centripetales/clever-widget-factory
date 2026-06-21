@@ -1686,14 +1686,15 @@ exports.handler = async (event) => {
         console.log('✅ Organizations GET endpoint matched');
 
         // Build WHERE clause manually since organizations table uses 'id' not 'organization_id'
-        let whereClause = '';
+        let whereClause = "WHERE (settings->>'deleted' IS NULL OR settings->>'deleted' != 'true')";
         if (!hasDataReadAll) {
           const orgIdsList = accessibleOrgIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
-          whereClause = accessibleOrgIds.length > 0 ? `WHERE id IN (${orgIdsList})` : 'WHERE 1=0';
+          whereClause += accessibleOrgIds.length > 0 ? ` AND id IN (${orgIdsList})` : ' AND 1=0';
         }
 
         const sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT id, name, subdomain, settings, is_active, created_at, updated_at 
+          SELECT id, name, subdomain, settings, is_active, created_at, updated_at,
+                 (SELECT COUNT(*) FROM organization_members WHERE organization_id = organizations.id AND is_active = true) as member_count
           FROM organizations ${whereClause}
         ) t;`;
         
@@ -1705,6 +1706,94 @@ exports.handler = async (event) => {
           headers,
           body: JSON.stringify({ data: result?.[0]?.json_agg || [] })
         };
+      }
+
+      if (httpMethod === 'POST') {
+        if (!hasPermission(authContext, 'data:read:all')) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({ error: 'Forbidden: super-admin permission required to create organizations' })
+          };
+        }
+
+        const body = JSON.parse(event.body || '{}');
+        const { name, subdomain } = body;
+
+        if (!name || !name.trim()) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: 'name is required' })
+          };
+        }
+
+        const creatorCognitoId = authContext.cognito_user_id;
+        if (!creatorCognitoId) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: 'Cannot determine creating user from auth context' })
+          };
+        }
+
+        const client = await getDbClient();
+        try {
+          await client.query('BEGIN');
+
+          // 1. Insert the new organization
+          const orgResult = await client.query(
+            `INSERT INTO organizations (name, subdomain, is_active, settings, created_at, updated_at)
+             VALUES ($1, $2, true, '{}', NOW(), NOW())
+             RETURNING id, name, subdomain, settings, is_active, created_at, updated_at`,
+            [name.trim(), subdomain || null]
+          );
+          const newOrg = orgResult.rows[0];
+
+          // 2. Look up the creator's profile from an existing membership to carry over user_id, full_name, email
+          const creatorResult = await client.query(
+            `SELECT user_id, full_name, email, favorite_color
+             FROM organization_members
+             WHERE cognito_user_id = $1 AND is_active = true
+             LIMIT 1`,
+            [creatorCognitoId]
+          );
+          const creator = creatorResult.rows[0];
+
+          // 3. Seed the creator as a super_admin member of the new org
+          await client.query(
+            `INSERT INTO organization_members
+               (organization_id, user_id, cognito_user_id, role, super_admin, is_active, full_name, email, favorite_color, created_at)
+             VALUES ($1, $2, $3, 'admin', true, true, $4, $5, $6, NOW())`,
+            [
+              newOrg.id,
+              creator?.user_id || null,
+              creatorCognitoId,
+              creator?.full_name || null,
+              creator?.email || null,
+              creator?.favorite_color || null
+            ]
+          );
+
+          await client.query('COMMIT');
+
+          console.log(`✅ Created org ${newOrg.id} and seeded membership for ${creatorCognitoId}`);
+          return {
+            statusCode: 201,
+            headers,
+            body: JSON.stringify({ data: newOrg })
+          };
+        } catch (err) {
+          await client.query('ROLLBACK');
+          console.error('❌ Error creating organization:', err);
+          return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ error: err.message })
+          };
+        } finally {
+          client.release();
+        }
       }
     }
     
@@ -1911,6 +2000,32 @@ exports.handler = async (event) => {
       }
     }
 
+    // Impact preview — direct FK dependent counts (sanity check before delete)
+    if (httpMethod === 'GET' && path.match(/\/organizations\/[^/]+\/impact$/)) {
+      if (!hasPermission(authContext, 'data:read:all')) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Forbidden' }) };
+      }
+      const impactOrgId = path.split('/').slice(-2)[0];
+      const impact = {};
+      const impactQueries = [
+        { key: 'members',  sql: 'SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND is_active = true' },
+        { key: 'actions',  sql: 'SELECT COUNT(*) FROM actions WHERE organization_id = $1' },
+        { key: 'missions', sql: 'SELECT COUNT(*) FROM missions WHERE organization_id = $1' },
+        { key: 'tools',    sql: 'SELECT COUNT(*) FROM tools WHERE organization_id = $1' },
+        { key: 'issues',   sql: 'SELECT COUNT(*) FROM issues WHERE organization_id = $1' },
+      ];
+      const impactClient = await getDbClient();
+      try {
+        for (const q of impactQueries) {
+          const r = await impactClient.query(q.sql, [impactOrgId]);
+          impact[q.key] = parseInt(r.rows[0].count, 10);
+        }
+      } finally {
+        impactClient.release();
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ data: impact }) };
+    }
+
     // Organizations by ID endpoint
     if (path.match(/\/organizations\/[^/]+$/)) {
       const orgId = path.split('/').pop();
@@ -1925,25 +2040,47 @@ exports.handler = async (event) => {
         }
 
         const body = JSON.parse(event.body || '{}');
-        const { strategic_attributes } = body;
-        
-        if (!strategic_attributes) {
+        const updates = [];
+
+        if (body.name !== undefined) {
+          updates.push(`name = ${formatSqlValue(body.name)}`);
+        }
+        if (body.subdomain !== undefined) {
+          updates.push(`subdomain = ${formatSqlValue(body.subdomain)}`);
+        }
+        if (body.is_active !== undefined) {
+          updates.push(`is_active = ${formatSqlValue(body.is_active)}`);
+        }
+
+        if (body.strategic_attributes !== undefined || body.settings !== undefined) {
+          const getSql = `SELECT settings FROM organizations WHERE id = '${orgId}';`;
+          const current = await queryJSON(getSql);
+          const currentSettings = current[0]?.settings || {};
+          let updatedSettings = { ...currentSettings };
+          
+          if (body.strategic_attributes !== undefined) {
+            updatedSettings.strategic_attributes = body.strategic_attributes;
+          }
+          if (body.settings !== undefined) {
+            updatedSettings = { ...updatedSettings, ...body.settings };
+          }
+          
+          updates.push(`settings = ${formatSqlValue(JSON.stringify(updatedSettings))}::jsonb`);
+        }
+
+        if (updates.length === 0) {
           return {
             statusCode: 400,
             headers,
-            body: JSON.stringify({ error: 'strategic_attributes required' })
+            body: JSON.stringify({ error: 'No fields to update' })
           };
         }
-        
-        // Get current settings and merge
-        const getSql = `SELECT settings FROM organizations WHERE id = '${orgId}';`;
-        const current = await queryJSON(getSql);
-        const currentSettings = current[0]?.settings || {};
-        const updatedSettings = { ...currentSettings, strategic_attributes };
+
+        updates.push('updated_at = NOW()');
         
         const sql = `
           UPDATE organizations 
-          SET settings = '${JSON.stringify(updatedSettings)}'::jsonb
+          SET ${updates.join(', ')}
           WHERE id = '${orgId}'
           RETURNING *;
         `;
@@ -1954,6 +2091,51 @@ exports.handler = async (event) => {
           headers,
           body: JSON.stringify({ data: result[0] })
         };
+      }
+
+
+
+      // Soft-delete — only available to super-admins, only on inactive orgs
+      if (httpMethod === 'DELETE') {
+        if (!hasPermission(authContext, 'data:read:all')) {
+          return { statusCode: 403, headers, body: JSON.stringify({ error: 'Forbidden: super-admin permission required' }) };
+        }
+        const deleteClient = await getDbClient();
+        try {
+          await deleteClient.query('BEGIN');
+
+          // Fetch current subdomain to append suffix to release the unique constraint
+          const orgData = await deleteClient.query('SELECT subdomain FROM organizations WHERE id = $1', [orgId]);
+          const currentSubdomain = orgData.rows[0]?.subdomain;
+          let newSubdomain = currentSubdomain;
+          if (currentSubdomain && !currentSubdomain.includes('-deleted-')) {
+            newSubdomain = `${currentSubdomain}-deleted-${Date.now()}`;
+          }
+
+          // Mark as deleted in settings, deactivate the org, and update the subdomain to release it
+          await deleteClient.query(
+            `UPDATE organizations 
+             SET is_active = false, 
+                 subdomain = $1,
+                 settings = COALESCE(settings, '{}'::jsonb) || '{"deleted": true}'::jsonb, 
+                 updated_at = NOW() 
+             WHERE id = $2`,
+            [newSubdomain, orgId]
+          );
+          // Deactivate rows in tables that have BOTH organization_id AND is_active
+          for (const tbl of ['organization_members', 'storage_vicinities', 'suppliers']) {
+            await deleteClient.query(`UPDATE ${tbl} SET is_active = false WHERE organization_id = $1`, [orgId]);
+          }
+          await deleteClient.query('COMMIT');
+          console.log(`✅ Soft-deleted org ${orgId}`);
+          return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+        } catch (err) {
+          await deleteClient.query('ROLLBACK');
+          console.error('❌ Soft-delete error:', err);
+          return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+        } finally {
+          deleteClient.release();
+        }
       }
     }
 

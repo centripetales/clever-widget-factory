@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useCognitoAuth';
+import { useNavigate } from 'react-router-dom';
 import { useProfile } from '@/hooks/useProfile';
 import { setActiveOrganizationId } from '@/lib/apiService';
 import { apiService, getApiData } from '@/lib/apiService';
+import { queryCachePersister } from '@/lib/queryPersistAdapter';
 
 interface Organization {
   id: string;
@@ -44,6 +46,7 @@ const ACTIVE_ORG_KEY = 'cwf_active_organization_id';
 export function OrganizationProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   const {
     organization: primaryOrganization,
@@ -145,7 +148,8 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
   const switchOrganization = useCallback((orgId: string) => {
     // Validate the user has access
     const hasMembership = allMemberships?.some((m: any) => m.organization_id === orgId);
-    if (!hasMembership) {
+    const hasAccess = hasMembership || accessibleOrganizations.some(org => org.id === orgId);
+    if (!hasAccess) {
       console.warn('Cannot switch to org — no membership:', orgId);
       return;
     }
@@ -177,7 +181,16 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         return true;
       }
     });
-  }, [allMemberships, queryClient, primaryOrganization?.id]);
+
+    // Purge the IndexedDB persisted snapshot so PersistQueryClientProvider cannot
+    // re-hydrate the old org's data on the next page load or tab re-focus.
+    // The next persist cycle after navigation will write the fresh (empty) cache.
+    queryCachePersister.removeClient().catch((err) => {
+      console.warn('[switchOrganization] Failed to clear persisted cache:', err);
+    });
+
+    navigate('/');
+  }, [allMemberships, accessibleOrganizations, queryClient, primaryOrganization?.id, navigate]);
 
   const refreshOrganization = async () => {
     if (user?.userId) {

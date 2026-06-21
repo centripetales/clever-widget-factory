@@ -31,6 +31,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, Save, X, ArrowRight } from 'lucide-react';
 import { useCreateExperience } from '@/hooks/useExperiences';
 import { useStates } from '@/hooks/useStates';
+import { useOrganization } from '@/hooks/useOrganization';
 import { actionService } from '@/services/actionService';
 import { format } from 'date-fns';
 import type { CreateExperienceRequest } from '@/types/experiences';
@@ -68,9 +69,11 @@ export function ExperienceCreationDialog({
   
   const { toast } = useToast();
   const createExperience = useCreateExperience();
+  const { organization } = useOrganization();
+  const orgId = organization?.id ?? '';
   
   // Fetch states for this entity
-  const { data: states, isLoading: isLoadingStates } = useStates({
+  const { data: states, isLoading: isLoadingStates } = useStates(orgId, {
     entity_type: entityType,
     entity_id: entityId,
   });

@@ -39,10 +39,11 @@ export const partsOrdersQueryKey = (status?: string) => [
   status ?? 'all'
 ];
 
-// States query keys (with entity filtering)
-export const statesQueryKey = (filters?: { entity_type?: string; entity_id?: string }) => 
-  filters ? ['states', filters.entity_type ?? 'all', filters.entity_id ?? 'all'] : ['states'];
-export const stateQueryKey = (stateId: string) => ['state', stateId];
+// States query keys (org-scoped to prevent cross-org cache contamination)
+// orgId is required so each organization has its own isolated cache slot.
+export const statesQueryKey = (orgId: string, filters?: { entity_type?: string; entity_id?: string }) =>
+  filters ? ['states', orgId, filters.entity_type ?? 'all', filters.entity_id ?? 'all'] : ['states', orgId];
+export const stateQueryKey = (orgId: string, stateId: string) => ['state', orgId, stateId];
 
 // Experiences query keys
 export const experiencesQueryKey = (filters?: { entity_type?: string; entity_id?: string }) => 
@@ -73,5 +74,8 @@ export const profileSkillsQueryKey = (userId?: string) =>
 // Member settings query keys
 export const memberSettingsQueryKey = (userId: string, organizationId?: string) =>
   ['member-settings', userId, organizationId ?? 'default'];
+
+// Organizations query keys
+export const organizationsQueryKey = () => ['organizations'];
 
 

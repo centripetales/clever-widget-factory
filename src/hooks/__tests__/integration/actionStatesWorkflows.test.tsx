@@ -71,7 +71,7 @@ if (skipIfNotIntegrationEnv()) {
       queryClient.setQueryData(['actions'], [testAction]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -124,10 +124,10 @@ if (skipIfNotIntegrationEnv()) {
 
       // Setup cache
       queryClient.setQueryData(['actions'], [testAction]);
-      queryClient.setQueryData(['states', 'action', testAction.id], [initialState]);
+      queryClient.setQueryData(['states', testAction.organization_id || 'org-1', 'action', testAction.id], [initialState]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -150,7 +150,7 @@ if (skipIfNotIntegrationEnv()) {
 
       // Verify states cache was invalidated
       await waitFor(() => {
-        const statesCache = queryClient.getQueryData(['states', 'action', testAction.id]);
+        const statesCache = queryClient.getQueryData(['states', testAction.organization_id || 'org-1', 'action', testAction.id]);
         expect(statesCache).toBeDefined();
       }, { timeout: 5000 });
 
@@ -194,10 +194,10 @@ if (skipIfNotIntegrationEnv()) {
 
       // Setup cache
       queryClient.setQueryData(['actions'], [actionAfterCreation]);
-      queryClient.setQueryData(['states', 'action', testAction.id], [state1, state2]);
+      queryClient.setQueryData(['states', actionAfterCreation.organization_id || 'org-1', 'action', testAction.id], [state1, state2]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -251,7 +251,7 @@ if (skipIfNotIntegrationEnv()) {
       queryClient.setQueryData(['actions'], [testAction]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -269,7 +269,7 @@ if (skipIfNotIntegrationEnv()) {
       }, { timeout: 15000 });
 
       // Verify states cache is populated
-      const statesAfterCreate = queryClient.getQueryData(['states', 'action', testAction.id]);
+      const statesAfterCreate = queryClient.getQueryData(['states', testAction.organization_id || 'org-1', 'action', testAction.id]);
       expect(statesAfterCreate).toBeDefined();
 
       // Create another state (simulating user staying in dialog)
@@ -286,7 +286,7 @@ if (skipIfNotIntegrationEnv()) {
       }, { timeout: 15000 });
 
       // Verify cache was updated with new state
-      const statesAfterSecondCreate = queryClient.getQueryData(['states', 'action', testAction.id]);
+      const statesAfterSecondCreate = queryClient.getQueryData(['states', testAction.organization_id || 'org-1', 'action', testAction.id]);
       expect(statesAfterSecondCreate).toBeDefined();
 
       // Fetch from database to verify both states exist
@@ -315,7 +315,7 @@ if (skipIfNotIntegrationEnv()) {
       queryClient.setQueryData(['actions'], [testAction]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -399,7 +399,7 @@ if (skipIfNotIntegrationEnv()) {
       });
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 
@@ -466,7 +466,7 @@ if (skipIfNotIntegrationEnv()) {
       });
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: testAction.id }),
+        () => useStateMutations(testAction.organization_id || 'org-1', { entity_type: 'action', entity_id: testAction.id }),
         { wrapper }
       );
 

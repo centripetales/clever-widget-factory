@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,10 +9,13 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Building2, Plus, Search, Users, Edit, Eye } from 'lucide-react';
+import { AlertTriangle, Building2, Loader2, Plus, Search, Trash2, Users, Edit, Eye } from 'lucide-react';
 import { useOrganizations } from '@/hooks/useOrganizations';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
+import { useOrganization } from '@/hooks/useOrganization';
 import { useToast } from '@/hooks/use-toast';
+import { apiService, getApiData } from '@/lib/apiService';
+import { organizationsQueryKey } from '@/lib/queryKeys';
 
 interface Organization {
   id: string;
@@ -24,13 +28,22 @@ interface Organization {
   member_count?: number;
 }
 
+interface ImpactData {
+  members: number;
+  actions: number;
+  missions: number;
+  tools: number;
+  issues: number;
+}
+
 const AdminOrganizations = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { isSuperAdmin, loading: superAdminLoading } = useSuperAdmin();
-  const { getAllOrganizations, getOrganizationWithMembers, createOrganization, updateOrganization, loading } = useOrganizations();
+  const { switchOrganization } = useOrganization();
+  const { organizations = [], getOrganizationWithMembers, createOrganization, updateOrganization, loading } = useOrganizations();
   const { toast } = useToast();
 
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -42,21 +55,17 @@ const AdminOrganizations = () => {
   const [newOrgName, setNewOrgName] = useState('');
   const [newOrgSubdomain, setNewOrgSubdomain] = useState('');
 
+  // Soft-delete state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Organization | null>(null);
+  const [impactData, setImpactData] = useState<ImpactData | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   // Edit form state
   const [editOrgName, setEditOrgName] = useState('');
   const [editOrgSubdomain, setEditOrgSubdomain] = useState('');
   const [editOrgActive, setEditOrgActive] = useState(true);
-
-  useEffect(() => {
-    if (isSuperAdmin) {
-      loadOrganizations();
-    }
-  }, [isSuperAdmin]);
-
-  const loadOrganizations = async () => {
-    const orgs = await getAllOrganizations();
-    setOrganizations(orgs);
-  };
 
   const handleCreateOrganization = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,13 +79,47 @@ const AdminOrganizations = () => {
       return;
     }
 
-    const success = await createOrganization(newOrgName.trim(), newOrgSubdomain.trim() || undefined);
-    
-    if (success) {
-      setCreateDialogOpen(false);
-      setNewOrgName('');
-      setNewOrgSubdomain('');
-      loadOrganizations();
+    setCreateDialogOpen(false);
+    const orgName = newOrgName.trim();
+    const orgSubdomain = newOrgSubdomain.trim() || undefined;
+    setNewOrgName('');
+    setNewOrgSubdomain('');
+
+    await createOrganization(orgName, orgSubdomain);
+  };
+
+  const openDeleteDialog = async (org: Organization) => {
+    setDeleteTarget(org);
+    setImpactData(null);
+    setDeleteDialogOpen(true);
+    setImpactLoading(true);
+    try {
+      const response = await apiService.get(`/api/organizations/${org.id}/impact`);
+      setImpactData(getApiData(response));
+    } catch (err) {
+      console.error('Failed to fetch impact:', err);
+      toast({ title: 'Error', description: 'Could not load impact data', variant: 'destructive' });
+      setDeleteDialogOpen(false);
+    } finally {
+      setImpactLoading(false);
+    }
+  };
+
+  const handleSoftDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    try {
+      await apiService.delete(`/api/organizations/${deleteTarget.id}`);
+      toast({ title: 'Soft-deleted', description: `"${deleteTarget.name}" has been removed.` });
+      // Refresh the org list
+      queryClient.invalidateQueries({ queryKey: organizationsQueryKey() });
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error('Soft-delete failed:', err);
+      toast({ title: 'Error', description: 'Soft-delete failed. Check console.', variant: 'destructive' });
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -87,17 +130,16 @@ const AdminOrganizations = () => {
       return;
     }
 
-    const success = await updateOrganization(selectedOrg.id, {
+    setEditDialogOpen(false);
+    const orgId = selectedOrg.id;
+    const orgUpdates = {
       name: editOrgName.trim(),
       subdomain: editOrgSubdomain.trim() || null,
       is_active: editOrgActive,
-    });
+    };
+    setSelectedOrg(null);
 
-    if (success) {
-      setEditDialogOpen(false);
-      setSelectedOrg(null);
-      loadOrganizations();
-    }
+    await updateOrganization(orgId, orgUpdates);
   };
 
   const openEditDialog = (org: Organization) => {
@@ -230,7 +272,7 @@ const AdminOrganizations = () => {
                 <div
                   key={org.id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:shadow-md transition-shadow cursor-pointer"
-                  onClick={() => navigate(`/organization/${org.id}`)}
+                  onClick={() => switchOrganization(org.id)}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
@@ -271,6 +313,20 @@ const AdminOrganizations = () => {
                     >
                       <Edit className="w-4 h-4" />
                     </Button>
+                    {!org.is_active && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive hover:text-destructive-foreground border-destructive/40"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDeleteDialog(org);
+                        }}
+                        title="Soft-delete this inactive organization"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -325,6 +381,54 @@ const AdminOrganizations = () => {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Soft-Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Soft-Delete Organization
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              This will mark <span className="font-semibold text-foreground">{deleteTarget?.name}</span> as
+              inactive. No data will be permanently removed.
+            </p>
+
+            {impactLoading ? (
+              <div className="flex items-center justify-center py-6 gap-2 text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-sm">Loading impact data…</span>
+              </div>
+            ) : impactData ? (
+              <div className="rounded-lg border bg-muted/40 p-4 space-y-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">Direct dependents</p>
+                {Object.entries(impactData).map(([key, count]) => (
+                  <div key={key} className="flex items-center justify-between text-sm">
+                    <span className="capitalize">{key}</span>
+                    <Badge variant={count > 0 ? 'destructive' : 'secondary'}>{count}</Badge>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={deleteLoading}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleSoftDelete}
+                disabled={deleteLoading || impactLoading}
+              >
+                {deleteLoading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Deleting…</> : 'Confirm Soft-Delete'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

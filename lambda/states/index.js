@@ -295,7 +295,7 @@ async function listStates(event, authContext, headers) {
           '[]'
         ) as perspectives
       FROM states s
-      LEFT JOIN organization_members om ON s.captured_by = om.user_id
+      LEFT JOIN organization_members om ON s.captured_by = om.user_id AND om.organization_id = s.organization_id
       LEFT JOIN state_links sl ON s.id = sl.state_id
       WHERE ${whereClause}${entityFilter}
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
@@ -308,7 +308,22 @@ async function listStates(event, authContext, headers) {
 
 
     const result = await client.query(sql);
-    return successResponse(result.rows, headers);
+    
+    // Application-level deduplication safety check
+    // Removes observations with identical state_text and captured_at, keeping first by ID
+    const seen = new Map();
+    const dedupedRows = [];
+    for (const row of result.rows) {
+      const key = `${row.observation_text || ''}|${row.captured_at}`;
+      if (!seen.has(key)) {
+        seen.set(key, true);
+        dedupedRows.push(row);
+      } else {
+        console.warn(`Deduped observation: ${key} (keeping first ID, removing ID: ${row.id})`);
+      }
+    }
+    
+    return successResponse(dedupedRows, headers);
   } finally {
     client.release();
   }
@@ -416,7 +431,7 @@ async function getState(id, authContext, headers) {
           '[]'
         ) as perspectives
       FROM states s
-      LEFT JOIN organization_members om ON s.captured_by = om.user_id
+      LEFT JOIN organization_members om ON s.captured_by = om.user_id AND om.organization_id = s.organization_id
       WHERE s.id = ${formatSqlValue(id)}::uuid AND ${orgFilter.condition}
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
     `;

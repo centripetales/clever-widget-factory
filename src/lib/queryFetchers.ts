@@ -5,8 +5,12 @@ export async function fetchOrganizationMembers() {
   return getApiData(response) || [];
 }
 
-export async function fetchActions() {
-  const response = await apiService.get('/actions');
+export async function fetchActions(viewShared?: string[]) {
+  const params: Record<string, any> = {};
+  if (viewShared && viewShared.length > 0) {
+    params.view_shared = viewShared.join(',');
+  }
+  const response = await apiService.get('/actions', { params });
   return getApiData(response) || [];
 }
 

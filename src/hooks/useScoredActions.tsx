@@ -40,6 +40,7 @@ export interface ScoredActionFilters {
   userIds?: string[];
   startDate?: string;
   endDate?: string;
+  viewShared?: string[];
 }
 
 const serializeUserIds = (userIds?: string[]) =>
@@ -50,6 +51,7 @@ const buildScoredActionsKey = (filters: ScoredActionFilters) => [
   filters.startDate ?? 'all',
   filters.endDate ?? 'all',
   serializeUserIds(filters.userIds),
+  serializeUserIds(filters.viewShared),
 ];
 
 type RawActionScore = {
@@ -82,7 +84,7 @@ export function useScoredActions(filters: ScoredActionFilters = {}) {
       // Always check cache first - reuse data from useEnhancedStrategicAttributes if available
       // This prevents duplicate analysis fetches (which is a large data pull)
       const actionScoresKey = actionScoresQueryKey(filters.startDate, filters.endDate);
-      const actionsKey = allActionsQueryKey();
+      const actionsKey = [...allActionsQueryKey(), serializeUserIds(filters.viewShared)];
       
       // getQueryData returns cached data regardless of staleness
       // We prefer using cached data to avoid duplicate network calls
@@ -102,7 +104,7 @@ export function useScoredActions(filters: ScoredActionFilters = {}) {
       if (!actionsData) {
         actionsData = await queryClient.ensureQueryData<ActionRecord[]>({
           queryKey: actionsKey,
-          queryFn: () => fetchActions() as Promise<ActionRecord[]>,
+          queryFn: () => fetchActions(filters.viewShared) as Promise<ActionRecord[]>,
           staleTime: 60 * 1000,
         });
       }
