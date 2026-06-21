@@ -3,6 +3,7 @@ import { useStates, useStateMutations } from '@/hooks/useStates';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useCognitoAuth';
+import { useOrganization } from '@/hooks/useOrganization';
 import { perspectivesProcessingMap, perspectivesProcessingListeners } from '@/hooks/useCacheInvalidation';
 import { useLearningObjectives, useObservationVerification } from '@/hooks/useLearning';
 import type { VerificationResponse, LearningObjective } from '@/hooks/useLearning';
@@ -40,6 +41,8 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
   const { toast } = useToast();
   const { uploadFiles } = useFileUpload();
   const { user } = useAuth();
+  const { organization } = useOrganization();
+  const orgId = organization?.id ?? '';
 
   const handleEagerUpload = useCallback(async (file: File) => {
     const result = await uploadFiles(file, { bucket: 'mission-attachments' });
@@ -48,7 +51,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
   }, [uploadFiles]);
 
   // Fetch states for this entity
-  const { data: states, isLoading, error } = useStates({ entity_type, entity_id });
+  const { data: states, isLoading, error } = useStates(orgId, { entity_type, entity_id });
 
   // Fetch learning objectives when entity is an action
   const { data: learningData } = useLearningObjectives(
@@ -61,7 +64,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
 
   // Mutations
   const { createState, updateState, deleteState, isCreating, isUpdating, isDeleting } =
-    useStateMutations({ entity_type, entity_id });
+    useStateMutations(orgId, { entity_type, entity_id });
 
   // Live countdown for perspectives:processing WS events
   // Returns remaining seconds for a given stateId, or null if not processing
@@ -796,9 +799,11 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                               {hasAi && (
                                 <div className="flex flex-col mt-1 pl-0.5">
                                   <div className="flex items-center">
-                                    <button
-                                      type="button"
+                                    <div
+                                      role="button"
+                                      tabIndex={0}
                                       onClick={() => toggleExpandedAi(photo.id)}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleExpandedAi(photo.id); }}
                                       className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
                                     >
                                       <span>AI Description</span>
@@ -848,7 +853,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                                           </div>
                                         </details>
                                       </span>
-                                    </button>
+                                    </div>
                                   </div>
                                   {expandedAiPhotos.has(photo.id) && (
                                     <p className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed mt-1">
@@ -1019,9 +1024,11 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                           {photo.transcription?.trim() ? (
                             <div className="flex flex-col gap-1">
                               <div className="flex items-center">
-                                <button
-                                  type="button"
+                                <div
+                                  role="button"
+                                  tabIndex={0}
                                   onClick={() => toggleExpandedAi(photo.id)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleExpandedAi(photo.id); }}
                                   className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
                                 >
                                   <span>AI Description</span>
@@ -1071,7 +1078,7 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
                                       </div>
                                     </details>
                                   </span>
-                                </button>
+                                </div>
                               </div>
                               {expandedAiPhotos.has(photo.id) && (
                                 <span className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed">
