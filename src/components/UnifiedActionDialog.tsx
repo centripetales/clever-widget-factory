@@ -1165,19 +1165,11 @@ export function ActionForm({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleToggleShared}
-                disabled={isTogglingShared}
-                className={`h-7 w-7 p-0 transition-colors duration-200 ${sharedWithPartners
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
-                    : 'hover:text-emerald-600 hover:bg-emerald-50'
-                  }`}
-                title={sharedWithPartners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                onClick={() => setShowShareDialog(true)}
+                className="h-7 w-7 p-0"
+                title="Share Action"
               >
-                {isTogglingShared ? (
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                ) : (
-                  <Handshake className="h-4 w-4" />
-                )}
+                <Share2 className="h-4 w-4" />
               </Button>
             )}
 
@@ -1661,6 +1653,17 @@ export function ActionForm({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Share Configuration Dialog */}
+      {action?.id && (
+        <ShareConfigurationDialog
+          open={showShareDialog}
+          onOpenChange={setShowShareDialog}
+          entityId={action.id}
+          entityType="action"
+          entityName={formData.title || action.title || ''}
+        />
+      )}
     </>
   );
 }
