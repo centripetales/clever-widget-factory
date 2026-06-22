@@ -16,12 +16,14 @@ interface ToolDetailsProps {
   tool: Tool;
   toolHistory: HistoryEntry[];
   onBack: () => void;
+  defaultTab?: string;
 }
 
 export const ToolDetails = ({
   tool,
   toolHistory,
-  onBack
+  onBack,
+  defaultTab = 'details',
 }: ToolDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
 
@@ -58,7 +60,7 @@ export const ToolDetails = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <Tabs defaultValue="details" className="w-full">
+          <Tabs defaultValue={defaultTab} className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>

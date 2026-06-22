@@ -619,6 +619,7 @@ export const CombinedAssetsContainer = () => {
           tool={selectedAssetForDetails as any}
           toolHistory={toolHistory}
           onBack={handleBackToAssets}
+          defaultTab="history"
         />
       );
     } else if (selectedAssetForDetails.type === 'stock') {
@@ -963,6 +964,7 @@ export const CombinedAssetsContainer = () => {
                   setSelectedAssetId(null);
                   setIsMaxwellOpen(false);
                 }}
+                defaultTab="history"
               />
             </div>
           </div>

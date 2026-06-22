@@ -12,10 +12,10 @@ const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
 // Helper to execute SQL and return JSON
-async function queryJSON(sql) {
+async function queryJSON(sql, params = []) {
   const client = await getDbClient();
   try {
-    const result = await client.query(sql);
+    const result = await client.query(sql, params);
     return result.rows;
   } finally {
     client.release();
@@ -543,7 +543,8 @@ exports.handler = async (event) => {
             active_checkouts.intended_usage as checkout_intended_usage,
             active_checkouts.notes as checkout_notes,
             active_checkouts.action_id as checkout_action_id,
-            tool_gps.gps_latitude, tool_gps.gps_longitude
+            tool_gps.gps_latitude, tool_gps.gps_longitude,
+            COALESCE(tool_share_out.is_shared_outbound, false) as is_shared_outbound
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
           LEFT JOIN LATERAL (
@@ -580,6 +581,21 @@ exports.handler = async (event) => {
             ORDER BY sort_time DESC
             LIMIT 1
           ) tool_gps ON true
+          LEFT JOIN LATERAL (
+            SELECT true as is_shared_outbound
+            FROM state_links sl_entity
+            JOIN states s_share ON sl_entity.state_id = s_share.id
+            WHERE sl_entity.entity_type = 'tool'
+              AND sl_entity.entity_id = tools.id
+              AND s_share.organization_id = tools.organization_id
+              AND EXISTS (
+                SELECT 1 FROM state_links sl_org
+                WHERE sl_org.state_id = s_share.id
+                  AND sl_org.entity_type = 'organization'
+                  AND sl_org.entity_id::text != tools.organization_id::text
+              )
+            LIMIT 1
+          ) tool_share_out ON true
           ${whereClause}
           ORDER BY tools.id, tools.name 
           LIMIT ${limit} OFFSET ${offset}
@@ -937,12 +953,30 @@ exports.handler = async (event) => {
     
     // GET /parts - List parts
     if (path.endsWith('/parts') && httpMethod === 'GET') {
-      const { limit = 50, offset = 0 } = event.queryStringParameters || {};
+      const { limit = 50, offset = 0, view_shared } = event.queryStringParameters || {};
       
       // Build WHERE clause for organization filtering
       let whereClause = '';
       if (!hasDataReadAll && organizationId) {
-        whereClause = `WHERE parts.organization_id::text = '${escapeLiteral(organizationId)}'`;
+        if (view_shared) {
+          const sharedArray = Array.isArray(view_shared) ? view_shared : view_shared.split(',');
+          const sharedOrgsStr = sharedArray.map(id => `'${escapeLiteral(id)}'`).join(',');
+          whereClause = `WHERE (
+            parts.organization_id::text = '${escapeLiteral(organizationId)}'
+            OR parts.id IN (
+              SELECT sl1.entity_id
+              FROM state_links sl1
+              JOIN state_links sl2 ON sl1.state_id = sl2.state_id
+              JOIN states s ON s.id = sl1.state_id
+              WHERE sl1.entity_type = 'part'
+                AND sl2.entity_type = 'organization'
+                AND sl2.entity_id::text = '${escapeLiteral(organizationId)}'
+                AND s.organization_id::text IN (${sharedOrgsStr})
+            )
+          )`;
+        } else {
+          whereClause = `WHERE parts.organization_id::text = '${escapeLiteral(organizationId)}'`;
+        }
       }
       
       const sql = `SELECT json_agg(row_to_json(t)) FROM (
@@ -959,7 +993,9 @@ exports.handler = async (event) => {
             ELSE parts.image_url 
           END as image_url,
           parts.created_at, parts.updated_at,
-          part_gps.gps_latitude, part_gps.gps_longitude
+          part_gps.gps_latitude, part_gps.gps_longitude,
+          CASE WHEN parts.organization_id::text != '${escapeLiteral(organizationId)}' THEN true ELSE false END as is_shared_inbound,
+          COALESCE(part_share_out.is_shared_outbound, false) as is_shared_outbound
         FROM parts
         LEFT JOIN tools parent_tool ON parts.parent_structure_id = parent_tool.id
           LEFT JOIN LATERAL (
@@ -984,6 +1020,21 @@ exports.handler = async (event) => {
             ORDER BY sort_time DESC
             LIMIT 1
           ) part_gps ON true
+          LEFT JOIN LATERAL (
+            SELECT true as is_shared_outbound
+            FROM state_links sl_entity
+            JOIN states s_share ON sl_entity.state_id = s_share.id
+            WHERE sl_entity.entity_type = 'part'
+              AND sl_entity.entity_id = parts.id
+              AND s_share.organization_id = parts.organization_id
+              AND EXISTS (
+                SELECT 1 FROM state_links sl_org
+                WHERE sl_org.state_id = s_share.id
+                  AND sl_org.entity_type = 'organization'
+                  AND sl_org.entity_id::text != parts.organization_id::text
+              )
+            LIMIT 1
+          ) part_share_out ON true
         ${whereClause}
         ORDER BY parts.name 
         LIMIT ${limit} OFFSET ${offset}
@@ -6180,6 +6231,95 @@ exports.handler = async (event) => {
           body: JSON.stringify({ data: updateResult[0].settings || {} })
         };
       }
+    }
+
+    // ==================== SHARES ====================
+
+    // POST /shares — create a share (state + two state_links)
+    if (httpMethod === 'POST' && path === '/shares') {
+      const body = JSON.parse(event.body || '{}');
+      const { entity_type, entity_id, target_org_id, note, source_org_id, cognito_user_id, entity_name, target_org_name } = body;
+      if (!entity_type || !entity_id || !target_org_id || !source_org_id) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required sharing parameters' }) };
+      }
+      const stateId = randomUUID();
+      const stateText = (note && note.trim())
+        || `Shared ${entity_type}${entity_name ? ' "' + entity_name + '"' : ''} with ${target_org_name || 'partner organization'}`;
+      const client = await getDbClient();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO states (id, organization_id, state_text, captured_by, captured_at) VALUES ($1, $2, $3, $4, NOW())`,
+          [stateId, source_org_id, stateText, cognito_user_id || '00000000-0000-0000-0000-000000000000']
+        );
+        await client.query(
+          `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, $2, $3)`,
+          [stateId, entity_type, entity_id]
+        );
+        await client.query(
+          `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, 'organization', $2)`,
+          [stateId, target_org_id]
+        );
+        await client.query('COMMIT');
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true, state_id: stateId }) };
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+
+    // GET /shares/{entityType}/{entityId} — list orgs this entity is shared with
+    if (httpMethod === 'GET' && path.match(/^\/shares\/[^/]+\/[^/]+$/)) {
+      const parts = path.split('/');
+      const entityType = parts[2];
+      const entityId = parts[3];
+      const rows = await queryJSON(
+        `SELECT s.id as state_id, sl_org.entity_id::text as target_org_id, o.name as target_org_name,
+                s.state_text as note, s.captured_at as shared_at
+         FROM states s
+         JOIN state_links sl_entity ON sl_entity.state_id = s.id
+           AND sl_entity.entity_type = $1 AND sl_entity.entity_id = $2
+         JOIN state_links sl_org ON sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
+         JOIN organizations o ON o.id = sl_org.entity_id::uuid
+         WHERE s.organization_id::text != sl_org.entity_id::text
+         ORDER BY s.captured_at DESC`,
+        [entityType, entityId]
+      );
+      return { statusCode: 200, headers, body: JSON.stringify({ shares: rows }) };
+    }
+
+    // DELETE /shares/{stateId} — unshare
+    if (httpMethod === 'DELETE' && path.match(/^\/shares\/[^/]+$/)) {
+      const stateId = path.split('/')[2];
+      const client = await getDbClient();
+      try {
+        await client.query('DELETE FROM state_links WHERE state_id = $1', [stateId]);
+        await client.query('DELETE FROM states WHERE id = $1', [stateId]);
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+      } finally {
+        client.release();
+      }
+    }
+
+    // GET /shared-with-me?org_id=... — all entities shared with an org
+    if (httpMethod === 'GET' && path === '/shared-with-me') {
+      const orgId = event.queryStringParameters?.org_id || authContext?.organization_id;
+      if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'org_id required' }) };
+      const rows = await queryJSON(
+        `SELECT s.id as state_id, sl_entity.entity_type, sl_entity.entity_id::text,
+                s.state_text as note, s.organization_id::text as source_org_id,
+                o.name as source_org_name, s.captured_at as shared_at
+         FROM states s
+         JOIN state_links sl_org ON sl_org.state_id = s.id
+           AND sl_org.entity_type = 'organization' AND sl_org.entity_id = $1
+         JOIN state_links sl_entity ON sl_entity.state_id = s.id AND sl_entity.entity_type != 'organization'
+         JOIN organizations o ON o.id = s.organization_id
+         ORDER BY s.captured_at DESC`,
+        [orgId]
+      );
+      return { statusCode: 200, headers, body: JSON.stringify({ shared: rows }) };
     }
 
     // Default 404

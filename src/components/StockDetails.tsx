@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
-import { InventoryHistoryDialog } from "@/components/InventoryHistoryDialog";
+import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { getThumbnailUrl } from '@/lib/imageUtils';
@@ -39,6 +39,13 @@ export const StockDetails = ({
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Assets
         </Button>
+        {stock.image_url && (
+          <img
+            src={getThumbnailUrl(stock.image_url) || ''}
+            alt={stock.name}
+            className="w-12 h-12 object-cover rounded-md flex-shrink-0"
+          />
+        )}
         <div className="flex-1">
           <h1 className="text-2xl font-bold">{stock.name}</h1>
           <div className="flex items-center gap-2 mt-1">
@@ -56,9 +63,9 @@ export const StockDetails = ({
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Tabs defaultValue="details" className="w-full">
+      <div className="grid grid-cols-1 gap-6">
+        <div>
+          <Tabs defaultValue="history" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
@@ -143,27 +150,9 @@ export const StockDetails = ({
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
-              <InventoryHistoryDialog partId={stock.id} partName={stock.name}>
-                <Button variant="outline" className="w-full">
-                  View Complete History
-                </Button>
-              </InventoryHistoryDialog>
+              <InventoryHistoryContent partId={stock.id} />
             </TabsContent>
           </Tabs>
-        </div>
-
-        <div className="space-y-6">
-          {stock.image_url && (
-            <Card>
-              <CardContent className="p-4 flex flex-col gap-4">
-                <img
-                  src={getThumbnailUrl(stock.image_url) || ''}
-                  alt={stock.name}
-                  className="w-full h-64 object-cover rounded-md"
-                />
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
 

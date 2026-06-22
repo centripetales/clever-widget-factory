@@ -44,7 +44,7 @@ import {
   Copy,
   Sparkles,
   Search,
-  Handshake
+  Share2
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useAuth } from "@/hooks/useCognitoAuth";
@@ -55,6 +55,7 @@ import { AssetSelector } from './AssetSelector';
 import { StockSelector } from './StockSelector';
 import { MultiParticipantSelector } from './MultiParticipantSelector';
 import { MissionSelector } from './MissionSelector';
+import { ShareConfigurationDialog } from './ShareConfigurationDialog';
 import { cn, sanitizeRichText, getActionBorderStyle } from "@/lib/utils";
 import { BaseAction, Profile, ActionCreationContext } from "@/types/actions";
 import { generateActionUrl, copyToClipboard } from "@/lib/urlUtils";
@@ -268,8 +269,7 @@ export function ActionForm({
   const [isInImplementationMode, setIsInImplementationMode] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
-  const [sharedWithPartners, setSharedWithPartners] = useState((action as any)?.shared_with_partners || false);
-  const [isTogglingShared, setIsTogglingShared] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
   // Internal Maxwell state — used when props are not provided (page mode)
   const [isMaxwellOpenInternal, setIsMaxwellOpenInternal] = useState(false);
   const [maxwellContextInternal, setMaxwellContextInternal] = useState<EntityContext | null>(null);
@@ -416,7 +416,6 @@ export function ActionForm({
         setAttachmentFiles(new Map());
 
         if (action && !isCreating) {
-          setSharedWithPartners((action as any).shared_with_partners || false);
           // Editing existing action - update formData when action changes from cache
           setFormData(prev => {
             // Only update if this is a new session or attachments/required_tools/required_stock changed
@@ -485,13 +484,6 @@ export function ActionForm({
       setIsTitleEditing(false);
     }
   }, [open, actionId, context?.type, isCreating, action]);
-
-  // Sync sharing state reactively when the action changes from real-time or cache updates
-  useEffect(() => {
-    if (action && !isCreating) {
-      setSharedWithPartners((action as any).shared_with_partners || false);
-    }
-  }, [(action as any)?.shared_with_partners, isCreating]);
 
   // Update formData when action changes from cache (after refetch)
   useEffect(() => {
@@ -691,40 +683,6 @@ export function ActionForm({
         description: actionUrl,
         duration: 10000,
       });
-    }
-  };
-
-  const handleToggleShared = async () => {
-    if (!action?.id || isTogglingShared) return;
-
-    setIsTogglingShared(true);
-    const nextShared = !sharedWithPartners;
-
-    try {
-      await apiService.put(`/actions/${action.id}`, { shared_with_partners: nextShared });
-      setSharedWithPartners(nextShared);
-
-      toast({
-        title: nextShared ? "Sharing activated" : "Sharing restricted",
-        description: nextShared
-          ? "Action details are now safely shared with trusted partners."
-          : "Sharing revoked. Action details are now private.",
-      });
-
-      // Invalidate queries so lists update
-      queryClient.invalidateQueries({ queryKey: ['actions'] });
-      if (onActionSaved) {
-        onActionSaved();
-      }
-    } catch (error) {
-      console.error('Error toggling action sharing state:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update action sharing policy.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsTogglingShared(false);
     }
   };
 

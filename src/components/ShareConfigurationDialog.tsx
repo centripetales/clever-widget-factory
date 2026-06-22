@@ -16,6 +16,7 @@ import { apiService } from '@/lib/apiService';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/hooks/useCognitoAuth';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface ShareConfigurationDialogProps {
   open: boolean;
@@ -23,6 +24,13 @@ interface ShareConfigurationDialogProps {
   entityId: string;
   entityType: 'action' | 'part' | 'tool';
   entityName: string;
+}
+
+interface ExistingShare {
+  state_id: string;
+  target_org_id: string;
+  target_org_name: string;
+  note: string;
 }
 
 export function ShareConfigurationDialog({
@@ -33,100 +41,141 @@ export function ShareConfigurationDialog({
   entityName,
 }: ShareConfigurationDialogProps) {
   const { getAllOrganizations, loading: orgsLoading } = useOrganizations();
-  const { currentOrganization } = useOrganization();
+  const { organization } = useOrganization();
   const { user } = useAuth();
   const { toast } = useToast();
-  
+  const queryClient = useQueryClient();
+
   const [organizations, setOrganizations] = useState<Array<{ id: string; name: string }>>([]);
-  const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
-  const [justification, setJustification] = useState('');
+  const [existingShares, setExistingShares] = useState<ExistingShare[]>([]);
+  const [selectedOrgs, setSelectedOrgs] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (open) {
-      const fetchOrgs = async () => {
+    if (!open) return;
+
+    const load = async () => {
+      setNote('');
+      setIsLoading(true);
+      try {
         const orgs = await getAllOrganizations();
-        setOrganizations(orgs.filter(o => o.id !== currentOrganization?.id));
-      };
-      if (currentOrganization?.id) {
-        fetchOrgs();
+        const otherOrgs = orgs.filter((o: any) => o.id !== organization?.id);
+        setOrganizations(otherOrgs);
+      } finally {
+        setIsLoading(false);
       }
-      setSelectedOrgs([]);
-      setJustification('');
-    }
-  }, [open, currentOrganization?.id]);
+      // Load existing shares separately — don't block org list if this fails
+      try {
+        const sharesResp = await apiService.get(`/api/shares/${entityType}/${entityId}`);
+        const shares: ExistingShare[] = (sharesResp as any)?.shares || [];
+        setExistingShares(shares);
+        setSelectedOrgs(new Set(shares.map((s) => s.target_org_id)));
+        if (shares.length > 0) {
+          setNote(shares[0].note || '');
+        } else {
+          setNote('');
+        }
+      } catch {
+        // shares endpoint may not be deployed yet — start with empty selection
+        setNote('');
+      }
+    };
+    load();
+  }, [open, organization?.id, entityId, entityType]);
 
   const handleToggle = (orgId: string) => {
-    setSelectedOrgs(prev => 
-      prev.includes(orgId) ? prev.filter(id => id !== orgId) : [...prev, orgId]
-    );
+    setSelectedOrgs((prev) => {
+      const next = new Set(prev);
+      next.has(orgId) ? next.delete(orgId) : next.add(orgId);
+      return next;
+    });
   };
 
-  const handleShare = async () => {
-    if (selectedOrgs.length === 0) {
-      toast({
-        title: "Selection Required",
-        description: "Please select at least one organization to share with.",
-        variant: "destructive",
-      });
-      return;
-    }
-
+  const handleSave = async () => {
     setIsSubmitting(true);
     try {
-      // Create a share state for each selected organization
-      for (const targetOrgId of selectedOrgs) {
-        await apiService.post('/api/shares', {
-          entity_type: entityType,
-          entity_id: entityId,
-          target_org_id: targetOrgId,
-          justification: justification.trim(),
-          source_org_id: currentOrganization?.id,
-          cognito_user_id: user?.userId,
-        });
-      }
+      const previously = new Set(existingShares.map((s) => s.target_org_id));
+      const previousNotes = new Map(existingShares.map((s) => [s.target_org_id, s.note || '']));
 
-      toast({
-        title: "Success",
-        description: `Shared ${entityName} successfully.`,
-      });
+      // Orgs to add (selected but not previously shared OR still selected but the note has changed)
+      const toAdd = [...selectedOrgs].filter(
+        (id) => !previously.has(id) || note.trim() !== (previousNotes.get(id) || '')
+      );
+      // Orgs to remove (previously shared but now deselected OR still selected but the note has changed)
+      const toRemove = existingShares.filter(
+        (s) => !selectedOrgs.has(s.target_org_id) || note.trim() !== (s.note || '')
+      );
+
+      await Promise.all([
+        ...toAdd.map((targetOrgId) => {
+          const targetOrg = organizations.find((o) => o.id === targetOrgId);
+          return apiService.post('/api/shares', {
+            entity_type: entityType,
+            entity_id: entityId,
+            target_org_id: targetOrgId,
+            note: note.trim(),
+            source_org_id: organization?.id,
+            cognito_user_id: user?.userId,
+            entity_name: entityName,
+            target_org_name: targetOrg?.name,
+          });
+        }),
+        ...toRemove.map((share) =>
+          apiService.delete(`/api/shares/${share.state_id}`)
+        ),
+      ]);
+
+      const added = toAdd.length;
+      const removed = toRemove.length;
+      const msg = [
+        added > 0 && `Shared with ${added} org${added > 1 ? 's' : ''}`,
+        removed > 0 && `Removed from ${removed} org${removed > 1 ? 's' : ''}`,
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      toast({ title: 'Saved', description: msg || 'No changes made.' });
+      queryClient.invalidateQueries({ queryKey: ['shareStatus', entityType, entityId] });
       onOpenChange(false);
     } catch (error) {
-      console.error('Failed to share:', error);
-      toast({
-        title: "Error",
-        description: "Failed to share the asset.",
-        variant: "destructive",
-      });
+      console.error('Share save error:', error);
+      toast({ title: 'Error', description: 'Failed to save sharing settings.', variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const loading = isLoading || orgsLoading;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px]" onClick={(e) => e.stopPropagation()}>
         <DialogHeader>
-          <DialogTitle>Share Configuration</DialogTitle>
+          <DialogTitle>Share "{entityName}"</DialogTitle>
           <DialogDescription>
-            Share "{entityName}" with partner organizations.
+            Select organizations to share with. All members of a selected organization will be able to view this {entityType}.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-6 py-4">
           <div className="space-y-3">
-            <Label>Select Organizations</Label>
-            {orgsLoading ? (
-              <div className="text-sm text-slate-500">Loading organizations...</div>
+            <Label>Organizations</Label>
+            {loading ? (
+              <div className="text-sm text-slate-500">Loading...</div>
             ) : organizations.length === 0 ? (
-              <div className="text-sm text-slate-500">No partner organizations found.</div>
+              <div className="text-sm text-slate-500">No other organizations found.</div>
             ) : (
               <div className="grid gap-2 max-h-48 overflow-y-auto pr-2">
                 {organizations.map((org) => (
-                  <div key={org.id} className="flex items-center space-x-2 border rounded-md p-3 hover:bg-slate-50 transition-colors dark:border-slate-800 dark:hover:bg-slate-800/50">
-                    <Checkbox 
-                      id={`share-org-${org.id}`} 
-                      checked={selectedOrgs.includes(org.id)}
+                  <div
+                    key={org.id}
+                    className="flex items-center space-x-2 border rounded-md p-3 hover:bg-slate-50 transition-colors dark:border-slate-800 dark:hover:bg-slate-800/50"
+                  >
+                    <Checkbox
+                      id={`share-org-${org.id}`}
+                      checked={selectedOrgs.has(org.id)}
                       onCheckedChange={() => handleToggle(org.id)}
                     />
                     <Label htmlFor={`share-org-${org.id}`} className="cursor-pointer flex-1">
@@ -139,14 +188,14 @@ export function ShareConfigurationDialog({
           </div>
 
           <div className="space-y-3">
-            <Label htmlFor="justification">Context / Justification (Optional)</Label>
-            <Textarea 
-              id="justification" 
-              placeholder="Why are you sharing this? How can it help?"
-              value={justification}
-              onChange={(e) => setJustification(e.target.value)}
+            <Label htmlFor="share-note">Note (optional)</Label>
+            <Textarea
+              id="share-note"
+              placeholder="Why are you sharing this?"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
               className="resize-none"
-              rows={3}
+              rows={2}
             />
           </div>
         </div>
@@ -155,8 +204,12 @@ export function ShareConfigurationDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleShare} disabled={isSubmitting || selectedOrgs.length === 0} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-            {isSubmitting ? 'Sharing...' : 'Share'}
+          <Button
+            onClick={handleSave}
+            disabled={isSubmitting || loading}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            {isSubmitting ? 'Saving...' : 'Save'}
           </Button>
         </DialogFooter>
       </DialogContent>
