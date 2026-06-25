@@ -11,6 +11,8 @@ import { useActionObservationCount } from "@/hooks/useActionObservationCount";
 import { apiService } from "@/lib/apiService";
 import { useToast } from "@/hooks/use-toast";
 import { actionsQueryKey, completedActionsQueryKey, allActionsQueryKey, actionQueryKey } from "@/lib/queryKeys";
+import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
+import { useOrganization } from "@/hooks/useOrganization";
 
 interface ActionListItemCardProps {
   action: BaseAction;
@@ -32,7 +34,8 @@ export function ActionListItemCard({
   className
 }: ActionListItemCardProps) {
   // Derive observation count from TanStack cache (preferred over database count)
-  const derivedCount = useActionObservationCount(action.id);
+  const { organization } = useOrganization();
+  const derivedCount = useActionObservationCount(organization?.id ?? '', action.id);
   const borderStyle = getActionBorderStyle(action, derivedCount);
 
   const handleClick = () => {
@@ -41,38 +44,12 @@ export function ActionListItemCard({
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [isTogglingShared, setIsTogglingShared] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const isShared = action.shared_with_partners ?? false;
 
-  const handleToggleShared = async (e: React.MouseEvent) => {
+  const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isTogglingShared) return;
-    setIsTogglingShared(true);
-
-    const nextShared = !action.shared_with_partners;
-    try {
-      await apiService.put(`/actions/${action.id}`, { shared_with_partners: nextShared });
-      toast({
-        title: nextShared ? "Sharing activated" : "Sharing restricted",
-        description: nextShared
-          ? "Action details are now safely shared with trusted partners."
-          : "Sharing revoked. Action details are now private.",
-      });
-
-      // Invalidate queries so lists update
-      queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: actionQueryKey(action.id) });
-    } catch (error) {
-      console.error('Error toggling action sharing state:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update action sharing policy.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsTogglingShared(false);
-    }
+    setShowShareDialog(true);
   };
 
   const handleScoreClick = (e: React.MouseEvent) => {
@@ -143,19 +120,11 @@ export function ActionListItemCard({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleToggleShared}
-                disabled={isTogglingShared}
-                className={`h-7 w-7 p-0 transition-colors duration-200 ${action.shared_with_partners
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
-                    : 'hover:text-emerald-600 hover:bg-emerald-50 bg-white dark:bg-zinc-900'
-                  }`}
-                title={action.shared_with_partners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                onClick={handleShareClick}
+                className={`h-7 w-7 p-0 transition-colors duration-200 ${isShared ? 'bg-green-100 text-green-600 border-green-300' : 'hover:text-emerald-600 hover:bg-emerald-50 bg-white dark:bg-zinc-900'}`}
+                title="Share with partner organizations"
               >
-                {isTogglingShared ? (
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                ) : (
-                  <Handshake className="h-4 w-4" />
-                )}
+                <Handshake className="h-4 w-4" />
               </Button>
               {showScoreButton && onScoreAction && (
                 <ScoreButton action={action} onScoreAction={handleScoreClick} />
@@ -233,6 +202,19 @@ export function ActionListItemCard({
           </div>
         </div>
       </CardContent>
+      {showShareDialog && (
+        <ShareConfigurationDialog 
+          open={showShareDialog} 
+          onOpenChange={setShowShareDialog} 
+          entityId={action.id} 
+          entityType="action" 
+          entityName={action.title}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ['actions'] });
+            queryClient.invalidateQueries({ queryKey: ['action', action.id] });
+          }}
+        />
+      )}
     </Card>
   );
 }

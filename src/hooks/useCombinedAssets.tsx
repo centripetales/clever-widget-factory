@@ -7,6 +7,8 @@ import { offlineQueryConfig } from '@/lib/queryConfig';
 import { apiService, getApiData } from '@/lib/apiService';
 import { toolsQueryKey, partsQueryKey } from '@/lib/queryKeys';
 import { toolsQueryConfig, partsQueryConfig } from '@/lib/assetQueryConfigs';
+import { useOrganization } from '@/hooks/useOrganization';
+import { useSharedOrgs } from '@/hooks/useSharedOrgs';
 
 export interface CombinedAsset {
   id: string;
@@ -39,6 +41,9 @@ export interface CombinedAsset {
   accountable_person_name?: string; // Resolved name from accountable_person_id
   accountable_person_color?: string; // Favorite color of accountable person
   sellable?: boolean; // For stock items - whether available in Sari Sari store
+  is_shared_inbound?: boolean; // true when asset belongs to a partner org shared with this org
+  is_shared_outbound?: boolean; // true when this org has shared this asset to at least one other org
+  shared_from_org?: string; // name/id of the org that owns the shared asset
   created_at: string;
   updated_at: string;
   gps_latitude?: number;
@@ -54,12 +59,31 @@ type AssetsQueryOptions = {
   skipPagination?: boolean;
 };
 
+// Build query key for shared-org data: separate from the base ['tools'] / ['parts'] key
+// so mutations (which target base key) are not affected.
+const sharedToolsQueryKey = (orgId: string, partnerOrgIds: string[]) =>
+  ['tools_shared', orgId, ...partnerOrgIds.sort()];
+const sharedPartsQueryKey = (orgId: string, partnerOrgIds: string[]) =>
+  ['parts_shared', orgId, ...partnerOrgIds.sort()];
+
 export const useCombinedAssets = (showRemovedItems: boolean = false, options?: AssetsQueryOptions) => {
   const [currentPage, setCurrentPage] = useState(0);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { createTool, createPart } = useAssetMutations();
+  const { organization, accessibleOrganizations } = useOrganization();
+  const { selectedOrgs } = useSharedOrgs();
 
+  const orgId = organization?.id ?? null;
+  const otherOrgs = useMemo(() => {
+    if (!organization) return [];
+    return accessibleOrganizations.filter((o) => o.id !== organization.id);
+  }, [organization, accessibleOrganizations]);
+  const partnerOrgIds = useMemo(() => otherOrgs.map(o => o.id), [otherOrgs]);
+
+  const hasPartnerOrgs = partnerOrgIds.length > 0 && !!orgId;
+
+  // ── Base org assets (always fetched via TanStack cache) ──────────────────
   const { data: toolsData = [], isLoading: toolsLoading } = useQuery({
     ...toolsQueryConfig,
     ...offlineQueryConfig,
@@ -67,6 +91,42 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
 
   const { data: partsData = [], isLoading: partsLoading } = useQuery({
     ...partsQueryConfig,
+    ...offlineQueryConfig,
+  });
+
+  // ── Shared org assets (fetched for all partner orgs on load) ───────
+  const { data: sharedToolsData = [], isLoading: sharedToolsLoading } = useQuery({
+    queryKey: sharedToolsQueryKey(orgId ?? '', partnerOrgIds),
+    queryFn: async () => {
+      if (!orgId || partnerOrgIds.length === 0) return [];
+      const params = new URLSearchParams({
+        limit: '2000',
+        organization_id: orgId,
+        view_shared: partnerOrgIds.join(','),
+      });
+      // Use /api/tools (local Express server) — it has the view_shared JOIN logic.
+      // The Lambda (/tools) does not support this parameter.
+      const result = await apiService.get(`/api/tools?${params}`);
+      return result.data || [];
+    },
+    enabled: hasPartnerOrgs,
+    ...offlineQueryConfig,
+  });
+
+  const { data: sharedPartsData = [], isLoading: sharedPartsLoading } = useQuery({
+    queryKey: sharedPartsQueryKey(orgId ?? '', partnerOrgIds),
+    queryFn: async () => {
+      if (!orgId || partnerOrgIds.length === 0) return [];
+      const params = new URLSearchParams({
+        limit: '2000',
+        organization_id: orgId,
+        view_shared: partnerOrgIds.join(','),
+      });
+      // Use /api/parts (local Express server) — it has the view_shared JOIN logic.
+      const result = await apiService.get(`/api/parts?${params}`);
+      return result.data || [];
+    },
+    enabled: hasPartnerOrgs,
     ...offlineQueryConfig,
   });
 
@@ -81,12 +141,12 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     }
   };
 
-  const { data: assetIssueFlags = [], isLoading: issuesLoading } = useQuery({
+  const { data: assetIssueFlagsRaw = [], isLoading: issuesLoading } = useQuery({
     queryKey: ['issues_asset_flags'],
     queryFn: fetchAssetIssueFlags,
     ...offlineQueryConfig,
-    staleTime: 5 * 60 * 1000, // 5 minutes - issues don't change frequently
   });
+  const assetIssueFlags = Array.isArray(assetIssueFlagsRaw) ? assetIssueFlagsRaw : [];
 
   // Create a Set of asset IDs that have active issues
   const assetsWithIssues = useMemo(() => {
@@ -99,7 +159,11 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     return set;
   }, [assetIssueFlags]);
 
-  const loading = toolsLoading || partsLoading || issuesLoading;
+  const loading =
+    toolsLoading ||
+    partsLoading ||
+    issuesLoading ||
+    (hasPartnerOrgs && (sharedToolsLoading || sharedPartsLoading));
 
   const { getUserName, getUserColor } = useUserNames([]);
 
@@ -147,30 +211,40 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
   };
 
   // Process and paginate data
-  const processedAssets = useMemo(() => {
+  const { assets: processedAssets, sharedOrgsCounts } = useMemo(() => {
     // Don't clear results during loading - keep showing previous results
     // This prevents the display from flickering/clearing while typing
     if (loading && (toolsData.length === 0 && partsData.length === 0)) {
-      return [];
+      return { assets: [], sharedOrgsCounts: {} };
     }
 
+    // Calculate shared asset counts per organization
+    const counts: Record<string, number> = {};
+    partnerOrgIds.forEach(id => {
+      counts[id] = 0;
+    });
+
+    sharedToolsData.forEach((t: any) => {
+      if (t.is_shared_inbound && t.organization_id && t.status !== 'removed') {
+        counts[t.organization_id] = (counts[t.organization_id] || 0) + 1;
+      }
+    });
+
+    sharedPartsData.forEach((p: any) => {
+      if (p.is_shared_inbound && p.organization_id) {
+        counts[p.organization_id] = (counts[p.organization_id] || 0) + 1;
+      }
+    });
+
+    // ── Own org tools ──────────────────────────────────────────────────────
     // Process data directly from TanStack Query
     let filteredToolsData = toolsData || [];
     if (showRemovedItems) {
-      // Show only removed items
-      // Note: Tools that are checked out have status 'checked_out' even if they were removed
-      // We need to check if the tool was removed by looking at tools that are not checked out
-      // and have status 'removed', OR tools that are checked out but we can't determine original status
-      // For now, we'll filter by status === 'removed' (checked-out removed tools will be excluded)
       filteredToolsData = filteredToolsData.filter((tool: any) => {
-        // Check if status is explicitly 'removed'
         if (tool.status === 'removed') return true;
-        // If checked out, we can't determine original status from current data
-        // So we only show explicitly removed (not checked out) items
         return false;
       });
     } else {
-      // Show only active items (exclude removed)
       filteredToolsData = filteredToolsData.filter((tool: any) => tool.status !== 'removed');
     }
 
@@ -180,6 +254,23 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     if (showRemovedItems) {
       filteredPartsData = [];
     }
+
+    // ── Shared org tools (deduplicate against own org by id) ───────────────
+    const ownToolIds = new Set(filteredToolsData.map((t: any) => t.id));
+    const ownPartIds = new Set(filteredPartsData.map((p: any) => p.id));
+
+    const hasSharedOrgsSelected = selectedOrgs.length > 0 && !!orgId;
+
+    const extraSharedTools = hasSharedOrgsSelected
+      ? (sharedToolsData as any[]).filter(
+          (t: any) => t.is_shared_inbound && selectedOrgs.includes(t.organization_id) && !ownToolIds.has(t.id) && t.status !== 'removed'
+        )
+      : [];
+    const extraSharedParts = hasSharedOrgsSelected
+      ? (sharedPartsData as any[]).filter(
+          (p: any) => p.is_shared_inbound && selectedOrgs.includes(p.organization_id) && !ownPartIds.has(p.id)
+        )
+      : [];
 
     // Apply low stock filter
     if (options?.showLowStock) {
@@ -229,7 +320,9 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         ...part,
         type: 'stock' as const,
         has_issues: assetsWithIssues.has(part.id),
-        is_checked_out: false
+        is_checked_out: false,
+        is_shared_inbound: false,
+        is_shared_outbound: Boolean(part.is_shared_outbound),
       })),
       ...paginatedTools.map((tool: any) => ({
         ...tool,
@@ -239,24 +332,67 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         checked_out_user_id: tool.checked_out_user_id,
         checked_out_to: tool.checked_out_to,
         checked_out_date: tool.checked_out_date,
-        checkout_action_id: tool.checkout_action_id
-      }))
+        checkout_action_id: tool.checkout_action_id,
+        is_shared_inbound: false,
+        is_shared_outbound: Boolean(tool.is_shared_outbound),
+      })),
+      // Append shared assets at the end (already filtered/deduped above)
+      ...extraSharedParts.map((part: any) => ({
+        ...part,
+        type: 'stock' as const,
+        has_issues: assetsWithIssues.has(part.id),
+        is_checked_out: false,
+        is_shared_inbound: true,
+        is_shared_outbound: false,
+      })),
+      ...extraSharedTools.map((tool: any) => ({
+        ...tool,
+        type: 'asset' as const,
+        has_issues: assetsWithIssues.has(tool.id),
+        is_checked_out: Boolean(tool.is_checked_out),
+        checked_out_user_id: tool.checked_out_user_id,
+        checked_out_to: tool.checked_out_to,
+        checked_out_date: tool.checked_out_date,
+        checkout_action_id: tool.checkout_action_id,
+        is_shared_inbound: true,
+        is_shared_outbound: false,
+      })),
     ];
 
-    return allAssets;
-  }, [showRemovedItems, toolsData, partsData, assetsWithIssues, loading, options?.search, options?.searchDescriptions, options?.showLowStock, options?.limit, options?.page, options?.skipPagination]);
+    return { assets: allAssets, sharedOrgsCounts: counts };
+  }, [
+    showRemovedItems,
+    toolsData,
+    partsData,
+    sharedToolsData,
+    sharedPartsData,
+    partnerOrgIds,
+    selectedOrgs,
+    orgId,
+    assetsWithIssues,
+    loading,
+    options?.search,
+    options?.searchDescriptions,
+    options?.showLowStock,
+    options?.limit,
+    options?.page,
+    options?.skipPagination,
+  ]);
 
   return {
     assets: processedAssets,
+    sharedOrgsCounts,
     loading,
     fetchAssets,
     createAsset,
     updateAsset,
     refetch: async () => {
-      // Invalidate and refetch both tools and parts queries
+      // Invalidate and refetch both tools and parts queries (base + shared)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: toolsQueryKey() }),
-        queryClient.invalidateQueries({ queryKey: partsQueryKey() })
+        queryClient.invalidateQueries({ queryKey: partsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['tools_shared'] }),
+        queryClient.invalidateQueries({ queryKey: ['parts_shared'] }),
       ]);
       // Reset to first page
       setCurrentPage(0);

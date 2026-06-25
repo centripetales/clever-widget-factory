@@ -10,6 +10,7 @@ import { useFileUpload } from '@/hooks/useFileUpload';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { useStateMutations, useStateById } from '@/hooks/useStates';
 import { useToast } from '@/components/ui/use-toast';
+import { useOrganization } from '@/hooks/useOrganization';
 import type { CreateObservationData } from '@/types/observations';
 import { MetricsInput } from '@/components/observations/MetricsInput';
 import { useMetrics } from '@/hooks/metrics/useMetrics';
@@ -26,7 +27,9 @@ export default function AddObservation() {
   }>();
   const navigate = useNavigate();
   const { uploadFiles, isUploading } = useFileUpload();
-  const { createState, updateState, isCreating, isUpdating } = useStateMutations();
+  const { organization } = useOrganization();
+  const orgId = organization?.id ?? '';
+  const { createState, updateState, isCreating, isUpdating } = useStateMutations(orgId);
   const { toast } = useToast();
 
   const handleBack = useCallback(() => {
@@ -96,7 +99,7 @@ export default function AddObservation() {
   const isEditMode = !!observationId;
 
   // Fetch existing state when in edit mode
-  const { data: existingState, isLoading: isLoadingState } = useStateById(observationId || '');
+  const { data: existingState, isLoading: isLoadingState } = useStateById(orgId, observationId || '');
 
   // Fetch existing snapshots when editing
   const { data: existingSnapshots } = useSnapshots(isEditMode ? observationId : undefined);

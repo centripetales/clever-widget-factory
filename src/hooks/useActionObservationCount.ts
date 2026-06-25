@@ -8,15 +8,16 @@ import { statesQueryKey } from '../lib/queryKeys';
  * It avoids the need to maintain a separate implementation_update_count field
  * and eliminates unnecessary database queries.
  * 
+ * @param orgId - The active organization ID (required for org-scoped cache key)
  * @param actionId - The action ID to get observation count for
  * @returns The number of observations (states) linked to this action, or undefined if not in cache
  */
-export function useActionObservationCount(actionId: string): number | undefined {
+export function useActionObservationCount(orgId: string, actionId: string): number | undefined {
   const queryClient = useQueryClient();
   
   // Try to get states from cache for this action
   const states = queryClient.getQueryData(
-    statesQueryKey({ entity_type: 'action', entity_id: actionId })
+    statesQueryKey(orgId, { entity_type: 'action', entity_id: actionId })
   ) as any[] | undefined;
   
   // Return count if states are in cache, undefined otherwise

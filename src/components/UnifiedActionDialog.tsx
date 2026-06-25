@@ -55,6 +55,7 @@ import { AssetSelector } from './AssetSelector';
 import { StockSelector } from './StockSelector';
 import { MultiParticipantSelector } from './MultiParticipantSelector';
 import { MissionSelector } from './MissionSelector';
+import { ShareConfigurationDialog } from './ShareConfigurationDialog';
 import { cn, sanitizeRichText, getActionBorderStyle } from "@/lib/utils";
 import { BaseAction, Profile, ActionCreationContext } from "@/types/actions";
 import { generateActionUrl, copyToClipboard } from "@/lib/urlUtils";
@@ -268,8 +269,8 @@ export function ActionForm({
   const [isInImplementationMode, setIsInImplementationMode] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
-  const [sharedWithPartners, setSharedWithPartners] = useState((action as any)?.shared_with_partners || false);
-  const [isTogglingShared, setIsTogglingShared] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const isShared = action?.shared_with_partners ?? false;
   // Internal Maxwell state — used when props are not provided (page mode)
   const [isMaxwellOpenInternal, setIsMaxwellOpenInternal] = useState(false);
   const [maxwellContextInternal, setMaxwellContextInternal] = useState<EntityContext | null>(null);
@@ -278,7 +279,7 @@ export function ActionForm({
   const maxwellCtx = onMaxwellOpenChange ? maxwellContext : maxwellContextInternal;
 
   // Fetch states for the action to extract learning takeaways for Copy Context and Maxwell context
-  const { data: actionStates } = useStates({ entity_type: 'action', entity_id: action?.id });
+  const { data: actionStates } = useStates(organizationId ?? '', { entity_type: 'action', entity_id: action?.id });
 
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
@@ -347,7 +348,7 @@ export function ActionForm({
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Derive observation count from TanStack cache (preferred over database count)
-  const derivedObservationCount = useActionObservationCount(action?.id || '');
+  const derivedObservationCount = useActionObservationCount(organizationId ?? '', action?.id || '');
 
   const preferName = (value?: string | null) => {
     if (!value) return null;
@@ -416,7 +417,6 @@ export function ActionForm({
         setAttachmentFiles(new Map());
 
         if (action && !isCreating) {
-          setSharedWithPartners((action as any).shared_with_partners || false);
           // Editing existing action - update formData when action changes from cache
           setFormData(prev => {
             // Only update if this is a new session or attachments/required_tools/required_stock changed
@@ -485,13 +485,6 @@ export function ActionForm({
       setIsTitleEditing(false);
     }
   }, [open, actionId, context?.type, isCreating, action]);
-
-  // Sync sharing state reactively when the action changes from real-time or cache updates
-  useEffect(() => {
-    if (action && !isCreating) {
-      setSharedWithPartners((action as any).shared_with_partners || false);
-    }
-  }, [(action as any)?.shared_with_partners, isCreating]);
 
   // Update formData when action changes from cache (after refetch)
   useEffect(() => {
@@ -691,40 +684,6 @@ export function ActionForm({
         description: actionUrl,
         duration: 10000,
       });
-    }
-  };
-
-  const handleToggleShared = async () => {
-    if (!action?.id || isTogglingShared) return;
-
-    setIsTogglingShared(true);
-    const nextShared = !sharedWithPartners;
-
-    try {
-      await apiService.put(`/actions/${action.id}`, { shared_with_partners: nextShared });
-      setSharedWithPartners(nextShared);
-
-      toast({
-        title: nextShared ? "Sharing activated" : "Sharing restricted",
-        description: nextShared
-          ? "Action details are now safely shared with trusted partners."
-          : "Sharing revoked. Action details are now private.",
-      });
-
-      // Invalidate queries so lists update
-      queryClient.invalidateQueries({ queryKey: ['actions'] });
-      if (onActionSaved) {
-        onActionSaved();
-      }
-    } catch (error) {
-      console.error('Error toggling action sharing state:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update action sharing policy.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsTogglingShared(false);
     }
   };
 
@@ -1207,19 +1166,11 @@ export function ActionForm({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleToggleShared}
-                disabled={isTogglingShared}
-                className={`h-7 w-7 p-0 transition-colors duration-200 ${sharedWithPartners
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
-                    : 'hover:text-emerald-600 hover:bg-emerald-50'
-                  }`}
-                title={sharedWithPartners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                onClick={() => setShowShareDialog(true)}
+                className={`h-7 w-7 p-0 transition-colors duration-200 ${isShared ? 'bg-green-100 text-green-600 border-green-300' : ''}`}
+                title="Share Action"
               >
-                {isTogglingShared ? (
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                ) : (
-                  <Handshake className="h-4 w-4" />
-                )}
+                <Handshake className="h-4 w-4" />
               </Button>
             )}
 
@@ -1323,21 +1274,6 @@ export function ActionForm({
         <div>
           <div className="flex items-center justify-between">
             <Label htmlFor="expectedState">Where we want to get to</Label>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={generateAIExpectedState}
-              disabled={isGeneratingExpectedState || (!formData.title && !formData.description)}
-              className="h-7 px-2 text-xs"
-            >
-              {isGeneratingExpectedState ? (
-                <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent mr-1" />
-              ) : (
-                <Sparkles className="h-3 w-3 mr-1" />
-              )}
-              AI Assist
-            </Button>
           </div>
           <Textarea
             id="expectedState"
@@ -1490,22 +1426,7 @@ export function ActionForm({
                   >
                     <Copy className="h-3 w-3 mr-1" />
                     Copy Context
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={generateAISummaryPolicy}
-                    disabled={isGeneratingAI || (!formData.description && !formData.policy)}
-                    className="h-7 px-2 text-xs"
-                  >
-                    {isGeneratingAI ? (
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent mr-1" />
-                    ) : (
-                      <Sparkles className="h-3 w-3 mr-1" />
-                    )}
-                    AI Assist
-                  </Button>
+                </Button>
                 </div>
               </div>
               <div className="mt-2 border rounded-lg">
@@ -1703,6 +1624,21 @@ export function ActionForm({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Share Configuration Dialog */}
+      {action?.id && (
+        <ShareConfigurationDialog
+          open={showShareDialog}
+          onOpenChange={setShowShareDialog}
+          entityId={action.id}
+          entityType="action"
+          entityName={formData.title || action.title || ''}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ['actions'] });
+            queryClient.invalidateQueries({ queryKey: ['action', action.id] });
+          }}
+        />
+      )}
     </>
   );
 }

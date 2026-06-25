@@ -1,15 +1,16 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin, Handshake, Network } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
 import { AssetHistoryDialog } from "./AssetHistoryDialog";
+import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { Link } from "react-router-dom";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import { PrismIcon } from "@/components/icons/PrismIcon";
 
-import { useMemo, memo, useRef } from "react";
+import { useMemo, memo, useState } from "react";
 
 import { CombinedAsset } from '@/hooks/useCombinedAssets';
 import { useToast } from "@/hooks/use-toast";
@@ -33,7 +34,6 @@ interface CombinedAssetCardProps {
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
   onAskMaxwell?: (asset: CombinedAsset) => void;
-  onShowHistory?: (asset: CombinedAsset) => void;
   onAddObservation?: (asset: CombinedAsset) => void;
   itemCount?: number;
 }
@@ -117,11 +117,11 @@ export const CombinedAssetCard = memo(({
   onAddQuantity,
   onUseQuantity,
   onAskMaxwell,
-  onShowHistory,
   onAddObservation,
   itemCount
 }: CombinedAssetCardProps) => {
   const { toast } = useToast();
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const checkoutDateDisplay = useMemo(() => {
     if (!checkoutInfo?.checkout_date) return null;
     const parsedDate = new Date(checkoutInfo.checkout_date);
@@ -149,7 +149,7 @@ export const CombinedAssetCard = memo(({
       if (asset.status === 'removed') {
         return <Badge variant="outline" className="text-gray-600 border-gray-600">Removed</Badge>;
       }
-      return <Badge variant="outline" className="text-green-600 border-green-600">Available</Badge>;
+      return null;
     } else {
       const isLowStock = asset.minimum_quantity && asset.current_quantity && asset.current_quantity <= asset.minimum_quantity;
       if (isLowStock) {
@@ -211,40 +211,70 @@ export const CombinedAssetCard = memo(({
           {asset.type === 'stock' && canEdit && (
             <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
               {onUseQuantity && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 w-7 p-0"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUseQuantity(asset);
-                  }}
-                >
-                  <Minus className="h-3 w-3" />
-                </Button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-block">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 w-7 p-0"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUseQuantity(asset);
+                          }}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{asset.is_shared_inbound ? "Using quantity is disabled for shared assets" : "Use Quantity"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
               {onAddQuantity && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 w-7 p-0"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddQuantity(asset);
-                  }}
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-block">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 w-7 p-0"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddQuantity(asset);
+                          }}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{asset.is_shared_inbound ? "Adding quantity is disabled for shared assets" : "Add Quantity"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
           )}
         </div>
 
-        {(asset.type === 'asset' || asset.category) && (
+        {(asset.type === 'asset' || asset.category || asset.is_shared_inbound) && (
           <div className="flex flex-wrap gap-1 -mt-1">
-            {asset.type === 'asset' && asset.is_checked_out && statusBadge}
+            {asset.type === 'asset' && statusBadge}
             {asset.category && asset.category !== 'Electric Tool' && asset.category !== 'Biological' && (
               <Badge variant="outline" className="text-xs">{asset.category}</Badge>
+            )}
+            {asset.is_shared_inbound && (
+              <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 flex items-center gap-1">
+                <Network className="h-3 w-3" />
+                Shared
+              </Badge>
             )}
           </div>
         )}
@@ -371,27 +401,29 @@ export const CombinedAssetCard = memo(({
         <div className="flex gap-2 mt-2 mt-auto pt-2" onClick={(e) => e.stopPropagation()}>
           {/* Asset-specific buttons */}
 
-          {/* Asset History Button - Always show for assets */}
           {asset.type === 'asset' && (
             <>
               {onAddObservation && (
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-12 px-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onAddObservation(asset);
-                        }}
-                      >
-                        <Camera className="h-4 w-4" />
-                      </Button>
+                      <div className="inline-block">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-12 px-2"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddObservation(asset);
+                          }}
+                        >
+                          <Camera className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>Add Observation</p>
+                      <p>{asset.is_shared_inbound ? "Observations are disabled for shared assets" : "Add Observation"}</p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -400,21 +432,47 @@ export const CombinedAssetCard = memo(({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <AssetHistoryDialog assetId={asset.id} assetName={asset.name}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-12 px-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
-                      >
-                        <History className="h-4 w-4" />
-                      </Button>
-                    </AssetHistoryDialog>
+                    <div>
+                      <AssetHistoryDialog assetId={asset.id} assetName={asset.name} disabled={asset.is_shared_inbound}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-12 px-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
+                        >
+                          <History className="h-4 w-4" />
+                        </Button>
+                      </AssetHistoryDialog>
+                    </div>
                   </TooltipTrigger>
                   <TooltipContent>
                     <p>View History</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="inline-block">
+                      <Button
+                        variant={asset.is_shared_outbound ? "default" : "outline"}
+                        size="sm"
+                        className={`w-12 px-2 ${asset.is_shared_outbound ? "bg-green-100 text-green-600" : ""}`}
+                        disabled={asset.is_shared_inbound}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowShareDialog(true);
+                        }}
+                      >
+                        <Handshake className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{asset.is_shared_inbound ? "Sharing is disabled for shared assets" : "Share Asset"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -423,20 +481,23 @@ export const CombinedAssetCard = memo(({
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-12 px-2 [&_svg]:size-auto"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onAskMaxwell(asset);
-                        }}
-                      >
-                        <PrismIcon size={18} />
-                      </Button>
+                      <div className="inline-block">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-12 px-2 [&_svg]:size-auto"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAskMaxwell(asset);
+                          }}
+                        >
+                          <PrismIcon size={18} />
+                        </Button>
+                      </div>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>Ask Maxwell</p>
+                      <p>{asset.is_shared_inbound ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}</p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -454,58 +515,98 @@ export const CombinedAssetCard = memo(({
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-12 px-2"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAddObservation(asset);
-                          }}
-                        >
-                          <Camera className="h-4 w-4" />
-                        </Button>
+                        <div className="inline-block">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-12 px-2"
+                            disabled={asset.is_shared_inbound}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAddObservation(asset);
+                            }}
+                          >
+                            <Camera className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Add Observation</p>
+                        <p>{asset.is_shared_inbound ? "Observations are disabled for shared assets" : "Add Observation"}</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 )}
 
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-block">
+                        <Button
+                          variant={asset.is_shared_outbound ? "default" : "outline"}
+                          size="sm"
+                          className={`w-12 px-2 ${asset.is_shared_outbound ? "bg-green-100 text-green-600" : ""}`}
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowShareDialog(true);
+                          }}
+                        >
+                          <Handshake className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{asset.is_shared_inbound ? "Sharing is disabled for shared assets" : "Share Stock"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {/* Stock History Button */}
-                <InventoryHistoryDialog partId={asset.id} partName={asset.name}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-12 px-2"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                    }}
-                  >
-                    <History className="h-4 w-4" />
-                  </Button>
-                </InventoryHistoryDialog>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <InventoryHistoryDialog partId={asset.id} partName={asset.name} disabled={asset.is_shared_inbound}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-12 px-2"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                            }}
+                          >
+                            <History className="h-4 w-4" />
+                          </Button>
+                        </InventoryHistoryDialog>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>View History</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
                 {onAskMaxwell && (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-12 px-2 [&_svg]:size-auto"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAskMaxwell(asset);
-                          }}
-                        >
-                          <PrismIcon size={18} />
-                        </Button>
+                        <div className="inline-block">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-12 px-2 [&_svg]:size-auto"
+                            disabled={asset.is_shared_inbound}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAskMaxwell(asset);
+                            }}
+                          >
+                            <PrismIcon size={18} />
+                          </Button>
+                        </div>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Ask Maxwell</p>
+                        <p>{asset.is_shared_inbound ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -520,20 +621,23 @@ export const CombinedAssetCard = memo(({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-12 px-2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onEdit(asset);
-                      }}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
+                    <div className="inline-block">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-12 px-2"
+                        disabled={asset.is_shared_inbound}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit(asset);
+                        }}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p>Edit</p>
+                    <p>{asset.is_shared_inbound ? "Editing is disabled for shared assets" : "Edit"}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -542,20 +646,23 @@ export const CombinedAssetCard = memo(({
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button
-                        size="icon"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRemove(asset);
-                        }}
-                        className="text-muted-foreground hover:text-destructive h-9 w-9"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="inline-block">
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemove(asset);
+                          }}
+                          className="text-muted-foreground hover:text-destructive h-9 w-9"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>Delete</p>
+                      <p>{asset.is_shared_inbound ? "Deleting is disabled for shared assets" : "Delete"}</p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -564,6 +671,15 @@ export const CombinedAssetCard = memo(({
           )}
         </div>
       </CardContent>
+      {showShareDialog && (
+        <ShareConfigurationDialog 
+          open={showShareDialog} 
+          onOpenChange={setShowShareDialog} 
+          entityId={asset.id} 
+          entityType={asset.type === 'asset' ? 'tool' : 'part'} 
+          entityName={asset.name} 
+        />
+      )}
     </Card>
   );
 });

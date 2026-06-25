@@ -64,7 +64,7 @@ describe('useStateMutations', () => {
 
       vi.mocked(stateService.getState).mockResolvedValue(mockState);
 
-      const { result } = renderHook(() => useStateById('state-123'), { wrapper });
+      const { result } = renderHook(() => useStateById('org-1', 'state-123'), { wrapper });
 
       // Initially loading
       expect(result.current.isLoading).toBe(true);
@@ -88,7 +88,7 @@ describe('useStateMutations', () => {
     });
 
     it('should not fetch when ID is empty', async () => {
-      const { result } = renderHook(() => useStateById(''), { wrapper });
+      const { result } = renderHook(() => useStateById('org-1', ''), { wrapper });
 
       // Should not be loading because query is disabled
       expect(result.current.isLoading).toBe(false);
@@ -102,7 +102,7 @@ describe('useStateMutations', () => {
       const mockError = new Error('Failed to fetch state');
       vi.mocked(stateService.getState).mockRejectedValue(mockError);
 
-      const { result } = renderHook(() => useStateById('state-123'), { wrapper });
+      const { result } = renderHook(() => useStateById('org-1', 'state-123'), { wrapper });
 
       await waitFor(() => {
         expect(result.current.isError).toBe(true);
@@ -136,7 +136,7 @@ describe('useStateMutations', () => {
 
       vi.mocked(stateService.updateState).mockResolvedValue(updatedState);
 
-      const { result } = renderHook(() => useStateMutations(), { wrapper });
+      const { result } = renderHook(() => useStateMutations('org-1'), { wrapper });
 
       const updateData = { observation_text: 'Updated text' };
       await result.current.updateState({ id: 'state-123', data: updateData });
@@ -161,13 +161,13 @@ describe('useStateMutations', () => {
       };
 
       // Pre-populate cache with original state
-      queryClient.setQueryData(['states'], [originalState]);
-      queryClient.setQueryData(['state', 'state-123'], originalState);
+      queryClient.setQueryData(['states', 'org-1'], [originalState]);
+      queryClient.setQueryData(['state', 'org-1', 'state-123'], originalState);
 
       const mockError = new Error('Failed to update state');
       vi.mocked(stateService.updateState).mockRejectedValue(mockError);
 
-      const { result } = renderHook(() => useStateMutations(), { wrapper });
+      const { result } = renderHook(() => useStateMutations('org-1'), { wrapper });
 
       const updateData = { observation_text: 'Updated text' };
       
@@ -179,8 +179,8 @@ describe('useStateMutations', () => {
       // Wait for rollback to complete
       await waitFor(() => {
         // Verify cache was rolled back to original state
-        const statesList = queryClient.getQueryData<Observation[]>(['states']);
-        const singleState = queryClient.getQueryData<Observation>(['state', 'state-123']);
+        const statesList = queryClient.getQueryData<Observation[]>(['states', 'org-1']);
+        const singleState = queryClient.getQueryData<Observation>(['state', 'org-1', 'state-123']);
         
         expect(statesList).toEqual([originalState]);
         expect(singleState).toEqual(originalState);
@@ -202,8 +202,8 @@ describe('useStateMutations', () => {
       };
 
       // Pre-populate cache
-      queryClient.setQueryData(['states'], [originalState]);
-      queryClient.setQueryData(['state', 'state-123'], originalState);
+      queryClient.setQueryData(['states', 'org-1'], [originalState]);
+      queryClient.setQueryData(['state', 'org-1', 'state-123'], originalState);
 
       // Mock a delayed response to test optimistic update
       let resolveUpdate: (value: Observation) => void;
@@ -212,15 +212,15 @@ describe('useStateMutations', () => {
       });
       vi.mocked(stateService.updateState).mockReturnValue(updatePromise);
 
-      const { result } = renderHook(() => useStateMutations(), { wrapper });
+      const { result } = renderHook(() => useStateMutations('org-1'), { wrapper });
 
       const updateData = { observation_text: 'Updated text' };
       const updateCall = result.current.updateState({ id: 'state-123', data: updateData });
 
       // Check optimistic update happened immediately (before server response)
       await waitFor(() => {
-        const statesList = queryClient.getQueryData<Observation[]>(['states']);
-        const singleState = queryClient.getQueryData<Observation>(['state', 'state-123']);
+        const statesList = queryClient.getQueryData<Observation[]>(['states', 'org-1']);
+        const singleState = queryClient.getQueryData<Observation>(['state', 'org-1', 'state-123']);
         
         expect(statesList?.[0]?.observation_text).toBe('Updated text');
         expect(singleState?.observation_text).toBe('Updated text');
@@ -238,8 +238,8 @@ describe('useStateMutations', () => {
 
       // Verify server response replaced optimistic data
       await waitFor(() => {
-        const statesList = queryClient.getQueryData<Observation[]>(['states']);
-        const singleState = queryClient.getQueryData<Observation>(['state', 'state-123']);
+        const statesList = queryClient.getQueryData<Observation[]>(['states', 'org-1']);
+        const singleState = queryClient.getQueryData<Observation>(['state', 'org-1', 'state-123']);
         
         expect(statesList?.[0]).toEqual(serverResponse);
         expect(singleState).toEqual(serverResponse);
@@ -267,14 +267,14 @@ describe('useStateMutations', () => {
       };
 
       // Pre-populate filtered cache
-      queryClient.setQueryData(['states', 'action', 'action-1'], [originalState]);
-      queryClient.setQueryData(['states'], [originalState]);
-      queryClient.setQueryData(['state', 'state-123'], originalState);
+      queryClient.setQueryData(['states', 'org-1', 'action', 'action-1'], [originalState]);
+      queryClient.setQueryData(['states', 'org-1'], [originalState]);
+      queryClient.setQueryData(['state', 'org-1', 'state-123'], originalState);
 
       vi.mocked(stateService.updateState).mockResolvedValue(updatedState);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -285,7 +285,7 @@ describe('useStateMutations', () => {
 
       await waitFor(() => {
         // Verify filtered cache was updated
-        const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'action', 'action-1']);
+        const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'org-1', 'action', 'action-1']);
         expect(filteredStates?.[0]).toEqual(updatedState);
       });
     });
@@ -323,7 +323,7 @@ describe('useStateMutations', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -367,7 +367,7 @@ describe('useStateMutations', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'part', entity_id: 'part-1' }),
+        () => useStateMutations('org-1', { entity_type: 'part', entity_id: 'part-1' }),
         { wrapper }
       );
 
@@ -399,8 +399,8 @@ describe('useStateMutations', () => {
       };
 
       // Pre-populate cache
-      queryClient.setQueryData(['states'], [originalState]);
-      queryClient.setQueryData(['state', 'state-123'], originalState);
+      queryClient.setQueryData(['states', 'org-1'], [originalState]);
+      queryClient.setQueryData(['state', 'org-1', 'state-123'], originalState);
 
       const firstUpdate: Observation = {
         ...originalState,
@@ -419,7 +419,7 @@ describe('useStateMutations', () => {
         .mockResolvedValueOnce(firstUpdate)
         .mockResolvedValueOnce(secondUpdate);
 
-      const { result } = renderHook(() => useStateMutations(), { wrapper });
+      const { result } = renderHook(() => useStateMutations('org-1'), { wrapper });
 
       // Trigger two updates concurrently
       await Promise.all([
@@ -429,7 +429,7 @@ describe('useStateMutations', () => {
 
       // Last write wins - should have second update
       await waitFor(() => {
-        const singleState = queryClient.getQueryData<Observation>(['state', 'state-123']);
+        const singleState = queryClient.getQueryData<Observation>(['state', 'org-1', 'state-123']);
         expect(singleState?.observation_text).toBe('Second update');
       });
     });
@@ -455,7 +455,7 @@ describe('useStateMutations', () => {
       });
       vi.mocked(stateService.updateState).mockReturnValue(updatePromise);
 
-      const { result } = renderHook(() => useStateMutations(), { wrapper });
+      const { result } = renderHook(() => useStateMutations('org-1'), { wrapper });
 
       // Initially not updating
       expect(result.current.isUpdating).toBe(false);
@@ -495,7 +495,7 @@ describe('useStateMutations', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -509,13 +509,13 @@ describe('useStateMutations', () => {
 
       await waitFor(() => {
         // Verify filtered cache was updated with the real server record
-        const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'action', 'action-1']);
+        const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'org-1', 'action', 'action-1']);
         expect(filteredStates?.[0]?.id).toBe('state-1');
 
-        // Should NOT invalidate the broad ['states'] key — this was the bug.
+        // Should NOT invalidate the broad ['states', 'org-1'] key — this was the bug.
         // Broad invalidation caused a cascade of refetches across all useStates queries.
         expect(invalidateSpy).not.toHaveBeenCalledWith({
-          queryKey: ['states'],
+          queryKey: ['states', 'org-1'],
         });
       });
     });
@@ -526,7 +526,7 @@ describe('useStateMutations', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -535,11 +535,11 @@ describe('useStateMutations', () => {
       await waitFor(() => {
         // Should invalidate filtered states cache
         expect(invalidateSpy).toHaveBeenCalledWith({
-          queryKey: ['states', 'action', 'action-1'],
+          queryKey: ['states', 'org-1', 'action', 'action-1'],
         });
         // Should invalidate all states cache
         expect(invalidateSpy).toHaveBeenCalledWith({
-          queryKey: ['states'],
+          queryKey: ['states', 'org-1'],
         });
       });
     });
@@ -582,7 +582,7 @@ describe('useStateMutations', () => {
         const invalidateSpy = vi.spyOn(localQueryClient, 'invalidateQueries');
 
         const { result } = renderHook(
-          () => useStateMutations(filters),
+          () => useStateMutations('org-1', filters),
           { wrapper: localWrapper }
         );
 
@@ -598,10 +598,10 @@ describe('useStateMutations', () => {
           // The filtered cache key MUST be invalidated (or updated) after createState
           // This ensures the new observation becomes visible in the UI for the specific entity
           const filteredKeyInvalidated = invalidateSpy.mock.calls.some(
-            call => JSON.stringify(call[0]) === JSON.stringify({ queryKey: ['states', filters.entity_type, filters.entity_id] })
+            call => JSON.stringify(call[0]) === JSON.stringify({ queryKey: ['states', 'org-1', filters.entity_type, filters.entity_id] })
           );
           const filteredCacheUpdated = localQueryClient.getQueryData<any[]>(
-            ['states', filters.entity_type, filters.entity_id]
+            ['states', 'org-1', filters.entity_type, filters.entity_id]
           ) !== undefined;
 
           // Either the key was invalidated OR the cache was directly updated (optimistic)
@@ -618,7 +618,7 @@ describe('useStateMutations', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -627,11 +627,11 @@ describe('useStateMutations', () => {
       await waitFor(() => {
         // Filtered key MUST be invalidated
         expect(invalidateSpy).toHaveBeenCalledWith({
-          queryKey: ['states', 'action', 'action-1'],
+          queryKey: ['states', 'org-1', 'action', 'action-1'],
         });
         // Broad key MUST ALSO be invalidated (delete behavior is unchanged)
         expect(invalidateSpy).toHaveBeenCalledWith({
-          queryKey: ['states'],
+          queryKey: ['states', 'org-1'],
         });
       });
     });
@@ -675,10 +675,10 @@ describe('useStateMutations', () => {
         links: [],
         captured_at: '2024-01-01T00:00:00Z',
       };
-      queryClient.setQueryData(['states', 'action', 'action-1'], [existingState]);
+      queryClient.setQueryData(['states', 'org-1', 'action', 'action-1'], [existingState]);
 
       const { result } = renderHook(
-        () => useStateMutations({ entity_type: 'action', entity_id: 'action-1' }),
+        () => useStateMutations('org-1', { entity_type: 'action', entity_id: 'action-1' }),
         { wrapper }
       );
 
@@ -694,7 +694,7 @@ describe('useStateMutations', () => {
       // ASSERTION 1: Filtered cache should be updated optimistically BEFORE server responds
       // (i.e., onMutate should have prepended a provisional observation)
       await waitFor(() => {
-        const filteredStates = queryClient.getQueryData<any[]>(['states', 'action', 'action-1']);
+        const filteredStates = queryClient.getQueryData<any[]>(['states', 'org-1', 'action', 'action-1']);
         // After optimistic update, the new observation should appear in the filtered cache
         // before the server responds. The provisional item has id starting with 'optimistic-'.
         const hasOptimisticEntry = filteredStates?.some(s => s.id?.startsWith('optimistic-'));
@@ -705,14 +705,14 @@ describe('useStateMutations', () => {
       resolveCreate!(mockState as any);
       await createCall;
 
-      // ASSERTION 2: The broad ['states'] key should NOT be invalidated
-      // (only the scoped ['states', 'action', 'action-1'] key should be invalidated)
+      // ASSERTION 2: The broad ['states', 'org-1'] key should NOT be invalidated
+      // (only the scoped ['states', 'org-1', 'action', 'action-1'] key should be invalidated)
       expect(invalidateSpy).not.toHaveBeenCalledWith({
-        queryKey: ['states'],
+        queryKey: ['states', 'org-1'],
       });
 
       // ASSERTION 3: The filtered cache should be updated with the real server record
-      const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'action', 'action-1']);
+      const filteredStates = queryClient.getQueryData<Observation[]>(['states', 'org-1', 'action', 'action-1']);
       expect(filteredStates?.[0]?.id).toBe('state-server-1');
     });
   });

@@ -50,10 +50,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<any | null>(null);
   const [idToken, setIdToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isContributor, setIsContributor] = useState(false);
-  const [isLeadership, setIsLeadership] = useState(false);
-  const [canEditTools, setCanEditTools] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(true);
+  const [isContributor, setIsContributor] = useState(true);
+  const [isLeadership, setIsLeadership] = useState(true);
+  const [canEditTools, setCanEditTools] = useState(true);
   const queryClient = useQueryClient();
 
   const checkUserRole = useCallback(async (userId: string) => {

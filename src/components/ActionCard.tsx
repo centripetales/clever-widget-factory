@@ -6,6 +6,7 @@ import { BaseAction } from '@/types/actions';
 import { useProfile } from '@/hooks/useProfile';
 import { useAuth } from '@/hooks/useCognitoAuth';
 import { useActionObservationCount } from '@/hooks/useActionObservationCount';
+import { useOrganization } from '@/hooks/useOrganization';
 
 interface Profile {
   id: string;
@@ -24,9 +25,10 @@ interface ActionCardProps {
 export function ActionCard({ action, profiles, onEdit }: ActionCardProps) {
   const { favoriteColor } = useProfile();
   const { user } = useAuth();
+  const { organization } = useOrganization();
   
   // Derive observation count from TanStack cache (preferred over database count)
-  const derivedCount = useActionObservationCount(action.id);
+  const derivedCount = useActionObservationCount(organization?.id ?? '', action.id);
 
   const getStatusIcon = () => {
     if (action.status === 'completed') {

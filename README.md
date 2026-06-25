@@ -83,9 +83,26 @@ aws lambda invoke --function-name cwf-db-migration --payload '{"sql":"YOUR_SQL_H
 # Add endpoint with authorizer
 ./scripts/add-api-endpoint.sh /api/your-endpoint GET
 
-# Deploy changes
-aws apigateway create-deployment --rest-api-id 0720au267k --stage-name prod --region us-west-2
+### Lambda Deployment
+
+For deploying backend Lambda updates (`lambda/core/index.js`, etc.) to AWS, two deployment scripts are provided:
+
+#### 1. Fast Code Update (1–3 seconds)
+Uses the AWS CLI to update only your handler code, completely bypassing zipping `node_modules` (since dependencies are housed in the Lambda Layer). This is the recommended loop during active backend code development:
+```bash
+./scripts/deploy/deploy-lambda-fast.sh <lambda-dir> <function-name>
+# Example:
+./scripts/deploy/deploy-lambda-fast.sh core cwf-core-lambda
 ```
+
+#### 2. Full Build & Deployment (20–45 seconds)
+Performs a clean production build (`npm install --production`), packages all local dependencies, updates function code, and synchronizes layers, environment variables, timeouts, and memory configurations:
+```bash
+./scripts/deploy/deploy-lambda-with-layer.sh <lambda-dir> <function-name>
+# Example:
+./scripts/deploy/deploy-lambda-with-layer.sh core cwf-core-lambda
+```
+*Use this script when you add new npm packages, modify package.json dependencies, or update environment variables.*
 
 **Verify all endpoints have authorizers:**
 ```bash

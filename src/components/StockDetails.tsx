@@ -4,8 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
-import { InventoryHistoryDialog } from "@/components/InventoryHistoryDialog";
+import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { getThumbnailUrl } from '@/lib/imageUtils';
@@ -39,6 +40,13 @@ export const StockDetails = ({
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Assets
         </Button>
+        {stock.image_url && (
+          <img
+            src={getThumbnailUrl(stock.image_url) || ''}
+            alt={stock.name}
+            className="w-12 h-12 object-cover rounded-md flex-shrink-0"
+          />
+        )}
         <div className="flex-1">
           <h1 className="text-2xl font-bold">{stock.name}</h1>
           <div className="flex items-center gap-2 mt-1">
@@ -46,22 +54,34 @@ export const StockDetails = ({
             <Badge variant="secondary">Stock Item</Badge>
           </div>
         </div>
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => setIsExperienceDialogOpen(true)}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Create Experience
-        </Button>
+         <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="inline-block">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={stock.is_shared_inbound}
+                  onClick={() => setIsExperienceDialogOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Experience
+                </Button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{stock.is_shared_inbound ? "Experiences are disabled for shared assets" : "Create Experience"}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Tabs defaultValue="details" className="w-full">
+      <div className="grid grid-cols-1 gap-6">
+        <div>
+          <Tabs defaultValue="history" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="history" className="w-full">History</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -143,27 +163,9 @@ export const StockDetails = ({
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
-              <InventoryHistoryDialog partId={stock.id} partName={stock.name}>
-                <Button variant="outline" className="w-full">
-                  View Complete History
-                </Button>
-              </InventoryHistoryDialog>
+              <InventoryHistoryContent partId={stock.id} />
             </TabsContent>
           </Tabs>
-        </div>
-
-        <div className="space-y-6">
-          {stock.image_url && (
-            <Card>
-              <CardContent className="p-4 flex flex-col gap-4">
-                <img
-                  src={getThumbnailUrl(stock.image_url) || ''}
-                  alt={stock.name}
-                  className="w-full h-64 object-cover rounded-md"
-                />
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
 

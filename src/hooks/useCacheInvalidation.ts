@@ -52,10 +52,16 @@ export function useCacheInvalidation() {
       switch (entityType) {
         case 'tool':
           queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
+          if (entityId) {
+            queryClient.invalidateQueries({ queryKey: ['tool_history', entityId] });
+          }
           break;
 
         case 'part':
           queryClient.invalidateQueries({ queryKey: partsQueryKey() });
+          if (entityId) {
+            queryClient.invalidateQueries({ queryKey: ['part_history', entityId] });
+          }
           break;
 
         case 'action':
@@ -93,7 +99,12 @@ export function useCacheInvalidation() {
             perspectivesProcessingMap.delete(entityId);
             notifyProcessingListeners();
           }
-          queryClient.invalidateQueries({ queryKey: [statesQueryKey()[0]] });
+          // Invalidate all org-scoped states caches by matching on the first key segment.
+          // orgId is not available here; the predicate approach ensures all orgs' state
+          // caches are refreshed when a WebSocket broadcast arrives.
+          queryClient.invalidateQueries({ queryKey: ['states'] });
+          queryClient.invalidateQueries({ queryKey: ['tool_history'] });
+          queryClient.invalidateQueries({ queryKey: ['part_history'] });
           break;
 
         case 'policy':

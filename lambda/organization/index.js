@@ -68,7 +68,7 @@ exports.handler = async (event) => {
       'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
     };
-
+    
     // Handle preflight requests
     if (httpMethod === 'OPTIONS') {
       return {
@@ -77,7 +77,7 @@ exports.handler = async (event) => {
         body: ''
       };
     }
-
+    
     // Organization members endpoint
     if (httpMethod === 'GET' && path.endsWith('/organization_members')) {
       const orgIdsList = accessibleOrgIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
@@ -126,7 +126,7 @@ exports.handler = async (event) => {
         body: JSON.stringify({ data: result?.[0]?.json_agg || [] })
       };
     }
-
+    
     // All organization members endpoint (for management)
     if (httpMethod === 'GET' && path.includes('/organization_members/all')) {
       const { organization_id = '00000000-0000-0000-0000-000000000001' } = queryStringParameters || {};
@@ -145,7 +145,7 @@ exports.handler = async (event) => {
         body: JSON.stringify({ data: result?.[0]?.json_agg || [] })
       };
     }
-
+    
     // Find organization member by email
     if (httpMethod === 'GET' && path.includes('/organization_members/by-email')) {
       const { email } = queryStringParameters || {};
@@ -156,7 +156,7 @@ exports.handler = async (event) => {
           body: JSON.stringify({ error: 'Email parameter required' })
         };
       }
-
+      
       const sql = `SELECT json_agg(row_to_json(t)) FROM (
         SELECT user_id, full_name, role, email, cognito_user_id
         FROM organization_members
@@ -173,60 +173,78 @@ exports.handler = async (event) => {
         body: JSON.stringify({ data: member })
       };
     }
-
-    // Create organization (admin only)
-    if (httpMethod === 'POST' && path.endsWith('/organizations')) {
-      // Only admins can create organizations
-      if (authContext.user_role !== 'admin') {
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ error: 'Only admin users can create organizations' })
-        };
-      }
-
-      const body = JSON.parse(event.body || '{}');
-      const { name, subdomain } = body;
-
-      if (!name || !name.trim()) {
-        return {
-          statusCode: 400,
-          headers,
-          body: JSON.stringify({ error: 'Organization name is required' })
-        };
-      }
-
-      // Create the organization
-      const createOrgSql = `
-        INSERT INTO organizations (name, subdomain, is_active, created_at, updated_at)
-        VALUES ($1, $2, true, NOW(), NOW())
-        RETURNING id, name, subdomain, is_active, created_at, updated_at;
-      `;
-      const orgRows = await queryParams(createOrgSql, [name.trim(), subdomain || null]);
-      const newOrg = orgRows[0];
-
-      // Add the creating user as an admin member of the new organization
-      const addMemberSql = `
-        INSERT INTO organization_members (organization_id, user_id, cognito_user_id, role, is_active, created_at)
-        VALUES ($1, $2, $2, 'admin', true, NOW())
-        ON CONFLICT DO NOTHING;
-      `;
-      await queryParams(addMemberSql, [newOrg.id, authContext.cognito_user_id]);
-
+    
+    // Impact preview endpoint
+    if (httpMethod === 'GET' && path.match(/^\/organizations\/([^/]+)\/impact$/)) {
+      const orgId = path.split('/')[2];
+      const impact = {};
+      // Active members (organization_members has is_active)
+      const memberRows = await queryParams('SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND is_active = true', [orgId]);
+      impact.members = parseInt(memberRows[0].count, 10);
+      // Actions (no is_active column — count all)
+      const actionRows = await queryParams('SELECT COUNT(*) FROM actions WHERE organization_id = $1', [orgId]);
+      impact.actions = parseInt(actionRows[0].count, 10);
+      // Missions (no is_active column — count all)
+      const missionRows = await queryParams('SELECT COUNT(*) FROM missions WHERE organization_id = $1', [orgId]);
+      impact.missions = parseInt(missionRows[0].count, 10);
+      // Tools (no is_active column — count all)
+      const toolRows = await queryParams('SELECT COUNT(*) FROM tools WHERE organization_id = $1', [orgId]);
+      impact.tools = parseInt(toolRows[0].count, 10);
+      // Issues (no is_active column — count all)
+      const issueRows = await queryParams('SELECT COUNT(*) FROM issues WHERE organization_id = $1', [orgId]);
+      impact.issues = parseInt(issueRows[0].count, 10);
+      
       return {
-        statusCode: 201,
+        statusCode: 200,
         headers,
-        body: JSON.stringify({ data: newOrg })
+        body: JSON.stringify({ data: impact })
       };
     }
-
+    
+    // Soft‑delete endpoint (manual backup expected before calling this)
+    if (httpMethod === 'DELETE' && path.match(/^\/organizations\/([^/]+)$/)) {
+      const orgId = path.split('/')[2];
+      const backupFlag = queryStringParameters?.backup === 'done';
+      if (!backupFlag) {
+        console.warn('Soft‑delete invoked without backup flag. Ensure a manual RDS snapshot was taken.');
+      }
+      const client = new Client(dbConfig);
+      try {
+        await client.connect();
+        await client.query('BEGIN');
+        // Deactivate the organization row
+        await client.query('UPDATE organizations SET is_active = false, updated_at = NOW() WHERE id = $1', [orgId]);
+        // Deactivate related rows — only tables that have BOTH organization_id AND is_active
+        const deactivatableTables = ['organization_members', 'storage_vicinities', 'suppliers'];
+        for (const tbl of deactivatableTables) {
+          await client.query(`UPDATE ${tbl} SET is_active = false WHERE organization_id = $1`, [orgId]);
+        }
+        await client.query('COMMIT');
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ success: true })
+        };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Soft‑delete error:', err);
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ error: err.message })
+        };
+      } finally {
+        await client.end();
+      }
+    }
+    
     // Default 404
     return {
       statusCode: 404,
       headers,
       body: JSON.stringify({ error: 'Not found' })
     };
-
+    
   } catch (error) {
     console.error('Error:', error);
     return {

@@ -18,7 +18,8 @@ import {
   missionsQueryKey,
   partsOrdersQueryKey,
   explorationsQueryKey,
-  experiencesQueryKey
+  experiencesQueryKey,
+  organizationsQueryKey
 } from './queryKeys';
 
 // Global query client instance for cache updates
@@ -453,6 +454,20 @@ function updateCacheFromResponse(endpoint: string, method: string, responseData:
       const experienceId = endpoint.split('/').pop();
       globalQueryClient.setQueryData(experiencesQueryKey(), (old: any[] = []) => 
         old.filter(item => item.id !== experienceId)
+      );
+    }
+  } else if (endpoint.includes('/organizations')) {
+    if (method === 'POST') {
+      if (optimisticId) {
+        globalQueryClient.setQueryData(organizationsQueryKey(), (old: any[] = []) => 
+          old.map(item => item.id === optimisticId ? data : item)
+        );
+      } else {
+        globalQueryClient.setQueryData(organizationsQueryKey(), (old: any[] = []) => [...old, data]);
+      }
+    } else if (method === 'PUT') {
+      globalQueryClient.setQueryData(organizationsQueryKey(), (old: any[] = []) => 
+        old.map(item => item.id === data.id ? data : item)
       );
     }
   }

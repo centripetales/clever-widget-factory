@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiService, getApiData } from '@/lib/apiService';
 import { offlineQueryConfig } from '@/lib/queryConfig';
+import { useOrganization } from '@/hooks/useOrganization';
 
 export interface OrganizationMember {
   id: string;
@@ -151,20 +152,16 @@ export function useOrganizationMembers() {
 }
 
 /**
- * Hook to get only enabled members for dropdowns and assignments
- * Filters out disabled members to prevent assigning work to inactive accounts
+ * Hook to get only enabled members for dropdowns and assignments.
+ * Scoped to the current organization so cross-org assignee bleed doesn't occur.
  */
 export function useEnabledMembers() {
-  const { members, loading, refetch } = useOrganizationMembers();
-  
+  const { organization } = useOrganization();
+  const { members, loading, refetch } = useOrganizationMembersByOrg(organization?.id ?? null);
+
   const enabledMembers = useMemo(() => {
-    const filtered = members.filter((m) => m.is_active === true);
-    return filtered;
+    return members.filter((m) => m.is_active !== false);
   }, [members]);
 
-  return {
-    members: enabledMembers,
-    loading,
-    refetch,
-  };
+  return { members: enabledMembers, loading, refetch };
 }

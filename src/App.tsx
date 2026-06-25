@@ -19,6 +19,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import AdminRoute from "@/components/AdminRoute";
 import LeadershipRoute from "@/components/LeadershipRoute";
 import SuperAdminRoute from "@/components/SuperAdminRoute";
+import FeatureGuardRoute from "@/components/FeatureGuardRoute";
 import { GlobalMaxwellFAB } from "@/components/GlobalMaxwellFAB";
 import { MaxwellRecordHighlightProvider } from "@/contexts/MaxwellRecordHighlightContext";
 import Index from "./pages/Index";
@@ -141,7 +142,9 @@ function AppContent() {
           path="/combined-assets"
           element={
             <ProtectedRoute>
-              <CombinedAssets />
+              <FeatureGuardRoute featureKey="assets" featureName="Assets">
+                <CombinedAssets />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -149,7 +152,9 @@ function AppContent() {
           path="/observations"
           element={
             <ProtectedRoute>
-              <ObservationsList />
+              <FeatureGuardRoute featureKey="observations" featureName="Observations">
+                <ObservationsList />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -157,7 +162,9 @@ function AppContent() {
           path="/observations/new"
           element={
             <ProtectedRoute>
-              <AddObservation />
+              <FeatureGuardRoute featureKey="observations" featureName="Observations">
+                <AddObservation />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -165,7 +172,9 @@ function AppContent() {
           path="/combined-assets/:assetType/:id/observation"
           element={
             <ProtectedRoute>
-              <AddObservation />
+              <FeatureGuardRoute featureKey="observations" featureName="Observations">
+                <AddObservation />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -181,7 +190,9 @@ function AppContent() {
           path="/observations/edit/:observationId"
           element={
             <ProtectedRoute>
-              <AddObservation />
+              <FeatureGuardRoute featureKey="observations" featureName="Observations">
+                <AddObservation />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -193,7 +204,9 @@ function AppContent() {
           path="/inventory/summary"
           element={
             <ProtectedRoute>
-              <InventorySummary />
+              <FeatureGuardRoute featureKey="assets" featureName="Assets">
+                <InventorySummary />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -201,7 +214,9 @@ function AppContent() {
           path="/missions"
           element={
             <ProtectedRoute>
-              <Missions />
+              <FeatureGuardRoute featureKey="missions" featureName="Stargazer Projects">
+                <Missions />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -209,7 +224,9 @@ function AppContent() {
           path="/missions/:missionId/edit"
           element={
             <ProtectedRoute>
-              <EditMission />
+              <FeatureGuardRoute featureKey="missions" featureName="Stargazer Projects">
+                <EditMission />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -217,7 +234,9 @@ function AppContent() {
           path="/actions"
           element={
             <ProtectedRoute>
-              <Actions />
+              <FeatureGuardRoute featureKey="actions" featureName="Actions">
+                <Actions />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -225,7 +244,9 @@ function AppContent() {
           path="/actions/new"
           element={
             <ProtectedRoute>
-              <ActionPage />
+              <FeatureGuardRoute featureKey="actions" featureName="Actions">
+                <ActionPage />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -233,7 +254,9 @@ function AppContent() {
           path="/actions/:actionId"
           element={
             <ProtectedRoute>
-              <ActionPage />
+              <FeatureGuardRoute featureKey="actions" featureName="Actions">
+                <ActionPage />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -277,7 +300,9 @@ function AppContent() {
           path="/dashboard/analytics"
           element={
             <LeadershipRoute>
-              <AnalyticsDashboard />
+              <FeatureGuardRoute featureKey="analytics" featureName="Analytics">
+                <AnalyticsDashboard />
+              </FeatureGuardRoute>
             </LeadershipRoute>
           }
         />
@@ -293,7 +318,9 @@ function AppContent() {
           path="/organization"
           element={
             <LeadershipRoute>
-              <Organization />
+              <FeatureGuardRoute featureKey="organization" featureName="Organization Settings">
+                <Organization />
+              </FeatureGuardRoute>
             </LeadershipRoute>
           }
         />
@@ -301,7 +328,9 @@ function AppContent() {
           path="/organization/:organizationId"
           element={
             <LeadershipRoute>
-              <Organization />
+              <FeatureGuardRoute featureKey="organization" featureName="Organization Settings">
+                <Organization />
+              </FeatureGuardRoute>
             </LeadershipRoute>
           }
         />
@@ -309,7 +338,9 @@ function AppContent() {
           path="/admin/organizations"
           element={
             <SuperAdminRoute>
-              <AdminOrganizations />
+              <FeatureGuardRoute featureKey="organizations" featureName="Organizations">
+                <AdminOrganizations />
+              </FeatureGuardRoute>
             </SuperAdminRoute>
           }
         />
@@ -333,7 +364,9 @@ function AppContent() {
           path="/sari-sari-chat"
           element={
             <ProtectedRoute>
-              <SariSariChat />
+              <FeatureGuardRoute featureKey="sari-sari-chat" featureName="Sari Sari Store">
+                <SariSariChat />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -349,7 +382,9 @@ function AppContent() {
           path="/finances"
           element={
             <ProtectedRoute>
-              <Finances />
+              <FeatureGuardRoute featureKey="finances" featureName="Expenses">
+                <Finances />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -357,7 +392,9 @@ function AppContent() {
           path="/financial-records/new"
           element={
             <ProtectedRoute>
-              <RecordFinancialRecord />
+              <FeatureGuardRoute featureKey="finances" featureName="Expenses">
+                <RecordFinancialRecord />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -365,7 +402,9 @@ function AppContent() {
           path="/financial-records/:id"
           element={
             <ProtectedRoute>
-              <FinancialRecordDetail />
+              <FeatureGuardRoute featureKey="finances" featureName="Expenses">
+                <FinancialRecordDetail />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -381,7 +420,9 @@ function AppContent() {
           path="/user/:userId"
           element={
             <ProtectedRoute>
-              <UserProfile />
+              <FeatureGuardRoute featureKey="profile" featureName="My Profile">
+                <UserProfile />
+              </FeatureGuardRoute>
             </ProtectedRoute>
           }
         />
@@ -395,27 +436,27 @@ function AppContent() {
 }
 
 const App = () => (
-  <PersistQueryClientProvider
-    client={queryClient}
-    persistOptions={{
-      persister: queryCachePersister,
-      maxAge: QUERY_CACHE_MAX_AGE,
-    }}
-  >
-    <AuthProvider>
-      <OrganizationProvider>
-        <AppSettingsProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Sonner />
-            <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || "/"}>
+  <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || "/"}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: queryCachePersister,
+        maxAge: QUERY_CACHE_MAX_AGE,
+      }}
+    >
+      <AuthProvider>
+        <OrganizationProvider>
+          <AppSettingsProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Sonner />
               <AppContent />
-            </BrowserRouter>
-          </TooltipProvider>
-        </AppSettingsProvider>
-      </OrganizationProvider>
-    </AuthProvider>
-  </PersistQueryClientProvider>
+            </TooltipProvider>
+          </AppSettingsProvider>
+        </OrganizationProvider>
+      </AuthProvider>
+    </PersistQueryClientProvider>
+  </BrowserRouter>
 );
 
 export default App;

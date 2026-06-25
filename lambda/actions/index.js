@@ -942,11 +942,36 @@ exports.handler = async (event) => {
 
     // Actions endpoint
     if (httpMethod === 'GET' && path.endsWith('/actions')) {
-      const { limit, offset = 0, assigned_to, status, linked_issue_id, asset_id, id } = queryStringParameters || {};
+      const { limit, offset = 0, assigned_to, status, linked_issue_id, asset_id, id, view_shared } = queryStringParameters || {};
       
-      const orgFilter = buildOrganizationFilter(authContext, 'a');
       let whereConditions = [];
-      if (orgFilter.condition) whereConditions.push(orgFilter.condition);
+      if (organizationId && view_shared) {
+        const sharedArray = Array.isArray(view_shared) ? view_shared : view_shared.split(',');
+        const ownOrgChecked = sharedArray.map(s => s.trim()).includes(organizationId);
+        const partnerOrgs = sharedArray.filter(id => id.trim() !== organizationId);
+        const clauses = [];
+        if (ownOrgChecked) {
+          clauses.push(`a.organization_id::text = '${organizationId.replace(/'/g, "''")}'`);
+        }
+        if (partnerOrgs.length > 0) {
+          const partnerOrgsStr = partnerOrgs.map(idStr => `'${idStr.trim().replace(/'/g, "''")}'`).join(',');
+          clauses.push(`(
+            a.organization_id::text IN (${partnerOrgsStr})
+            AND EXISTS (
+              SELECT 1 FROM states s
+              JOIN state_links sl_e ON sl_e.state_id = s.id
+                AND sl_e.entity_type = 'action' AND sl_e.entity_id = a.id
+              JOIN state_links sl_o ON sl_o.state_id = s.id
+                AND sl_o.entity_type = 'organization'
+                AND sl_o.entity_id::text = '${organizationId.replace(/'/g, "''")}'
+            )
+          )`);
+        }
+        whereConditions.push(clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'false');
+      } else {
+        const orgFilter = buildOrganizationFilter(authContext, 'a');
+        if (orgFilter.condition) whereConditions.push(orgFilter.condition);
+      }
       if (id) {
         whereConditions.push(`a.id = '${id.replace(/'/g, "''")}'`);
       }
@@ -981,16 +1006,16 @@ exports.handler = async (event) => {
             (
               SELECT EXISTS(
                 SELECT 1 FROM states s
-                JOIN state_links sl ON s.id = sl.state_id
-                JOIN state_risk_profiles srp ON s.id = srp.state_id
-                WHERE sl.entity_type = 'action'
-                  AND sl.entity_id = a.id
-                  AND s.state_text = 'Shared narrative and impact overview for action'
-                  AND srp.aggregate_risk = 0.0
+                JOIN state_links sl_e ON sl_e.state_id = s.id
+                  AND sl_e.entity_type = 'action' AND sl_e.entity_id = a.id
+                JOIN state_links sl_o ON sl_o.state_id = s.id
+                  AND sl_o.entity_type = 'organization'
+                  AND sl_o.entity_id::text != s.organization_id::text
               )
             ),
             false
           ) as shared_with_partners,
+          CASE WHEN a.organization_id::text != '${organizationId.replace(/'/g, "''")}' THEN true ELSE false END as is_shared_inbound,
           CASE WHEN a.asset_id IS NOT NULL THEN
             json_build_object('id', t.id, 'name', t.name, 'category', t.category)
           ELSE NULL END as asset

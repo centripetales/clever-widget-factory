@@ -2,38 +2,37 @@
 
 ## Lambda Deployment
 
-### `deploy-lambda-generic.sh`
+All Lambda deployment scripts are located under the `scripts/deploy/` directory.
 
-Generic Lambda deployment script that automatically includes the `shared/` directory.
+### `deploy-lambda-with-layer.sh`
+
+Clean deployment script that builds dependencies (`npm install --production`), merges configuration variables, links Layers, and updates function code. Takes **20–45 seconds**.
 
 **Usage:**
 ```bash
-./scripts/deploy-lambda-generic.sh <lambda-dir> <function-name>
+./scripts/deploy/deploy-lambda-with-layer.sh <lambda-dir> <function-name> [layer-arn] [timeout-seconds]
 ```
 
-**Examples:**
+**Example:**
 ```bash
-# Deploy core Lambda
-./scripts/deploy-lambda-generic.sh core cwf-core-lambda
-
-# Deploy sari-sari chat Lambda
-./scripts/deploy-lambda-generic.sh sari-sari-chat cwf-sari-sari-chat
+# Deploy core Lambda with standard common Layer
+./scripts/deploy/deploy-lambda-with-layer.sh core cwf-core-lambda
 ```
 
-**What it does:**
-1. Copies `lambda/shared/` into the Lambda directory
-2. Packages `index.js`, `shared/`, and `node_modules/`
-3. Deploys to AWS Lambda
-4. Cleans up temporary files
+### `deploy-lambda-fast.sh`
 
-### `deploy-lambda.sh`
+Ultra-fast code update script. Zips and uploads your code *without zipping `node_modules` or modifying configurations*. Since all packages are contained in the function Layer, this script updates your Lambda in **1–3 seconds**.
 
-Shortcut for deploying the core Lambda:
+**Usage:**
 ```bash
-./scripts/deploy-lambda.sh
+./scripts/deploy/deploy-lambda-fast.sh <lambda-dir> <function-name>
 ```
 
-Equivalent to: `./scripts/deploy-lambda-generic.sh core cwf-core-lambda`
+**Example:**
+```bash
+# Fast deploy code changes to core Lambda
+./scripts/deploy/deploy-lambda-fast.sh core cwf-core-lambda
+```
 
 ## API Gateway Scripts
 

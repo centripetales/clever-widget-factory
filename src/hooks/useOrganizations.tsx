@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiService, getApiData } from '@/lib/apiService';
+import { organizationsQueryKey } from '@/lib/queryKeys';
+import { offlineMutationConfig } from '@/lib/queryConfig';
+import { useAuth } from '@/hooks/useCognitoAuth';
 
 interface Organization {
   id: string;
@@ -26,20 +29,27 @@ interface OrganizationWithMembers extends Organization {
 
 export function useOrganizations() {
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Query to fetch all organizations
+  const { data: organizations = [], isLoading } = useQuery<Organization[]>({
+    queryKey: organizationsQueryKey(),
+    queryFn: async () => {
+      const response = await apiService.get('/api/organizations');
+      return getApiData(response) || [];
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
 
   const getAllOrganizations = async (): Promise<Organization[]> => {
-    setLoading(true);
-    try {
-      const response = await apiService.get('/api/organizations');
-      const data = getApiData(response) || [];
-      return data;
-    } catch (error) {
-      console.error('Error in getAllOrganizations:', error);
-      return [];
-    } finally {
-      setLoading(false);
-    }
+    return queryClient.ensureQueryData({
+      queryKey: organizationsQueryKey(),
+      queryFn: async () => {
+        const response = await apiService.get('/api/organizations');
+        return getApiData(response) || [];
+      },
+    });
   };
 
   const getOrganizationWithMembers = async (orgId: string): Promise<OrganizationWithMembers | null> => {
@@ -65,10 +75,81 @@ export function useOrganizations() {
     }
   };
 
+  // Mutation to create an organization with optimistic updates
+  const createOrgMutation = useMutation({
+    mutationFn: async (data: { name: string; subdomain: string | null; __tempId?: string }) => {
+      const tempId = data.__tempId;
+      const payload = { ...data };
+      delete payload.__tempId;
+
+      const response = await apiService.post('/api/organizations', payload, { optimisticId: tempId });
+      return getApiData(response);
+    },
+    onMutate: async (newOrg) => {
+      await queryClient.cancelQueries({ queryKey: organizationsQueryKey() });
+      const previousOrgs = queryClient.getQueryData<Organization[]>(organizationsQueryKey());
+
+      const tempId = 'temp-' + Date.now();
+      queryClient.setQueryData(organizationsQueryKey(), (old: Organization[] = []) => [
+        ...old,
+        {
+          id: tempId,
+          name: newOrg.name,
+          subdomain: newOrg.subdomain,
+          is_active: true,
+          settings: {},
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+      ]);
+
+      newOrg.__tempId = tempId;
+      return { previousOrgs, tempId };
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousOrgs) {
+        queryClient.setQueryData(organizationsQueryKey(), context.previousOrgs);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: organizationsQueryKey() });
+      // Invalidate memberships so the new org's seeded membership row is
+      // picked up before the user tries to switch to the freshly created org.
+      queryClient.invalidateQueries({ queryKey: ['organization_memberships', user?.userId] });
+    },
+    ...offlineMutationConfig,
+  });
+
+  // Mutation to update an organization with optimistic updates
+  const updateOrgMutation = useMutation({
+    mutationFn: async ({ orgId, updates }: { orgId: string; updates: Partial<Pick<Organization, 'name' | 'subdomain' | 'is_active' | 'settings'>> }) => {
+      const response = await apiService.put(`/api/organizations/${orgId}`, updates);
+      return getApiData(response);
+    },
+    onMutate: async ({ orgId, updates }) => {
+      await queryClient.cancelQueries({ queryKey: organizationsQueryKey() });
+      const previousOrgs = queryClient.getQueryData<Organization[]>(organizationsQueryKey());
+
+      queryClient.setQueryData(organizationsQueryKey(), (old: Organization[] = []) => 
+        old.map(org => org.id === orgId ? { ...org, ...updates } : org)
+      );
+
+      return { previousOrgs };
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousOrgs) {
+        queryClient.setQueryData(organizationsQueryKey(), context.previousOrgs);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: organizationsQueryKey() });
+    },
+    ...offlineMutationConfig,
+  });
+
   const createOrganization = async (name: string, subdomain?: string): Promise<boolean> => {
-    setLoading(true);
     try {
-      await apiService.post('/api/organizations', {
+      await createOrgMutation.mutateAsync({
         name,
         subdomain: subdomain || null
       });
@@ -86,8 +167,6 @@ export function useOrganizations() {
         variant: "destructive",
       });
       return false;
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -95,9 +174,8 @@ export function useOrganizations() {
     orgId: string, 
     updates: Partial<Pick<Organization, 'name' | 'subdomain' | 'is_active' | 'settings'>>
   ): Promise<boolean> => {
-    setLoading(true);
     try {
-      await apiService.put(`/api/organizations/${orgId}`, updates);
+      await updateOrgMutation.mutateAsync({ orgId, updates });
 
       toast({
         title: "Success",
@@ -112,16 +190,15 @@ export function useOrganizations() {
         variant: "destructive",
       });
       return false;
-    } finally {
-      setLoading(false);
     }
   };
 
   return {
+    organizations,
     getAllOrganizations,
     getOrganizationWithMembers,
     createOrganization,
     updateOrganization,
-    loading,
+    loading: isLoading || createOrgMutation.isPending || updateOrgMutation.isPending,
   };
 }

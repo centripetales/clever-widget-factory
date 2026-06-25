@@ -1,25 +1,25 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stateService } from '../services/stateService';
-import { statesQueryKey, stateQueryKey, actionsQueryKey, completedActionsQueryKey } from '../lib/queryKeys';
+import { statesQueryKey, stateQueryKey, actionsQueryKey, completedActionsQueryKey, toolHistoryQueryKey, partHistoryQueryKey } from '../lib/queryKeys';
 import type { CreateObservationData, Observation } from '../types/observations';
 
-export function useStates(filters?: { entity_type?: string; entity_id?: string }) {
+export function useStates(orgId: string, filters?: { entity_type?: string; entity_id?: string }) {
   return useQuery({
-    queryKey: statesQueryKey(filters),
+    queryKey: statesQueryKey(orgId, filters),
     queryFn: () => stateService.getStates(filters),
-    enabled: !filters || (!filters.entity_type && !filters.entity_id) || !!(filters.entity_type && filters.entity_id),
+    enabled: !!orgId && (!filters || (!filters.entity_type && !filters.entity_id) || !!(filters.entity_type && filters.entity_id)),
   });
 }
 
-export function useStateById(id: string) {
+export function useStateById(orgId: string, id: string) {
   return useQuery({
-    queryKey: stateQueryKey(id),
+    queryKey: stateQueryKey(orgId, id),
     queryFn: () => stateService.getState(id),
-    enabled: !!id,
+    enabled: !!orgId && !!id,
   });
 }
 
-export function useStateMutations(filters?: { entity_type?: string; entity_id?: string }) {
+export function useStateMutations(orgId: string, filters?: { entity_type?: string; entity_id?: string }) {
   const queryClient = useQueryClient();
 
   const createMutation = useMutation({
@@ -44,25 +44,25 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
       };
 
       // Cancel outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: statesQueryKey() });
+      await queryClient.cancelQueries({ queryKey: statesQueryKey(orgId) });
       if (filters) {
-        await queryClient.cancelQueries({ queryKey: statesQueryKey(filters) });
+        await queryClient.cancelQueries({ queryKey: statesQueryKey(orgId, filters) });
       }
 
       // Snapshot for rollback
-      const previousStates = queryClient.getQueryData<Observation[]>(statesQueryKey());
+      const previousStates = queryClient.getQueryData<Observation[]>(statesQueryKey(orgId));
       const previousFilteredStates = filters
-        ? queryClient.getQueryData<Observation[]>(statesQueryKey(filters))
+        ? queryClient.getQueryData<Observation[]>(statesQueryKey(orgId, filters))
         : undefined;
 
       // Prepend to broad list — this is what ObservationsList reads
-      queryClient.setQueryData<Observation[]>(statesQueryKey(), (old) =>
+      queryClient.setQueryData<Observation[]>(statesQueryKey(orgId), (old) =>
         [provisionalObservation, ...(old ?? [])]
       );
 
       // Prepend to filtered list if applicable (e.g. tool/action observation panel)
       if (filters) {
-        queryClient.setQueryData<Observation[]>(statesQueryKey(filters), (old) =>
+        queryClient.setQueryData<Observation[]>(statesQueryKey(orgId, filters), (old) =>
           [provisionalObservation, ...(old ?? [])]
         );
       }
@@ -72,33 +72,42 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
 
     onSuccess: (newState, _variables, context) => {
       // Replace the optimistic entry with the real server record (has the real id)
-      queryClient.setQueryData<Observation[]>(statesQueryKey(), (old) =>
+      queryClient.setQueryData<Observation[]>(statesQueryKey(orgId), (old) =>
         old?.map((s) => s.id === context?.optimisticId ? newState : s) ?? [newState]
       );
 
       if (filters) {
-        queryClient.setQueryData<Observation[]>(statesQueryKey(filters), (old) =>
+        queryClient.setQueryData<Observation[]>(statesQueryKey(orgId, filters), (old) =>
           old?.map((s) => s.id === context?.optimisticId ? newState : s) ?? [newState]
         );
       }
 
       // Also store the individual record so edit navigation works immediately
-      queryClient.setQueryData(stateQueryKey(newState.id), newState);
+      queryClient.setQueryData(stateQueryKey(orgId, newState.id), newState);
 
       // If linked to an action, keep action counts consistent
       if (filters?.entity_type === 'action') {
         queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
         queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
       }
+
+      // Invalidate tool/part history for linked assets
+      _variables.links?.forEach((link) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
 
     onError: (_error, _variables, context) => {
       // Rollback both caches on error
       if (context?.previousStates !== undefined) {
-        queryClient.setQueryData(statesQueryKey(), context.previousStates);
+        queryClient.setQueryData(statesQueryKey(orgId), context.previousStates);
       }
       if (context?.previousFilteredStates !== undefined && filters) {
-        queryClient.setQueryData(statesQueryKey(filters), context.previousFilteredStates);
+        queryClient.setQueryData(statesQueryKey(orgId, filters), context.previousFilteredStates);
       }
     },
   });
@@ -110,29 +119,29 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
     // Optimistic update for immediate UI feedback (offline-first)
     onMutate: async (variables) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: statesQueryKey() });
-      await queryClient.cancelQueries({ queryKey: stateQueryKey(variables.id) });
+      await queryClient.cancelQueries({ queryKey: statesQueryKey(orgId) });
+      await queryClient.cancelQueries({ queryKey: stateQueryKey(orgId, variables.id) });
       if (filters) {
-        await queryClient.cancelQueries({ queryKey: statesQueryKey(filters) });
+        await queryClient.cancelQueries({ queryKey: statesQueryKey(orgId, filters) });
       }
       
       // Snapshot previous state for rollback
-      const previousStates = queryClient.getQueryData<Observation[]>(statesQueryKey());
+      const previousStates = queryClient.getQueryData<Observation[]>(statesQueryKey(orgId));
       const previousFilteredStates = filters 
-        ? queryClient.getQueryData<Observation[]>(statesQueryKey(filters))
+        ? queryClient.getQueryData<Observation[]>(statesQueryKey(orgId, filters))
         : undefined;
-      const previousState = queryClient.getQueryData<Observation>(stateQueryKey(variables.id));
+      const previousState = queryClient.getQueryData<Observation>(stateQueryKey(orgId, variables.id));
       
       // Optimistically update the specific state cache
       // Also clear perspectives to signal they are being regenerated
       const pendingSentinel = [{ perspective_type: 'PENDING', content: '', status: 'PENDING' }];
-      queryClient.setQueryData<Observation>(stateQueryKey(variables.id), (old) => {
+      queryClient.setQueryData<Observation>(stateQueryKey(orgId, variables.id), (old) => {
         if (!old) return old;
         return { ...old, ...variables.data, perspectives: pendingSentinel };
       });
       
       // Optimistically update the states list cache
-      queryClient.setQueryData<Observation[]>(statesQueryKey(), (old) => {
+      queryClient.setQueryData<Observation[]>(statesQueryKey(orgId), (old) => {
         if (!old) return old;
         return old.map(state => 
           state.id === variables.id 
@@ -143,7 +152,7 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
       
       // Optimistically update the filtered states list cache if applicable
       if (filters) {
-        queryClient.setQueryData<Observation[]>(statesQueryKey(filters), (old) => {
+        queryClient.setQueryData<Observation[]>(statesQueryKey(orgId, filters), (old) => {
           if (!old) return old;
           return old.map(state => 
             state.id === variables.id 
@@ -156,12 +165,12 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
       return { previousStates, previousFilteredStates, previousState };
     },
     
-    onSuccess: (updatedState, variables) => {
+    onSuccess: (updatedState, variables, context: any) => {
       // Replace optimistic data with server response
-      queryClient.setQueryData<Observation>(stateQueryKey(variables.id), updatedState);
+      queryClient.setQueryData<Observation>(stateQueryKey(orgId, variables.id), updatedState);
       
       // Update the states list with server response
-      queryClient.setQueryData<Observation[]>(statesQueryKey(), (old) => {
+      queryClient.setQueryData<Observation[]>(statesQueryKey(orgId), (old) => {
         if (!old) return old;
         return old.map(state => 
           state.id === updatedState.id 
@@ -172,7 +181,7 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
       
       // Update the filtered states list with server response
       if (filters) {
-        queryClient.setQueryData<Observation[]>(statesQueryKey(filters), (old) => {
+        queryClient.setQueryData<Observation[]>(statesQueryKey(orgId, filters), (old) => {
           if (!old) return old;
           return old.map(state => 
             state.id === updatedState.id 
@@ -182,38 +191,68 @@ export function useStateMutations(filters?: { entity_type?: string; entity_id?: 
         });
       }
       
-      // Invalidate related caches for server-computed data
-      // If this state is linked to an action, invalidate actions cache
+      // If linked to an action, invalidate actions cache
       // because implementation_update_count might change (e.g., photos added/removed)
       if (filters?.entity_type === 'action') {
         queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
         queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
       }
+
+      // Invalidate tool/part history for current linked assets
+      variables.data.links?.forEach((link) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
+      
+      // Invalidate tool/part history for previously linked assets
+      context?.previousState?.links?.forEach((link: any) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
     
     onError: (_error, _variables, context) => {
       // Rollback to previous state on error
       if (context?.previousStates) {
-        queryClient.setQueryData(statesQueryKey(), context.previousStates);
+        queryClient.setQueryData(statesQueryKey(orgId), context.previousStates);
       }
       if (context?.previousFilteredStates && filters) {
-        queryClient.setQueryData(statesQueryKey(filters), context.previousFilteredStates);
+        queryClient.setQueryData(statesQueryKey(orgId, filters), context.previousFilteredStates);
       }
       if (context?.previousState) {
-        queryClient.setQueryData(stateQueryKey(_variables.id), context.previousState);
+        queryClient.setQueryData(stateQueryKey(orgId, _variables.id), context.previousState);
       }
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => stateService.deleteState(id),
-    onSuccess: () => {
+    onMutate: async (id) => {
+      const deletedState = queryClient.getQueryData<any>(stateQueryKey(orgId, id));
+      return { deletedState };
+    },
+    onSuccess: (data, variables, context) => {
       // Invalidate the filtered states list
       if (filters) {
-        queryClient.invalidateQueries({ queryKey: statesQueryKey(filters) });
+        queryClient.invalidateQueries({ queryKey: statesQueryKey(orgId, filters) });
       }
       // Invalidate all states
-      queryClient.invalidateQueries({ queryKey: statesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: statesQueryKey(orgId) });
+
+      // Invalidate tool/part history for any linked tools/parts
+      context?.deletedState?.links?.forEach((link: any) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
   });
 

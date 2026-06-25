@@ -5,6 +5,7 @@ import { useStates, useStateMutations } from '@/hooks/useStates';
 import { toolsQueryConfig, partsQueryConfig } from '@/lib/assetQueryConfigs';
 import { actionsQueryKey } from '@/lib/queryKeys';
 import { offlineQueryConfig } from '@/lib/queryConfig';
+import { useOrganization } from '@/hooks/useOrganization';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,8 +38,10 @@ import { getThumbnailUrl } from '@/lib/imageUtils';
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { data: observations = [], isLoading: loadingObs, isError } = useStates();
-  const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations();
+  const { organization } = useOrganization();
+  const orgId = organization?.id ?? '';
+  const { data: observations = [], isLoading: loadingObs, isError } = useStates(orgId);
+  const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations(orgId);
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);

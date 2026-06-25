@@ -3,9 +3,12 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Search, Filter, Plus, X, ChevronDown } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Search, Filter, Plus, X, ChevronDown, Network } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useSharedOrgs } from "@/hooks/useSharedOrgs";
+import { useOrganization } from "@/hooks/useOrganization";
 
 interface CombinedAssetFiltersProps {
   searchTerm: string;
@@ -28,6 +31,7 @@ interface CombinedAssetFiltersProps {
   showRemovedItems: boolean;
   setShowRemovedItems: (show: boolean) => void;
   actionButton?: React.ReactNode;
+  sharedOrgsCounts?: Record<string, number>;
 }
 
 export const CombinedAssetFilters = ({
@@ -50,9 +54,29 @@ export const CombinedAssetFilters = ({
   setShowOnlyAreas,
   showRemovedItems,
   setShowRemovedItems,
-  actionButton
+  actionButton,
+  sharedOrgsCounts = {}
 }: CombinedAssetFiltersProps) => {
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+
+  // Partner org sharing filter state
+  const { selectedOrgs, toggleOrg } = useSharedOrgs();
+  const { organization: currentOrganization, accessibleOrganizations } = useOrganization();
+  // All orgs the user can access, excluding their current active org,
+  // filtered to only show those that are sharing at least one asset (or are already selected)
+  const otherOrgs = accessibleOrganizations.filter(
+    (o) => o.id !== currentOrganization?.id && ((sharedOrgsCounts[o.id] ?? 0) > 0 || selectedOrgs.includes(o.id))
+  );
+
+  const activeFilterCount =
+    (showMyCheckedOut ? 1 : 0) +
+    (showLowStock ? 1 : 0) +
+    (showOnlyAssets ? 1 : 0) +
+    (showOnlyStock ? 1 : 0) +
+    (showOnlyAreas ? 1 : 0) +
+    (showRemovedItems ? 1 : 0) +
+    (searchDescriptions ? 1 : 0) +
+    selectedOrgs.length;
 
   return (
     <div className="space-y-4">
@@ -100,166 +124,207 @@ export const CombinedAssetFilters = ({
             <Button variant="outline" className="flex items-center gap-2">
               <Filter className="h-4 w-4" />
               <span>Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="ml-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                  {activeFilterCount}
+                </span>
+              )}
               <ChevronDown className={`h-4 w-4 transition-transform ${isFiltersOpen ? 'rotate-180' : ''}`} />
             </Button>
           </CollapsibleTrigger>
-          
+
           {actionButton}
         </div>
 
         <CollapsibleContent className="mt-4">
-          <div className="flex flex-wrap gap-4 items-center">
+          <div className="space-y-4">
+            {/* Standard toggle filters */}
+            <div className="flex flex-wrap gap-4 items-center">
 
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="my-checked-out"
+                        checked={showMyCheckedOut}
+                        onCheckedChange={setShowMyCheckedOut}
+                      />
+                      <Label htmlFor="my-checked-out" className="text-sm">
+                        My Checked Out
+                      </Label>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Show only assets currently checked out to me</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="low-stock"
+                        checked={showLowStock}
+                        onCheckedChange={setShowLowStock}
+                      />
+                      <Label htmlFor="low-stock" className="text-sm">
+                        Low Stock
+                      </Label>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Show only stock items below minimum quantity</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              <div className="flex items-center gap-4">
                 <div className="flex items-center space-x-2">
                   <Switch
-                    id="my-checked-out"
-                    checked={showMyCheckedOut}
-                    onCheckedChange={setShowMyCheckedOut}
+                    id="search-descriptions"
+                    checked={searchDescriptions}
+                    onCheckedChange={setSearchDescriptions}
                   />
-                  <Label htmlFor="my-checked-out" className="text-sm">
-                    My Checked Out
+                  <Label htmlFor="search-descriptions" className="text-sm">
+                    Include Descriptions
                   </Label>
                 </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Show only assets currently checked out to me</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
 
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="low-stock"
-                    checked={showLowStock}
-                    onCheckedChange={setShowLowStock}
-                  />
-                  <Label htmlFor="low-stock" className="text-sm">
-                    Low Stock
-                  </Label>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Show only stock items below minimum quantity</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          id="only-assets"
+                          checked={showOnlyAssets}
+                          onCheckedChange={(checked) => {
+                            setShowOnlyAssets(checked);
+                            if (checked) {
+                              setShowOnlyStock(false);
+                              setShowOnlyAreas(false);
+                            }
+                          }}
+                        />
+                        <Label htmlFor="only-assets" className="text-sm">
+                          Assets Only
+                        </Label>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Show only trackable assets (items with serial numbers)</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center space-x-2">
-              <Switch
-                id="search-descriptions"
-                checked={searchDescriptions}
-                onCheckedChange={setSearchDescriptions}
-              />
-              <Label htmlFor="search-descriptions" className="text-sm">
-                Include Descriptions
-              </Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          id="only-stock"
+                          checked={showOnlyStock}
+                          onCheckedChange={(checked) => {
+                            setShowOnlyStock(checked);
+                            if (checked) {
+                              setShowOnlyAssets(false);
+                              setShowOnlyAreas(false);
+                            }
+                          }}
+                        />
+                        <Label htmlFor="only-stock" className="text-sm">
+                          Stock Only
+                        </Label>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Show only consumable stock items</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          id="only-areas"
+                          checked={showOnlyAreas}
+                          onCheckedChange={(checked) => {
+                            setShowOnlyAreas(checked);
+                            if (checked) {
+                              setShowOnlyAssets(false);
+                              setShowOnlyStock(false);
+                            }
+                          }}
+                        />
+                        <Label htmlFor="only-areas" className="text-sm">
+                          Areas Only
+                        </Label>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Show only Infrastructure/Container/Field areas (parent structures), sorted by item count</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="removed-items"
+                        checked={showRemovedItems}
+                        onCheckedChange={setShowRemovedItems}
+                      />
+                      <Label htmlFor="removed-items" className="text-sm">
+                        Show Removed
+                      </Label>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Include removed/deleted items in the list</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="only-assets"
-                      checked={showOnlyAssets}
-                      onCheckedChange={(checked) => {
-                        setShowOnlyAssets(checked);
-                        if (checked) {
-                          setShowOnlyStock(false);
-                          setShowOnlyAreas(false);
-                        }
-                      }}
-                    />
-                    <Label htmlFor="only-assets" className="text-sm">
-                      Assets Only
-                    </Label>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Show only trackable assets (items with serial numbers)</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="only-stock"
-                      checked={showOnlyStock}
-                      onCheckedChange={(checked) => {
-                        setShowOnlyStock(checked);
-                        if (checked) {
-                          setShowOnlyAssets(false);
-                          setShowOnlyAreas(false);
-                        }
-                      }}
-                    />
-                    <Label htmlFor="only-stock" className="text-sm">
-                      Stock Only
-                    </Label>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Show only consumable stock items</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="only-areas"
-                      checked={showOnlyAreas}
-                      onCheckedChange={(checked) => {
-                        setShowOnlyAreas(checked);
-                        if (checked) {
-                          setShowOnlyAssets(false);
-                          setShowOnlyStock(false);
-                        }
-                      }}
-                    />
-                    <Label htmlFor="only-areas" className="text-sm">
-                      Areas Only
-                    </Label>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Show only Infrastructure/Container/Field areas (parent structures), sorted by item count</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="removed-items"
-                    checked={showRemovedItems}
-                    onCheckedChange={setShowRemovedItems}
-                  />
-                  <Label htmlFor="removed-items" className="text-sm">
-                    Show Removed
-                  </Label>
+            {/* Partner org shared-asset filter */}
+            {otherOrgs.length > 0 && (
+              <div className="border-t pt-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Network className="h-4 w-4 text-emerald-500" />
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Include shared assets from partner orgs
+                  </span>
                 </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Include removed/deleted items in the list</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                <div className="flex flex-wrap gap-3">
+                  {otherOrgs.map((org) => (
+                    <div
+                      key={org.id}
+                      className="flex items-center space-x-2 bg-muted/50 px-3 py-1.5 rounded-md border border-border"
+                    >
+                      <Checkbox
+                        id={`shared-org-${org.id}`}
+                        checked={selectedOrgs.includes(org.id)}
+                        onCheckedChange={() => toggleOrg(org.id)}
+                        className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
+                      />
+                      <Label
+                        htmlFor={`shared-org-${org.id}`}
+                        className="text-sm font-medium cursor-pointer select-none"
+                      >
+                        {org.name} {sharedOrgsCounts[org.id] !== undefined && `(${sharedOrgsCounts[org.id]})`}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </CollapsibleContent>
       </Collapsible>
