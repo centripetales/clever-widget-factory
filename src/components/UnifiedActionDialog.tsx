@@ -44,7 +44,7 @@ import {
   Copy,
   Sparkles,
   Search,
-  Share2
+  Handshake
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useAuth } from "@/hooks/useCognitoAuth";
@@ -270,6 +270,7 @@ export function ActionForm({
   const [linkCopied, setLinkCopied] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const isShared = action?.shared_with_partners ?? false;
   // Internal Maxwell state — used when props are not provided (page mode)
   const [isMaxwellOpenInternal, setIsMaxwellOpenInternal] = useState(false);
   const [maxwellContextInternal, setMaxwellContextInternal] = useState<EntityContext | null>(null);
@@ -1166,10 +1167,10 @@ export function ActionForm({
                 variant="outline"
                 size="sm"
                 onClick={() => setShowShareDialog(true)}
-                className="h-7 w-7 p-0"
+                className={`h-7 w-7 p-0 transition-colors duration-200 ${isShared ? 'bg-green-100 text-green-600 border-green-300' : ''}`}
                 title="Share Action"
               >
-                <Share2 className="h-4 w-4" />
+                <Handshake className="h-4 w-4" />
               </Button>
             )}
 
@@ -1273,21 +1274,6 @@ export function ActionForm({
         <div>
           <div className="flex items-center justify-between">
             <Label htmlFor="expectedState">Where we want to get to</Label>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={generateAIExpectedState}
-              disabled={isGeneratingExpectedState || (!formData.title && !formData.description)}
-              className="h-7 px-2 text-xs"
-            >
-              {isGeneratingExpectedState ? (
-                <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent mr-1" />
-              ) : (
-                <Sparkles className="h-3 w-3 mr-1" />
-              )}
-              AI Assist
-            </Button>
           </div>
           <Textarea
             id="expectedState"
@@ -1440,22 +1426,7 @@ export function ActionForm({
                   >
                     <Copy className="h-3 w-3 mr-1" />
                     Copy Context
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={generateAISummaryPolicy}
-                    disabled={isGeneratingAI || (!formData.description && !formData.policy)}
-                    className="h-7 px-2 text-xs"
-                  >
-                    {isGeneratingAI ? (
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent mr-1" />
-                    ) : (
-                      <Sparkles className="h-3 w-3 mr-1" />
-                    )}
-                    AI Assist
-                  </Button>
+                </Button>
                 </div>
               </div>
               <div className="mt-2 border rounded-lg">
@@ -1662,6 +1633,10 @@ export function ActionForm({
           entityId={action.id}
           entityType="action"
           entityName={formData.title || action.title || ''}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ['actions'] });
+            queryClient.invalidateQueries({ queryKey: ['action', action.id] });
+          }}
         />
       )}
     </>

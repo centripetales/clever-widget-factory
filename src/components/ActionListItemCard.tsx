@@ -45,6 +45,7 @@ export function ActionListItemCard({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const isShared = action.shared_with_partners ?? false;
 
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -120,7 +121,7 @@ export function ActionListItemCard({
                 variant="outline"
                 size="sm"
                 onClick={handleShareClick}
-                className={`h-7 w-7 p-0 transition-colors duration-200 hover:text-emerald-600 hover:bg-emerald-50 bg-white dark:bg-zinc-900`}
+                className={`h-7 w-7 p-0 transition-colors duration-200 ${isShared ? 'bg-green-100 text-green-600 border-green-300' : 'hover:text-emerald-600 hover:bg-emerald-50 bg-white dark:bg-zinc-900'}`}
                 title="Share with partner organizations"
               >
                 <Handshake className="h-4 w-4" />
@@ -207,7 +208,11 @@ export function ActionListItemCard({
           onOpenChange={setShowShareDialog} 
           entityId={action.id} 
           entityType="action" 
-          entityName={action.title} 
+          entityName={action.title}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ['actions'] });
+            queryClient.invalidateQueries({ queryKey: ['action', action.id] });
+          }}
         />
       )}
     </Card>

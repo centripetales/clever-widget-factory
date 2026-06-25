@@ -24,6 +24,7 @@ interface ShareConfigurationDialogProps {
   entityId: string;
   entityType: 'action' | 'part' | 'tool';
   entityName: string;
+  onSaved?: () => void;
 }
 
 interface ExistingShare {
@@ -39,6 +40,7 @@ export function ShareConfigurationDialog({
   entityId,
   entityType,
   entityName,
+  onSaved,
 }: ShareConfigurationDialogProps) {
   const { getAllOrganizations, loading: orgsLoading } = useOrganizations();
   const { organization } = useOrganization();
@@ -138,6 +140,7 @@ export function ShareConfigurationDialog({
 
       toast({ title: 'Saved', description: msg || 'No changes made.' });
       queryClient.invalidateQueries({ queryKey: ['shareStatus', entityType, entityId] });
+      onSaved?.();
       onOpenChange(false);
     } catch (error) {
       console.error('Share save error:', error);

@@ -147,7 +147,7 @@ add_options_method() {
     --rest-api-id "$API_ID" --resource-id "$RESOURCE_ID" \
     --http-method OPTIONS --status-code 200 \
     --response-parameters \
-      '{"method.response.header.Access-Control-Allow-Headers":"'"'"'Content-Type,Authorization'"'"'","method.response.header.Access-Control-Allow-Methods":"'"'"'GET,POST,PUT,DELETE,OPTIONS'"'"'","method.response.header.Access-Control-Allow-Origin":"'"'"'*'"'"'"}' \
+      '{"method.response.header.Access-Control-Allow-Headers":"'"'"'Content-Type,Authorization,X-Organization-Id,X-Connection-Id'"'"'","method.response.header.Access-Control-Allow-Methods":"'"'"'GET,POST,PUT,DELETE,OPTIONS'"'"'","method.response.header.Access-Control-Allow-Origin":"'"'"'*'"'"'"}' \
     --region "$REGION" >/dev/null 2>&1 || true
 
   echo "    ✅ OPTIONS configured"

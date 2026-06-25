@@ -4,7 +4,7 @@ set -e
 
 API_ID="0720au267k"
 REGION="us-west-2"
-NEW_HEADERS="'Content-Type,Authorization,X-Organization-Id'"
+NEW_HEADERS="'Content-Type,Authorization,X-Organization-Id,X-Connection-Id'"
 
 # Get all resource IDs that have OPTIONS methods
 RESOURCE_IDS=$(aws apigateway get-resources --rest-api-id $API_ID --region $REGION --query 'items[*].{id:id,path:path,methods:resourceMethods}' --output json | python3 -c "

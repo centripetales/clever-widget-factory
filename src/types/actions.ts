@@ -83,6 +83,7 @@ export interface BaseAction {
     description?: string;
   } | null;
   shared_with_partners?: boolean;
+  is_shared_inbound?: boolean;
 }
 
 export interface Profile {

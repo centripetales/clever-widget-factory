@@ -1,78 +1,83 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useSharedOrgs } from '@/hooks/useSharedOrgs';
-import { useOrganizations } from '@/hooks/useOrganizations';
 import { useOrganization } from '@/hooks/useOrganization';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
-import { Network } from 'lucide-react';
+import { Users } from 'lucide-react';
+import { apiService } from '@/lib/apiService';
+import { BaseAction } from '@/types/actions';
+import { useQuery } from '@tanstack/react-query';
 
-export function SharedOrgSelector() {
+interface SharedOrgSelectorProps {
+  actions?: BaseAction[];
+}
+
+export function SharedOrgSelector({ actions = [] }: SharedOrgSelectorProps) {
   const { selectedOrgs, toggleOrg, isLoaded } = useSharedOrgs();
-  const { getAllOrganizations, loading: orgsLoading } = useOrganizations();
-  const { organization: currentOrganization } = useOrganization();
-  const [organizations, setOrganizations] = useState<Array<{ id: string; name: string }>>([]);
+  const { organization: currentOrg } = useOrganization();
 
-  useEffect(() => {
-    const fetchOrgs = async () => {
-      const orgs = await getAllOrganizations();
-      // Filter out the current user's organization
-      setOrganizations(orgs.filter(o => o.id !== currentOrganization?.id));
-    };
-    if (currentOrganization?.id) {
-      fetchOrgs();
-    }
-  }, [currentOrganization?.id]);
+  const { data: partnerOrgs = [] } = useQuery({
+    queryKey: ['shared_with_me', currentOrg?.id],
+    queryFn: async () => {
+      const resp: any = await apiService.get('/shared-with-me');
+      const shared: Array<{ entity_type: string; source_org_id: string; source_org_name: string }> =
+        resp?.shared || [];
+      // Unique orgs that have shared actions with us
+      const seen = new Set<string>();
+      const orgs: Array<{ id: string; name: string }> = [];
+      shared.filter(s => s.entity_type === 'action').forEach(s => {
+        if (!seen.has(s.source_org_id)) {
+          seen.add(s.source_org_id);
+          orgs.push({ id: s.source_org_id, name: s.source_org_name });
+        }
+      });
+      return orgs;
+    },
+    enabled: !!currentOrg?.id,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    gcTime: 10 * 60 * 1000,
+  });
 
-  if (!isLoaded || orgsLoading) {
-    return (
-      <Card className="mb-6 border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm">
-        <CardHeader className="pb-3">
-          <Skeleton className="h-6 w-48" />
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  if (!isLoaded || !currentOrg) return null;
 
-  if (organizations.length === 0) {
-    return null; // No other organizations to share with or from
-  }
+  // Count per org from currently loaded actions
+  const countForOrg = (orgId: string): number => {
+    if (orgId === currentOrg.id) return actions.filter(a => !a.is_shared_inbound).length;
+    return actions.filter(a => a.is_shared_inbound && (a as any).organization_id === orgId).length;
+  };
+
+  const allOrgs = [
+    { id: currentOrg.id, name: currentOrg.name, isOwn: true },
+    ...partnerOrgs.map(o => ({ ...o, isOwn: false })),
+  ];
 
   return (
-    <Card className="mb-6 border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-medium text-slate-500 dark:text-slate-400 flex items-center gap-2">
-          <Network className="w-4 h-4 text-emerald-500" />
-          Shared Partner Data
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {organizations.map((org) => (
-            <div key={org.id} className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/50 p-2 rounded-md border border-slate-100 dark:border-slate-800">
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400">
+        <Users className="w-4 h-4 text-emerald-500" />
+        Show data from
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {allOrgs.map((org) => {
+          return (
+            <div
+              key={org.id}
+              className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800/50 px-3 py-2 rounded-md border border-slate-100 dark:border-slate-800"
+            >
               <Checkbox
                 id={`org-${org.id}`}
                 checked={selectedOrgs.includes(org.id)}
                 onCheckedChange={() => toggleOrg(org.id)}
                 className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
               />
-              <Label
-                htmlFor={`org-${org.id}`}
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer select-none"
-              >
-                {org.name}
+              <Label htmlFor={`org-${org.id}`} className="cursor-pointer select-none text-sm">
+                {org.name}{org.isOwn && <span className="ml-1 text-xs text-muted-foreground">(You)</span>}
+                <span className="ml-1 text-xs text-muted-foreground">({countForOrg(org.id)})</span>
               </Label>
             </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+          );
+        })}
+      </div>
+    </div>
   );
 }

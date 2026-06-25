@@ -15,6 +15,7 @@ export function useSharedStatus(entityId: string, entityType: EntityType) {
   const { data, isLoading, error } = useQuery({
     queryKey,
     queryFn,
+    enabled: !!entityId,
     staleTime: 30 * 1000, // 30 seconds — short enough to reflect saves promptly
     retry: false,
   });

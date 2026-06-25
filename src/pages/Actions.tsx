@@ -9,7 +9,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { toast } from '@/hooks/use-toast';
 import { useEnabledMembers } from '@/hooks/useOrganizationMembers';
-import { offlineQueryConfig } from '@/lib/queryConfig';
 import { Bolt, Plus, Filter, Search, CheckCircle, AlertTriangle, ArrowLeft, X, SearchCheck, Info } from 'lucide-react';
 import { ActionScoreDialog } from '@/components/ActionScoreDialog';
 import { ActionListItemCard } from '@/components/ActionListItemCard';
@@ -19,6 +18,7 @@ import { useActionScores, ActionScore } from '@/hooks/useActionScores';
 import { BaseAction } from '@/types/actions';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/lib/apiService';
+import { usePersistedFilter } from '@/hooks/usePersistedFilter';
 import { actionsQueryKey, completedActionsQueryKey } from '@/lib/queryKeys';
 
 // Using unified BaseAction interface from types/actions.ts
@@ -29,7 +29,7 @@ export default function Actions() {
 
   const [activeTab, setActiveTab] = useState('unresolved');
   const [searchTerm, setSearchTerm] = useState('');
-  const [assigneeFilter, setAssigneeFilter] = useState('me');
+  const [assigneeFilter, setAssigneeFilter] = usePersistedFilter('assignee', 'me');
   const [showScoreDialog, setShowScoreDialog] = useState(false);
   const [isSemanticSearch, setIsSemanticSearch] = useState(false);
   const [semanticResults, setSemanticResults] = useState<string[]>([]);
@@ -68,19 +68,24 @@ export default function Actions() {
   const { data: unresolvedActions = [], isLoading: unresolvedLoading } = useQuery({
     queryKey: [...actionsQueryKey(), selectedOrgs.join(',')],
     queryFn: fetchUnresolvedActions,
-    ...offlineQueryConfig,
+    enabled: selectedOrgs.length > 0,
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 7 * 24 * 60 * 60 * 1000,
+    networkMode: 'offlineFirst' as const,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
   });
 
   // Completed actions - fetched lazily when tab is clicked
   const { data: completedActions = [], isLoading: completedLoading } = useQuery({
     queryKey: [...completedActionsQueryKey(), selectedOrgs.join(',')],
     queryFn: fetchCompletedActions,
-    enabled: completedTabVisited,
-    ...offlineQueryConfig,
+    enabled: completedTabVisited && selectedOrgs.length > 0,
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 7 * 24 * 60 * 60 * 1000,
+    networkMode: 'offlineFirst' as const,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
   });
 
   const loading = unresolvedLoading;
@@ -296,8 +301,6 @@ export default function Actions() {
         </Button>
       </div>
 
-      <SharedOrgSelector />
-
       {/* Filters */}
       <Card>
         <CardHeader>
@@ -306,9 +309,8 @@ export default function Actions() {
             Filters
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">            <div className="space-y-2">
               <label className="text-sm font-medium flex items-center gap-2">
                 <Search className="h-4 w-4" />
                 Search
@@ -407,6 +409,7 @@ export default function Actions() {
               </Select>
             </div>
           </div>
+          <SharedOrgSelector actions={[...unresolvedActions, ...completedActions]} />
         </CardContent>
       </Card>
 

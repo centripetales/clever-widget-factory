@@ -29,8 +29,16 @@ export default function ActionPage() {
       }
     : undefined;
 
+  const handleBack = () => {
+    if (missionId) {
+      navigate(`/missions`);
+    } else {
+      navigate('/actions');
+    }
+  };
+
   const handleSaved = () => {
-    navigate(-1);
+    handleBack();
   };
 
   return (
@@ -39,7 +47,7 @@ export default function ActionPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(-1)}
+          onClick={handleBack}
           className="gap-2"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -49,7 +57,7 @@ export default function ActionPage() {
       <ActionForm
         open={true}
         onOpenChange={(open) => {
-          if (!open) navigate(-1);
+          if (!open) handleBack();
         }}
         actionId={isNew ? undefined : actionId}
         context={context}
