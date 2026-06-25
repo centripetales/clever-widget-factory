@@ -31,6 +31,7 @@ interface CombinedAssetFiltersProps {
   showRemovedItems: boolean;
   setShowRemovedItems: (show: boolean) => void;
   actionButton?: React.ReactNode;
+  sharedOrgsCounts?: Record<string, number>;
 }
 
 export const CombinedAssetFilters = ({
@@ -53,16 +54,18 @@ export const CombinedAssetFilters = ({
   setShowOnlyAreas,
   showRemovedItems,
   setShowRemovedItems,
-  actionButton
+  actionButton,
+  sharedOrgsCounts = {}
 }: CombinedAssetFiltersProps) => {
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
 
   // Partner org sharing filter state
   const { selectedOrgs, toggleOrg } = useSharedOrgs();
   const { organization: currentOrganization, accessibleOrganizations } = useOrganization();
-  // All orgs the user can access, excluding their current active org
+  // All orgs the user can access, excluding their current active org,
+  // filtered to only show those that are sharing at least one asset (or are already selected)
   const otherOrgs = accessibleOrganizations.filter(
-    (o) => o.id !== currentOrganization?.id
+    (o) => o.id !== currentOrganization?.id && ((sharedOrgsCounts[o.id] ?? 0) > 0 || selectedOrgs.includes(o.id))
   );
 
   const activeFilterCount =
@@ -315,7 +318,7 @@ export const CombinedAssetFilters = ({
                         htmlFor={`shared-org-${org.id}`}
                         className="text-sm font-medium cursor-pointer select-none"
                       >
-                        {org.name}
+                        {org.name} {sharedOrgsCounts[org.id] !== undefined && `(${sharedOrgsCounts[org.id]})`}
                       </Label>
                     </div>
                   ))}

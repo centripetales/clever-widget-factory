@@ -110,7 +110,7 @@ export const CombinedAssetsContainer = () => {
     skipPagination: showOnlyAreas // Get all assets when showing areas (needed for proper filtering)
   }), [searchTerm, limit, page, searchDescriptions, showLowStock, showOnlyAreas]);
   
-  const { assets, loading, createAsset, updateAsset, refetch, fetchAssets } = useCombinedAssets(showRemovedItems, assetsQueryOptions);
+  const { assets, sharedOrgsCounts, loading, createAsset, updateAsset, refetch, fetchAssets } = useCombinedAssets(showRemovedItems, assetsQueryOptions);
   const { members: organizationMembers } = useOrganizationMembers();
   const checkoutDisplayNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -131,8 +131,9 @@ export const CombinedAssetsContainer = () => {
     performance.mark('container_mount');
   }, []);
   
-  // Tool history for view dialog
-  const { toolHistory, fetchToolHistory } = useToolHistory();
+  // Tool history for view dialog / details view
+  const activeToolId = selectedAssetForDetails?.id || selectedAssetId || undefined;
+  const { toolHistory, fetchToolHistory } = useToolHistory(activeToolId);
 
   // Fetch pending orders for stock items using TanStack Query for caching
   const fetchPartsOrders = async () => {
@@ -615,22 +616,26 @@ export const CombinedAssetsContainer = () => {
   if (selectedAssetForDetails) {
     if (selectedAssetForDetails.type === 'asset') {
       return (
-        <ToolDetails
-          tool={selectedAssetForDetails as any}
-          toolHistory={toolHistory}
-          onBack={handleBackToAssets}
-          defaultTab="history"
-        />
+        <div className="container mx-auto p-6 space-y-6">
+          <ToolDetails
+            tool={selectedAssetForDetails as any}
+            toolHistory={toolHistory}
+            onBack={handleBackToAssets}
+            defaultTab="history"
+          />
+        </div>
       );
     } else if (selectedAssetForDetails.type === 'stock') {
       return (
-        <StockDetails
-          stock={selectedAssetForDetails as any}
-          onBack={handleBackToAssets}
-          onRefresh={() => {
-            // Refresh stock data
-          }}
-        />
+        <div className="container mx-auto p-6 space-y-6">
+          <StockDetails
+            stock={selectedAssetForDetails as any}
+            onBack={handleBackToAssets}
+            onRefresh={() => {
+              // Refresh stock data
+            }}
+          />
+        </div>
       );
     }
   }
@@ -672,6 +677,7 @@ export const CombinedAssetsContainer = () => {
       <CombinedAssetFilters
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
+        sharedOrgsCounts={sharedOrgsCounts}
         isSemanticSearching={isSemanticSearching}
         onSemanticSearch={() => performSemanticSearch(searchTerm)}
         onClearSearch={() => setSemanticResults([])}
@@ -812,8 +818,9 @@ export const CombinedAssetsContainer = () => {
                   variant="ghost"
                   type="button"
                   onClick={() => setIsMaxwellOpen(v => !v)}
+                  disabled={selectedAsset?.is_shared_inbound}
                   className={`h-8 w-8 p-0 flex-shrink-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 text-primary' : ''}`}
-                  title="Ask Maxwell"
+                  title={selectedAsset?.is_shared_inbound ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}
                 >
                   <PrismIcon size={28} />
                 </Button>
@@ -916,8 +923,9 @@ export const CombinedAssetsContainer = () => {
                     size="sm"
                     type="button"
                     onClick={() => setIsMaxwellOpen(v => !v)}
+                    disabled={selectedAsset.is_shared_inbound}
                     className={`h-8 w-8 p-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 border-primary/50 text-primary' : ''}`}
-                    title="Ask Maxwell"
+                    title={selectedAsset.is_shared_inbound ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}
                   >
                     <PrismIcon size={28} />
                   </Button>

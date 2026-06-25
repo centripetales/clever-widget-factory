@@ -478,15 +478,33 @@ exports.handler = async (event) => {
       }
       
       if (httpMethod === 'GET') {
-        const { limit = 50, offset = 0, category, status } = event.queryStringParameters || {};
+        const { limit = 50, offset = 0, category, status, view_shared } = event.queryStringParameters || {};
         
         // Build WHERE clauses for filtering
         const whereClauses = [];
         
         // Add organization filter
-        const orgFilter = buildOrganizationFilter(authContext, 'tools');
-        if (orgFilter.condition) {
-          whereClauses.push(orgFilter.condition);
+        if (organizationId && view_shared) {
+          const sharedArray = Array.isArray(view_shared) ? view_shared : view_shared.split(',');
+          const sharedOrgsStr = sharedArray.map(id => `'${escapeLiteral(id)}'`).join(',');
+          whereClauses.push(`(
+            tools.organization_id::text = '${escapeLiteral(organizationId)}'
+            OR tools.id IN (
+              SELECT sl1.entity_id
+              FROM state_links sl1
+              JOIN state_links sl2 ON sl1.state_id = sl2.state_id
+              JOIN states s ON s.id = sl1.state_id
+              WHERE sl1.entity_type = 'tool'
+                AND sl2.entity_type = 'organization'
+                AND sl2.entity_id::text = '${escapeLiteral(organizationId)}'
+                AND s.organization_id::text IN (${sharedOrgsStr})
+            )
+          )`);
+        } else {
+          const orgFilter = buildOrganizationFilter(authContext, 'tools');
+          if (orgFilter.condition) {
+            whereClauses.push(orgFilter.condition);
+          }
         }
         
         // Handle category filter (supports comma-separated values like "Infrastructure,Container")
@@ -544,6 +562,7 @@ exports.handler = async (event) => {
             active_checkouts.notes as checkout_notes,
             active_checkouts.action_id as checkout_action_id,
             tool_gps.gps_latitude, tool_gps.gps_longitude,
+            CASE WHEN tools.organization_id::text != '${escapeLiteral(organizationId)}' THEN true ELSE false END as is_shared_inbound,
             COALESCE(tool_share_out.is_shared_outbound, false) as is_shared_outbound
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
@@ -957,7 +976,7 @@ exports.handler = async (event) => {
       
       // Build WHERE clause for organization filtering
       let whereClause = '';
-      if (!hasDataReadAll && organizationId) {
+      if (organizationId) {
         if (view_shared) {
           const sharedArray = Array.isArray(view_shared) ? view_shared : view_shared.split(',');
           const sharedOrgsStr = sharedArray.map(id => `'${escapeLiteral(id)}'`).join(',');
@@ -984,7 +1003,7 @@ exports.handler = async (event) => {
           parts.id, parts.name, parts.description, parts.policy, parts.category, 
           parts.current_quantity, parts.minimum_quantity, parts.cost_per_unit,
           parts.unit, parts.parent_structure_id, parts.storage_location, 
-          parts.accountable_person_id, parts.sellable,
+          parts.accountable_person_id, parts.sellable, parts.organization_id,
           parent_tool.name as parent_structure_name,
           parent_tool.name as area_display,
           CASE 
@@ -1054,8 +1073,8 @@ exports.handler = async (event) => {
         const { part_id, change_type, changed_by, limit = 100 } = event.queryStringParameters || {};
         let whereConditions = [];
         
-        // Always filter by organization from authorizer context (unless user has data:read:all permission)
-        if (!hasDataReadAll && organizationId) {
+        // Filter by organization if part_id is not specified (to keep list views scoped)
+        if (!part_id && organizationId) {
           whereConditions.push(`ph.organization_id::text = '${escapeLiteral(organizationId)}'`);
         }
         

@@ -24,14 +24,15 @@ if [ ! -d "." ]; then
 fi
 
 echo "📦 Packaging code for $FUNCTION_NAME (excluding node_modules)..."
+rm -f function.zip
 zip -r function.zip . \
-  --exclude "node_modules/*" \
-  --exclude "*.test.js" \
-  --exclude "*.test.ts" \
-  --exclude "deploy.sh" \
-  --exclude "wire-api-gateway.sh" \
-  --exclude "function.zip" \
-  --exclude ".git/*" > /dev/null
+  -x "*node_modules*" \
+  -x "*.test.js" \
+  -x "*.test.ts" \
+  -x "deploy.sh" \
+  -x "wire-api-gateway.sh" \
+  -x "function.zip" \
+  -x "*.git*" > /dev/null
 
 echo "🚀 Uploading code directly to AWS Lambda ($FUNCTION_NAME)..."
 START_TIME=$SECONDS

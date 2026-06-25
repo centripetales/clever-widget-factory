@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
 import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
@@ -53,14 +54,26 @@ export const StockDetails = ({
             <Badge variant="secondary">Stock Item</Badge>
           </div>
         </div>
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => setIsExperienceDialogOpen(true)}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Create Experience
-        </Button>
+         <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="inline-block">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={stock.is_shared_inbound}
+                  onClick={() => setIsExperienceDialogOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Experience
+                </Button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{stock.is_shared_inbound ? "Experiences are disabled for shared assets" : "Create Experience"}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <div className="grid grid-cols-1 gap-6">
@@ -68,7 +81,7 @@ export const StockDetails = ({
           <Tabs defaultValue="history" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="history" className="w-full">History</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">

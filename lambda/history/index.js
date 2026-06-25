@@ -144,6 +144,16 @@ exports.handler = async (event) => {
           s.created_at,
           COALESCE(om.full_name, s.captured_by::text) as observed_by_name,
           (
+            SELECT json_build_object(
+              'target_org_id', sl_org.entity_id::text,
+              'target_org_name', o.name
+            )
+            FROM state_links sl_org
+            JOIN organizations o ON o.id = sl_org.entity_id::uuid
+            WHERE sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
+            LIMIT 1
+          ) as share_info,
+          (
             SELECT json_agg(json_build_object(
               'id', sp.id,
               'photo_url', sp.photo_url,
@@ -270,12 +280,21 @@ exports.handler = async (event) => {
       });
       
       observations.forEach(o => {
-        timeline.push({
-          type: 'observation',
-          timestamp: o.observed_at,
-          description: `Observation by ${o.observed_by_name}`,
-          data: o
-        });
+        if (o.share_info) {
+          timeline.push({
+            type: 'share',
+            timestamp: o.observed_at,
+            description: o.observation_text || `Shared asset with ${o.share_info.target_org_name}`,
+            data: o
+          });
+        } else {
+          timeline.push({
+            type: 'observation',
+            timestamp: o.observed_at,
+            description: `Observation by ${o.observed_by_name}`,
+            data: o
+          });
+        }
       });
       
       timeline.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -300,9 +319,6 @@ exports.handler = async (event) => {
       
       // Get parts history
       let whereConditions = [];
-      if (!hasDataReadAll && organizationId) {
-        whereConditions.push(`ph.organization_id::text = '${escapeLiteral(organizationId)}'`);
-      }
       whereConditions.push(`ph.part_id::text = '${escapeLiteral(partId)}'`);
       
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
@@ -332,6 +348,16 @@ exports.handler = async (event) => {
           s.captured_at as observed_at,
           s.created_at,
           COALESCE(om.full_name, s.captured_by::text) as observed_by_name,
+          (
+            SELECT json_build_object(
+              'target_org_id', sl_org.entity_id::text,
+              'target_org_name', o.name
+            )
+            FROM state_links sl_org
+            JOIN organizations o ON o.id = sl_org.entity_id::uuid
+            WHERE sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
+            LIMIT 1
+          ) as share_info,
           (
             SELECT json_agg(json_build_object(
               'id', sp.id,

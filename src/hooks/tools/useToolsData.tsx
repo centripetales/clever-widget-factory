@@ -37,6 +37,10 @@ export interface Tool {
   // Geolocation fields populated by list API
   gps_latitude?: number;
   gps_longitude?: number;
+
+  // Sharing fields
+  is_shared_inbound?: boolean;
+  is_shared_outbound?: boolean;
 }
 
 export const useToolsData = (showRemovedItems: boolean = false) => {

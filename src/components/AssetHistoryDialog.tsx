@@ -3,9 +3,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { History, Edit, Plus, AlertTriangle, Loader2, ExternalLink, Zap, Camera, Trash2 } from "lucide-react";
+import { History, Edit, Plus, AlertTriangle, Loader2, ExternalLink, Zap, Camera, Trash2, Share2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useToolHistory, HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
+import { useToolHistory, HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry, ShareHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
@@ -20,22 +20,27 @@ const isAssetHistory = (entry: HistoryEntry): entry is AssetHistoryEntry => {
 };
 
 const isObservation = (entry: HistoryEntry): entry is ObservationHistoryEntry => {
-  const result = 'observation_text' in entry && 'observed_at' in entry;
+  const result = 'observation_text' in entry && 'observed_at' in entry && !('target_org_id' in entry);
   return result;
+};
+
+const isShare = (entry: HistoryEntry): entry is ShareHistoryEntry => {
+  return entry.type === 'share';
 };
 
 interface AssetHistoryDialogProps {
   assetId: string;
   assetName: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }
 
 export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogProps>(
-  ({ assetId, assetName, children }, ref) => {
+  ({ assetId, assetName, children, disabled = false }, ref) => {
   const [open, setOpen] = useState(false);
   const [isMaxwellOpen, setIsMaxwellOpen] = useState(false);
   const { toast } = useToast();
-  const { toolHistory, assetInfo, loading, fetchToolHistory } = useToolHistory();
+  const { toolHistory, assetInfo, loading, fetchToolHistory } = useToolHistory(assetId);
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const { organization } = useOrganization();
@@ -100,7 +105,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
         description: 'The observation has been deleted successfully.'
       });
       // Refresh history
-      fetchToolHistory(assetId);
+      fetchToolHistory(assetId, true);
     } catch (error) {
       console.error('Failed to delete observation:', error);
       toast({
@@ -142,7 +147,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
         description: 'The history entry has been deleted successfully.'
       });
       // Refresh history and wait for it to complete
-      await fetchToolHistory(assetId);
+      await fetchToolHistory(assetId, true);
     } catch (error) {
       console.error('Failed to delete history entry:', error);
       toast({
@@ -173,6 +178,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
       }
     } else if (isObservation(entry)) {
       return <Camera className="h-4 w-4 text-blue-600" />;
+    } else if (isShare(entry)) {
+      return <Share2 className="h-4 w-4 text-emerald-600" />;
     }
     return <History className="h-4 w-4 text-gray-600" />;
   };
@@ -195,6 +202,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
       }
     } else if (isObservation(entry)) {
       return '';
+    } else if (isShare(entry)) {
+      return '';
     }
     return 'Activity recorded';
   };
@@ -207,6 +216,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
              entry.change_type === 'updated' ? 'Updated' : entry.change_type;
     } else if (isObservation(entry)) {
       return 'Observation';
+    } else if (isShare(entry)) {
+      return 'Share';
     }
     return 'Activity';
   };
@@ -214,6 +225,9 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
   const getChangeDate = (entry: HistoryEntry) => {
     if (isObservation(entry)) {
       return entry.observed_at;
+    }
+    if (isShare(entry)) {
+      return entry.shared_at;
     }
     return entry.changed_at;
   };
@@ -232,8 +246,9 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
               variant="ghost"
               type="button"
               onClick={() => setIsMaxwellOpen(v => !v)}
+              disabled={disabled}
               className={`h-8 w-8 p-0 flex-shrink-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 text-primary' : ''}`}
-              title="Ask Maxwell"
+              title={disabled ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}
             >
               <PrismIcon size={28} />
             </Button>
@@ -279,7 +294,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
             <div className="space-y-4">
               {toolHistory.map((entry, index) => {
                 return (
-                <Card key={entry.id} className="p-4">
+                <Card key={entry.id} className={`p-4 ${isShare(entry) ? 'border-2 border-emerald-500 shadow-emerald-200/50 shadow-lg' : ''}`}>
                   <div className="flex items-start gap-3">
                     <div className="flex-shrink-0 mt-1">
                       {getChangeIcon(entry)}
@@ -290,6 +305,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                           <span className="font-medium">
                             {isObservation(entry)
                               ? entry.observed_by_name
+                              : isShare(entry)
+                              ? entry.shared_by_name
                               : (entry.user_name || 'System')
                             }
                           </span>
@@ -372,6 +389,21 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                               <ExternalLink className="h-3 w-3" />
                             </Link>
                           )}
+                        </div>
+                      )}
+
+                       {/* Share display section */}
+                      {isShare(entry) && (
+                        <div className="text-sm bg-emerald-50 border border-emerald-200 p-3 rounded mt-2">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="flex-1">
+                              {entry.note ? (
+                                <p className="text-emerald-800">{entry.note}</p>
+                              ) : (
+                                <p className="text-emerald-600 italic">Shared with {entry.target_org_name}</p>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       )}
 

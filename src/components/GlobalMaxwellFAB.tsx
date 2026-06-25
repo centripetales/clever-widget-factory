@@ -28,23 +28,6 @@ export function GlobalMaxwellFAB() {
   
   return (
     <>
-      {/* Floating Maxwell button on dashboard */}
-      {isDashboard && !isPanelOpen && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => setIsPanelOpen(true)}
-              className="fixed bottom-6 right-6 z-[100] flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all"
-              aria-label="Ask Maxwell"
-            >
-              <PrismIcon size={28} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left">
-            <p>Ask Maxwell</p>
-          </TooltipContent>
-        </Tooltip>
-      )}
       <GlobalMaxwellPanel
         open={isPanelOpen}
         onOpenChange={setIsPanelOpen}

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stateService } from '../services/stateService';
-import { statesQueryKey, stateQueryKey, actionsQueryKey, completedActionsQueryKey } from '../lib/queryKeys';
+import { statesQueryKey, stateQueryKey, actionsQueryKey, completedActionsQueryKey, toolHistoryQueryKey, partHistoryQueryKey } from '../lib/queryKeys';
 import type { CreateObservationData, Observation } from '../types/observations';
 
 export function useStates(orgId: string, filters?: { entity_type?: string; entity_id?: string }) {
@@ -90,6 +90,15 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
         queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
         queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
       }
+
+      // Invalidate tool/part history for linked assets
+      _variables.links?.forEach((link) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
 
     onError: (_error, _variables, context) => {
@@ -156,7 +165,7 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
       return { previousStates, previousFilteredStates, previousState };
     },
     
-    onSuccess: (updatedState, variables) => {
+    onSuccess: (updatedState, variables, context: any) => {
       // Replace optimistic data with server response
       queryClient.setQueryData<Observation>(stateQueryKey(orgId, variables.id), updatedState);
       
@@ -182,13 +191,30 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
         });
       }
       
-      // Invalidate related caches for server-computed data
-      // If this state is linked to an action, invalidate actions cache
+      // If linked to an action, invalidate actions cache
       // because implementation_update_count might change (e.g., photos added/removed)
       if (filters?.entity_type === 'action') {
         queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
         queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
       }
+
+      // Invalidate tool/part history for current linked assets
+      variables.data.links?.forEach((link) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
+      
+      // Invalidate tool/part history for previously linked assets
+      context?.previousState?.links?.forEach((link: any) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
     
     onError: (_error, _variables, context) => {
@@ -207,13 +233,26 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => stateService.deleteState(id),
-    onSuccess: () => {
+    onMutate: async (id) => {
+      const deletedState = queryClient.getQueryData<any>(stateQueryKey(orgId, id));
+      return { deletedState };
+    },
+    onSuccess: (data, variables, context) => {
       // Invalidate the filtered states list
       if (filters) {
         queryClient.invalidateQueries({ queryKey: statesQueryKey(orgId, filters) });
       }
       // Invalidate all states
       queryClient.invalidateQueries({ queryKey: statesQueryKey(orgId) });
+
+      // Invalidate tool/part history for any linked tools/parts
+      context?.deletedState?.links?.forEach((link: any) => {
+        if (link.entity_type === 'tool') {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(link.entity_id) });
+        } else if (link.entity_type === 'part') {
+          queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(link.entity_id) });
+        }
+      });
     },
   });
 

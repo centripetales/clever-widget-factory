@@ -78,4 +78,6 @@ export const memberSettingsQueryKey = (userId: string, organizationId?: string) 
 // Organizations query keys
 export const organizationsQueryKey = () => ['organizations'];
 
-
+// Tool & Part History query keys
+export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];
+export const partHistoryQueryKey = (partId: string) => ['part_history', partId];

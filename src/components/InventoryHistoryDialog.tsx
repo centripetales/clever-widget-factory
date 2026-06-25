@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { History, TrendingUp, TrendingDown, Edit, Plus, ExternalLink, Camera } from 'lucide-react';
+import { History, TrendingUp, TrendingDown, Edit, Plus, ExternalLink, Camera, Share2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 import { apiService } from '@/lib/apiService';
@@ -47,6 +47,10 @@ interface Observation {
     value: number;
     unit: string | null;
   }>;
+  share_info?: {
+    target_org_id: string;
+    target_org_name: string;
+  } | null;
 }
 
 interface InventoryHistoryDialogProps {
@@ -54,9 +58,10 @@ interface InventoryHistoryDialogProps {
   partName: string;
   children: React.ReactNode;
   observationsOnly?: boolean;
+  disabled?: boolean;
 }
 
-export function InventoryHistoryDialog({ partId, partName, children, observationsOnly = false }: InventoryHistoryDialogProps) {
+export function InventoryHistoryDialog({ partId, partName, children, observationsOnly = false, disabled = false }: InventoryHistoryDialogProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
   const [loading, setLoading] = useState(false);
@@ -174,9 +179,22 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
     window.open(`/missions#${missionId}`, '_blank');
   };
 
-  // Group history by usage type for better organization
   const usageEntries = history.filter(entry => entry.change_type === 'mission_usage' || entry.change_type === 'manual_usage');
   const otherEntries = history.filter(entry => entry.change_type !== 'mission_usage' && entry.change_type !== 'manual_usage');
+
+  const getCardStyle = (changeType: string) => {
+    switch (changeType) {
+      case 'quantity_add':
+      case 'create':
+        return 'border-2 border-emerald-500 shadow-emerald-200/50 shadow-lg';
+      case 'quantity_remove':
+        return 'border-2 border-red-500 shadow-red-200/50 shadow-lg';
+      case 'update':
+        return 'border-2 border-blue-500 shadow-blue-200/50 shadow-lg';
+      default:
+        return 'border-2 border-slate-200 shadow-sm';
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -192,8 +210,9 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
               variant="ghost"
               type="button"
               onClick={() => setIsMaxwellOpen(v => !v)}
+              disabled={disabled}
               className={`h-8 w-8 p-0 flex-shrink-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 text-primary' : ''}`}
-              title="Ask Maxwell"
+              title={disabled ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}
             >
               <PrismIcon size={28} />
             </Button>
@@ -244,29 +263,60 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                     Observations
                   </h3>
                   <div className="space-y-3">
-                    {observations.map((observation) => (
-                      <Card key={observation.id} className="p-4 border-l-4 border-l-blue-400">
-                        <CardContent className="p-0">
-                          <div className="flex items-start gap-3">
-                            <Camera className="h-4 w-4 text-blue-600 mt-1 flex-shrink-0" />
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{observation.observed_by_name}</span>
-                                  <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                                    Observation
-                                  </Badge>
-                                </div>
-                                <span className="text-sm text-muted-foreground">
-                                  {format(new Date(observation.observed_at), 'PPpp')}
-                                </span>
-                              </div>
-                              
-                              {observation.observation_text && (
-                                <p className="text-sm text-blue-800 mb-2">
-                                  {observation.observation_text}
-                                </p>
+                    {observations.map((observation) => {
+                      const isShare = !!observation.share_info;
+                      return (
+                        <Card 
+                          key={observation.id} 
+                          className={`p-4 hover:shadow-md transition-shadow overflow-hidden shadow-lg bg-background border-2 ${
+                            isShare 
+                              ? 'border-emerald-500 shadow-emerald-200/50' 
+                              : 'border-blue-500 shadow-blue-200/50'
+                          }`}
+                        >
+                          <CardContent className="p-0">
+                            <div className="flex items-start gap-3">
+                              {isShare ? (
+                                <Share2 className="h-4 w-4 text-emerald-600 mt-1 flex-shrink-0" />
+                              ) : (
+                                <Camera className="h-4 w-4 text-blue-600 mt-1 flex-shrink-0" />
                               )}
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{observation.observed_by_name}</span>
+                                    {isShare ? (
+                                      <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
+                                        Share
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                                        Observation
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <span className="text-sm text-muted-foreground">
+                                    {format(new Date(observation.observed_at), 'PPpp')}
+                                  </span>
+                                </div>
+                                
+                                {isShare ? (
+                                  observation.observation_text ? (
+                                    <p className="text-sm text-emerald-800 mb-2">
+                                      {observation.observation_text}
+                                    </p>
+                                  ) : (
+                                    <p className="text-sm text-emerald-600 italic mb-2">
+                                      Shared with {observation.share_info?.target_org_name}
+                                    </p>
+                                  )
+                                ) : (
+                                  observation.observation_text && (
+                                    <p className="text-sm text-blue-800 mb-2">
+                                      {observation.observation_text}
+                                    </p>
+                                  )
+                                )}
                               
                               {observation.metrics && observation.metrics.length > 0 && (
                                 <div className="space-y-1 mt-2 bg-blue-50 p-2 rounded">
@@ -317,7 +367,8 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                           </div>
                         </CardContent>
                       </Card>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -333,7 +384,7 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                   </h3>
                   <div className="space-y-3">
                     {usageEntries.map((entry) => (
-                      <Card key={entry.id} className="p-4 border-l-4 border-l-orange-400">
+                      <Card key={entry.id} className="p-4 hover:shadow-md transition-shadow overflow-hidden border-2 border-orange-500 shadow-orange-200/50 shadow-lg bg-background">
                         <CardContent className="p-0">
                           <div className="flex items-start justify-between">
                             <div className="flex items-start gap-3 flex-1">
@@ -400,7 +451,7 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                   </h3>
                   <div className="space-y-3">
                     {otherEntries.map((entry) => (
-                      <Card key={entry.id} className="p-4">
+                      <Card key={entry.id} className={`p-4 hover:shadow-md transition-shadow overflow-hidden bg-background ${getCardStyle(entry.change_type)}`}>
                         <CardContent className="p-0">
                           <div className="flex items-start justify-between">
                             <div className="flex items-start gap-3">

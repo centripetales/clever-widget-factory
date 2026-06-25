@@ -11,7 +11,7 @@ import { Network } from 'lucide-react';
 export function SharedOrgSelector() {
   const { selectedOrgs, toggleOrg, isLoaded } = useSharedOrgs();
   const { getAllOrganizations, loading: orgsLoading } = useOrganizations();
-  const { currentOrganization } = useOrganization();
+  const { organization: currentOrganization } = useOrganization();
   const [organizations, setOrganizations] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {

@@ -1,15 +1,16 @@
-import { ArrowLeft, Plus, Zap, MapPin, Maximize2 } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Tool } from "@/hooks/tools/useToolsData";
 import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
-import { getThumbnailUrl } from '@/lib/imageUtils';
+import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { Link } from "react-router-dom";
 
 interface ToolDetailsProps {
@@ -26,6 +27,19 @@ export const ToolDetails = ({
   defaultTab = 'details',
 }: ToolDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
+  const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
+
+  const toggleExpandedAi = (photoId: string) => {
+    setExpandedAiPhotos(prev => {
+      const next = new Set(prev);
+      if (next.has(photoId)) {
+        next.delete(photoId);
+      } else {
+        next.add(photoId);
+      }
+      return next;
+    });
+  };
 
   const isAssetHistory = (record: HistoryEntry): record is AssetHistoryEntry => {
     return (record as AssetHistoryEntry).type === 'asset_change';
@@ -33,6 +47,27 @@ export const ToolDetails = ({
 
   const isObservation = (record: HistoryEntry): record is ObservationHistoryEntry => {
     return (record as ObservationHistoryEntry).type === 'observation';
+  };
+
+  const getToolCardStyle = (record: HistoryEntry) => {
+    if (isObservation(record)) {
+      return 'border-2 border-blue-500 shadow-blue-200/50 shadow-lg';
+    }
+    if (isAssetHistory(record)) {
+      switch (record.change_type) {
+        case 'created':
+          return 'border-2 border-emerald-500 shadow-emerald-200/50 shadow-lg';
+        case 'action_created':
+          return 'border-2 border-purple-500 shadow-purple-200/50 shadow-lg';
+        case 'status_change':
+          return 'border-2 border-orange-500 shadow-orange-200/50 shadow-lg';
+        case 'updated':
+          return 'border-2 border-blue-500 shadow-blue-200/50 shadow-lg';
+        default:
+          return 'border-2 border-slate-200 shadow-sm';
+      }
+    }
+    return 'border-2 border-slate-200 shadow-sm';
   };
 
   return (
@@ -48,14 +83,26 @@ export const ToolDetails = ({
             <ToolStatusBadge status={tool.status} />
           </div>
         </div>
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => setIsExperienceDialogOpen(true)}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Create Experience
-        </Button>
+         <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="inline-block">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={tool.is_shared_inbound}
+                  onClick={() => setIsExperienceDialogOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Experience
+                </Button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{tool.is_shared_inbound ? "Experiences are disabled for shared assets" : "Create Experience"}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -63,7 +110,7 @@ export const ToolDetails = ({
           <Tabs defaultValue={defaultTab} className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="history" className="w-full">History</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -157,7 +204,7 @@ export const ToolDetails = ({
             <TabsContent value="history" className="space-y-4">
               <div className="space-y-4">
                 {toolHistory.map((record) => (
-                  <Card key={record.id}>
+                  <Card key={record.id} className={`hover:shadow-md transition-shadow overflow-hidden bg-background ${getToolCardStyle(record)}`}>
                     <CardContent className="p-4">
                       {isAssetHistory(record) ? (
                         <>
@@ -222,16 +269,104 @@ export const ToolDetails = ({
                       ) : isObservation(record) ? (
                         <>
                           <div className="flex justify-between items-start mb-2">
-                            <div>
-                              <p className="font-medium">{record.observed_by_name}</p>
-                              <p className="text-sm text-muted-foreground">
-                                {new Date(record.observed_at).toLocaleDateString()} {new Date(record.observed_at).toLocaleTimeString()}
-                              </p>
+                            <div className="flex items-center gap-2">
+                              <Camera className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                              <div>
+                                <p className="font-medium">{record.observed_by_name}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {new Date(record.observed_at).toLocaleDateString()} {new Date(record.observed_at).toLocaleTimeString()}
+                                </p>
+                              </div>
                             </div>
                             <Badge variant="outline">Observation</Badge>
                           </div>
                           {record.observation_text && (
-                            <p className="text-sm">{record.observation_text}</p>
+                            <p className="text-sm mb-2">{record.observation_text}</p>
+                          )}
+                          {record.metrics && record.metrics.length > 0 && (
+                            <div className="space-y-1 mt-2 bg-blue-50 border border-blue-150 p-2 rounded">
+                              <p className="font-medium text-blue-900 text-xs">Metrics:</p>
+                              {record.metrics.map(metric => (
+                                <div key={metric.snapshot_id} className="flex items-center gap-2 text-blue-800 text-sm">
+                                  <span className="font-medium">{metric.metric_name}:</span>
+                                  <span>{metric.value}</span>
+                                  {metric.unit && <span className="text-blue-600">{metric.unit}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {record.photos && record.photos.length > 0 && (
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              {record.photos.map((photo, photoIdx) => (
+                                <div key={photo.id} className="relative">
+                                  <a 
+                                    href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block"
+                                  >
+                                    <img 
+                                      src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                      alt={photo.photo_description || 'Observation photo'}
+                                      className="w-full h-32 object-cover rounded border border-blue-200 hover:border-blue-400 transition-colors"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLImageElement;
+                                        const fullUrl = getImageUrl(photo.photo_url);
+                                        if (fullUrl && target.src !== fullUrl) {
+                                          target.src = fullUrl;
+                                        }
+                                      }}
+                                    />
+                                  </a>
+                                  {photo.photo_description?.trim() && (
+                                    <div className="text-xs text-blue-700 mt-1">
+                                      <span>{photo.photo_description}</span>
+                                    </div>
+                                  )}
+                                  {(photo as any).transcription?.trim() && (
+                                    <div className="flex flex-col mt-1">
+                                      <div className="flex items-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleExpandedAi(photo.id)}
+                                          className="relative group cursor-pointer inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-muted/50 text-muted-foreground/60 border border-muted-foreground/10 hover:bg-muted dark:bg-zinc-800/35 dark:text-zinc-400 dark:border-zinc-700/30 dark:hover:bg-zinc-800/60 transition-all select-none mr-1.5 flex-shrink-0"
+                                        >
+                                          <span>AI Description</span>
+                                          <span className={`absolute ${photoIdx % 2 === 0 ? 'left-0' : 'right-0'} bottom-full mb-2 w-[280px] xs:w-[340px] sm:w-[420px] p-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl hidden group-hover:block z-30 normal-case not-italic text-xs text-zinc-700 dark:text-zinc-350 leading-normal text-left`} onClick={(e) => e.stopPropagation()}>
+                                            <span className="block font-semibold text-zinc-900 dark:text-white mb-0.5">AI Description:</span>
+                                            <span className="block bg-indigo-50/30 dark:bg-indigo-950/15 p-2 rounded text-zinc-850 dark:text-zinc-250 leading-relaxed text-xs border border-indigo-100/50 dark:border-indigo-900/20 text-left font-normal mb-2">
+                                              {(photo as any).transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                            </span>
+                                            <details className="text-[10px] text-muted-foreground/60 dark:text-muted-foreground/45 select-none cursor-pointer">
+                                              <summary className="hover:text-foreground font-semibold flex items-center gap-1 focus:outline-none">
+                                                <span>Metadata Details</span>
+                                              </summary>
+                                              <div className="mt-1.5 space-y-1 bg-zinc-50/50 dark:bg-zinc-800/10 p-2 rounded border border-zinc-200/50 dark:border-zinc-700/20 cursor-default">
+                                                <div className="flex justify-between border-b border-zinc-150 dark:border-zinc-850 pb-1">
+                                                  <span className="font-semibold text-zinc-700 dark:text-zinc-350">Model:</span>
+                                                  <span className="font-mono text-indigo-650 dark:text-indigo-405">{(photo as any).model_id || 'us.amazon.nova-pro-v1:0'}</span>
+                                                </div>
+                                                <div>
+                                                  <span className="block font-semibold text-zinc-700 dark:text-zinc-350 mb-0.5">Prompt:</span>
+                                                  <span className="block bg-zinc-50 dark:bg-zinc-950 p-2 rounded italic text-[10px] leading-relaxed border border-zinc-150 dark:border-zinc-850 max-h-[120px] overflow-y-auto whitespace-pre-line text-zinc-650 dark:text-zinc-350">
+                                                    {(photo as any).system_prompt || 'No active prompt registered.'}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </details>
+                                          </span>
+                                        </button>
+                                      </div>
+                                      {expandedAiPhotos.has(photo.id) && (
+                                        <span className="italic text-muted-foreground/65 dark:text-muted-foreground/50 font-normal text-xs leading-relaxed mt-1">
+                                          {(photo as any).transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </>
                       ) : null}

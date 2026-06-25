@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
 import { offlineMutationConfig } from '@/lib/queryConfig';
-import { toolsQueryKey, partsQueryKey } from '@/lib/queryKeys';
+import { toolsQueryKey, partsQueryKey, toolHistoryQueryKey, partHistoryQueryKey } from '@/lib/queryKeys';
 
 export function useAssetMutations() {
   const queryClient = useQueryClient();
@@ -88,8 +88,11 @@ export function useAssetMutations() {
         queryClient.setQueryData(partsQueryKey(), context.previousParts);
       }
     },
-    onSettled: () => {
+    onSettled: (data, error, variables) => {
       queryClient.invalidateQueries({ queryKey: partsQueryKey() });
+      if (variables?.id) {
+        queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(variables.id) });
+      }
     },
     ...offlineMutationConfig,
   });
@@ -112,8 +115,11 @@ export function useAssetMutations() {
         queryClient.setQueryData(toolsQueryKey(), context.previousTools);
       }
     },
-    onSettled: () => {
+    onSettled: (data, error, variables) => {
       queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
+      if (variables?.id) {
+        queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(variables.id) });
+      }
     },
     ...offlineMutationConfig,
   });
@@ -136,9 +142,12 @@ export function useAssetMutations() {
         queryClient.setQueryData(['parts_history'], context.previousHistory);
       }
     },
-    onSettled: () => {
+    onSettled: (data, error, variables) => {
       queryClient.invalidateQueries({ queryKey: ['parts_history'] });
       queryClient.invalidateQueries({ queryKey: ['inventoryData'] });
+      if (variables?.part_id) {
+        queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(variables.part_id) });
+      }
     },
     ...offlineMutationConfig,
   });
