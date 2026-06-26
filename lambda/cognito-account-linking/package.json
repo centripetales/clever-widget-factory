@@ -1,0 +1,9 @@
+{
+  "name": "cognito-account-linking",
+  "version": "1.0.0",
+  "description": "Cognito Pre-SignUp trigger for native account linking via AdminLinkProviderForUser",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "3.787.0"
+  }
+}

@@ -92,7 +92,10 @@ exports.handler = async (event) => {
         SELECT 
           a.*,
           om.full_name as assigned_to_name,
-          CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
+          CASE WHEN (
+            EXISTS (SELECT 1 FROM analysis_contexts WHERE context_id = a.id AND context_service = 'action_score')
+            OR EXISTS (SELECT 1 FROM action_scores WHERE action_id = a.id)
+          ) THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
           COALESCE(
             (
@@ -110,8 +113,6 @@ exports.handler = async (event) => {
           ) as shared_with_partners
         FROM actions a
         LEFT JOIN organization_members om ON a.assigned_to = om.user_id
-        LEFT JOIN analysis_contexts ac ON a.id = ac.context_id AND ac.context_service = 'action_score'
-        LEFT JOIN action_scores old_scores ON a.id = old_scores.action_id
         LEFT JOIN (
           SELECT DISTINCT entity_id as action_id
           FROM state_links
@@ -1000,7 +1001,10 @@ exports.handler = async (event) => {
           a.*,
           om.full_name as assigned_to_name,
           om.favorite_color as assigned_to_color,
-          CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
+          CASE WHEN (
+            EXISTS (SELECT 1 FROM analysis_contexts WHERE context_id = a.id AND context_service = 'action_score')
+            OR EXISTS (SELECT 1 FROM action_scores WHERE action_id = a.id)
+          ) THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
           COALESCE(
             (
@@ -1021,8 +1025,6 @@ exports.handler = async (event) => {
           ELSE NULL END as asset
         FROM actions a
         LEFT JOIN profiles om ON a.assigned_to = om.user_id
-        LEFT JOIN analysis_contexts ac ON a.id = ac.context_id AND ac.context_service = 'action_score'
-        LEFT JOIN action_scores old_scores ON a.id = old_scores.action_id
         LEFT JOIN (
           SELECT DISTINCT entity_id as action_id
           FROM state_links
