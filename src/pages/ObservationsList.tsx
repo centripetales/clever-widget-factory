@@ -189,6 +189,16 @@ export default function ObservationsList() {
     enabled: hasPartners,
     ...offlineQueryConfig,
   });
+  const { data: sharedActionsList = [] } = useQuery({
+    queryKey: ['actions_shared', orgId, ...partnerOrgIds.sort()],
+    queryFn: async () => {
+      if (!orgId || partnerOrgIds.length === 0) return [];
+      const result = await apiService.get(`/actions?status=unresolved&view_shared=${partnerOrgIds.join(',')}`);
+      return result.data || [];
+    },
+    enabled: hasPartners,
+    ...offlineQueryConfig,
+  });
 
   // Resolve the name of a linked asset
   const resolveAsset = (entityId: string, entityType: 'tool' | 'part' | 'action' | 'financial_record' | string) => {
@@ -215,7 +225,8 @@ export default function ObservationsList() {
         type: 'financial_record' as any
       };
     } else {
-      const action = (actionsList as any).find((a: any) => a.id === entityId);
+      const action = (actionsList as any).find((a: any) => a.id === entityId)
+        || (sharedActionsList as any[]).find((a: any) => a.id === entityId);
       return {
         name: action ? (action.title || 'Action') : 'Unknown Action',
         serialNumber: undefined,
@@ -424,7 +435,7 @@ export default function ObservationsList() {
                       )}
                       {obs.is_shared_inbound && (
                         <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-900/50 py-0 px-1.5 text-[10px]">
-                          Partner
+                          {accessibleOrganizations.find(o => o.id === obs.organization_id)?.name || 'Partner'}
                         </Badge>
                       )}
                     </div>
@@ -590,7 +601,7 @@ export default function ObservationsList() {
                       )}
                     </Button>
 
-                    {!isLinkedToAction && (
+                    {!isLinkedToAction && !obs.is_shared_inbound && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -610,23 +621,27 @@ export default function ObservationsList() {
                       </Button>
                     )}
 
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => navigate(`/observations/edit/${obs.id}`)}
-                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                    >
-                      <Edit2 className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={isDeleting}
-                      onClick={() => handleDelete(obs.id)}
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!obs.is_shared_inbound && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => navigate(`/observations/edit/${obs.id}`)}
+                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {!obs.is_shared_inbound && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={isDeleting}
+                        onClick={() => handleDelete(obs.id)}
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </CardHeader>
 

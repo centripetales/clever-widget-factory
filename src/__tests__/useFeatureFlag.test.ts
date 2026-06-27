@@ -8,10 +8,13 @@ vi.mock('@/hooks/useOrganization', () => ({
 }));
 
 describe('useFeatureFlag', () => {
-  it('should enable all features by default if organization is not set', () => {
+  it('should hide non-core features by default if organization is not set', () => {
     mockUseOrganization.mockReturnValue({ organization: null });
     const { isFeatureEnabled } = useFeatureFlag();
-    expect(isFeatureEnabled('any-feature')).toBe(true);
+    expect(isFeatureEnabled('observations')).toBe(true);
+    expect(isFeatureEnabled('assets')).toBe(true);
+    expect(isFeatureEnabled('actions')).toBe(true);
+    expect(isFeatureEnabled('missions')).toBe(false);
     expect(isFeatureEnabled()).toBe(true);
   });
 
@@ -35,7 +38,8 @@ describe('useFeatureFlag', () => {
     const { isFeatureEnabled } = useFeatureFlag();
     expect(isFeatureEnabled('observations')).toBe(true);
     expect(isFeatureEnabled('assets')).toBe(true);
-    expect(isFeatureEnabled('actions')).toBe(false);
+    expect(isFeatureEnabled('actions')).toBe(true); // core feature always enabled
+    expect(isFeatureEnabled('missions')).toBe(false);
   });
 
   it('should always allow core features without featureKey', () => {
