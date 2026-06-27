@@ -10,6 +10,7 @@ export interface Observation {
   photos: ObservationPhoto[];
   links: ObservationLink[];
   shared_with_partners?: boolean;
+  is_shared_inbound?: boolean;
   perspectives?: {
     perspective_type: string;
     content: string;

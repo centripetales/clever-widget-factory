@@ -19,7 +19,8 @@ import { BaseAction } from '@/types/actions';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/lib/apiService';
 import { usePersistedFilter } from '@/hooks/usePersistedFilter';
-import { actionsQueryKey, completedActionsQueryKey } from '@/lib/queryKeys';
+import { actionsQueryConfig, completedActionsQueryConfig } from '@/lib/assetQueryConfigs';
+import { offlineQueryConfig } from '@/lib/queryConfig';
 
 // Using unified BaseAction interface from types/actions.ts
 
@@ -50,37 +51,19 @@ export default function Actions() {
   const { getScoreForAction } = useActionScores();
   const { selectedOrgs } = useSharedOrgs();
 
-  const fetchUnresolvedActions = async (): Promise<BaseAction[]> => {
-    const url = `/actions?status=unresolved${selectedOrgs.length > 0 ? `&view_shared=${selectedOrgs.join(',')}` : ''}`;
-    const result = await apiService.get(url);
-    return result.data || [];
-  };
-
-  const fetchCompletedActions = async (): Promise<BaseAction[]> => {
-    const url = `/actions?status=completed${selectedOrgs.length > 0 ? `&view_shared=${selectedOrgs.join(',')}` : ''}`;
-    const result = await apiService.get(url);
-    return result.data || [];
-  };
-
   const queryClient = useQueryClient();
 
-  // Unresolved actions - fetched eagerly on mount
+  // Unresolved actions - fetched eagerly on mount; org visibility filtered locally
   const { data: unresolvedActions = [], isLoading: unresolvedLoading } = useQuery({
-    queryKey: [...actionsQueryKey(), selectedOrgs.join(',')],
-    queryFn: fetchUnresolvedActions,
-    enabled: selectedOrgs.length > 0,
-    staleTime: 24 * 60 * 60 * 1000,
-    gcTime: 7 * 24 * 60 * 60 * 1000,
-    networkMode: 'offlineFirst' as const,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
+    ...actionsQueryConfig,
+    ...offlineQueryConfig,
   });
 
   // Completed actions - fetched lazily when tab is clicked
   const { data: completedActions = [], isLoading: completedLoading } = useQuery({
-    queryKey: [...completedActionsQueryKey(), selectedOrgs.join(',')],
-    queryFn: fetchCompletedActions,
-    enabled: completedTabVisited && selectedOrgs.length > 0,
+    ...completedActionsQueryConfig,
+    ...offlineQueryConfig,
+    enabled: completedTabVisited,
     staleTime: 24 * 60 * 60 * 1000,
     gcTime: 7 * 24 * 60 * 60 * 1000,
     networkMode: 'offlineFirst' as const,
@@ -200,6 +183,13 @@ export default function Actions() {
   const applyFilters = (actions: BaseAction[]) => {
     let filtered = actions;
 
+    // Org visibility filter (local — no API call needed)
+    if (selectedOrgs.length > 0) {
+      filtered = filtered.filter(action => selectedOrgs.includes((action as any).organization_id));
+    } else {
+      return []; // nothing selected → show nothing
+    }
+
     // Semantic search filter (takes precedence)
     if (isSemanticSearch && semanticResults.length > 0) {
       filtered = filtered.filter(action => semanticResults.includes(action.id));
@@ -248,7 +238,7 @@ export default function Actions() {
       if (b.status === 'in_progress' && a.status !== 'in_progress') return 1;
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
-  }, [unresolvedActions, searchTerm, assigneeFilter, user?.userId, profiles.length, isSemanticSearch, semanticResults]);
+  }, [unresolvedActions, searchTerm, assigneeFilter, user?.userId, profiles.length, isSemanticSearch, semanticResults, selectedOrgs]);
 
   // Filtered completed actions, sorted by completion date
   const filteredCompleted = useMemo(() => {
@@ -260,7 +250,7 @@ export default function Actions() {
       if (!a.completed_at && b.completed_at) return 1;
       return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
-  }, [completedActions, searchTerm, assigneeFilter, user?.userId, profiles.length, isSemanticSearch, semanticResults]);
+  }, [completedActions, searchTerm, assigneeFilter, user?.userId, profiles.length, isSemanticSearch, semanticResults, selectedOrgs]);
   
   // Use active profiles for assignee filter options
   const assigneeOptions = profiles

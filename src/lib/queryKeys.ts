@@ -41,8 +41,12 @@ export const partsOrdersQueryKey = (status?: string) => [
 
 // States query keys (org-scoped to prevent cross-org cache contamination)
 // orgId is required so each organization has its own isolated cache slot.
-export const statesQueryKey = (orgId: string, filters?: { entity_type?: string; entity_id?: string }) =>
-  filters ? ['states', orgId, filters.entity_type ?? 'all', filters.entity_id ?? 'all'] : ['states', orgId];
+export const statesQueryKey = (orgId: string, filters?: { entity_type?: string; entity_id?: string; view_shared?: string }) =>
+  filters
+    ? filters.view_shared
+      ? ['states', orgId, filters.entity_type ?? 'all', filters.entity_id ?? 'all', filters.view_shared]
+      : ['states', orgId, filters.entity_type ?? 'all', filters.entity_id ?? 'all']
+    : ['states', orgId];
 export const stateQueryKey = (orgId: string, stateId: string) => ['state', orgId, stateId];
 
 // Experiences query keys

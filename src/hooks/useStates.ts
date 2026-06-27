@@ -3,7 +3,7 @@ import { stateService } from '../services/stateService';
 import { statesQueryKey, stateQueryKey, actionsQueryKey, completedActionsQueryKey, toolHistoryQueryKey, partHistoryQueryKey } from '../lib/queryKeys';
 import type { CreateObservationData, Observation } from '../types/observations';
 
-export function useStates(orgId: string, filters?: { entity_type?: string; entity_id?: string }) {
+export function useStates(orgId: string, filters?: { entity_type?: string; entity_id?: string; view_shared?: string }) {
   return useQuery({
     queryKey: statesQueryKey(orgId, filters),
     queryFn: () => stateService.getStates(filters),
@@ -134,10 +134,10 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
       
       // Optimistically update the specific state cache
       // Also clear perspectives to signal they are being regenerated
-      const pendingSentinel = [{ perspective_type: 'PENDING', content: '', status: 'PENDING' }];
+      const pendingSentinel: Observation['perspectives'] = [{ perspective_type: 'PENDING', content: '', status: 'PENDING' }];
       queryClient.setQueryData<Observation>(stateQueryKey(orgId, variables.id), (old) => {
         if (!old) return old;
-        return { ...old, ...variables.data, perspectives: pendingSentinel };
+        return { ...old, ...variables.data, perspectives: pendingSentinel } as Observation;
       });
       
       // Optimistically update the states list cache
@@ -145,7 +145,7 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
         if (!old) return old;
         return old.map(state => 
           state.id === variables.id 
-            ? { ...state, ...variables.data, perspectives: pendingSentinel }
+            ? { ...state, ...variables.data, perspectives: pendingSentinel } as Observation
             : state
         );
       });
@@ -156,7 +156,7 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
           if (!old) return old;
           return old.map(state => 
             state.id === variables.id 
-              ? { ...state, ...variables.data, perspectives: pendingSentinel }
+              ? { ...state, ...variables.data, perspectives: pendingSentinel } as Observation
               : state
           );
         });

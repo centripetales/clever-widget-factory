@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
-import { toolsQueryConfig, partsQueryConfig } from '@/lib/assetQueryConfigs';
-import { actionsQueryKey } from '@/lib/queryKeys';
+import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig } from '@/lib/assetQueryConfigs';
 import { offlineQueryConfig } from '@/lib/queryConfig';
+import { apiService } from '@/lib/apiService';
 import { useOrganization } from '@/hooks/useOrganization';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,12 +35,25 @@ import {
 } from 'lucide-react';
 import { generateObservationUrl, copyToClipboard } from '@/lib/urlUtils';
 import { getThumbnailUrl } from '@/lib/imageUtils';
+import { SharedOrgSelector } from '@/components/SharedOrgSelector';
+import { useSharedOrgs } from '@/hooks/useSharedOrgs';
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { organization } = useOrganization();
+  const { organization, accessibleOrganizations } = useOrganization();
   const orgId = organization?.id ?? '';
-  const { data: observations = [], isLoading: loadingObs, isError } = useStates(orgId);
+  const { selectedOrgs } = useSharedOrgs();
+
+  const partnerOrgIds = accessibleOrganizations
+    .filter(o => o.id !== organization?.id)
+    .map(o => o.id);
+  const hasPartners = partnerOrgIds.length > 0;
+
+  const viewShared = hasPartners && selectedOrgs.length > 0
+    ? selectedOrgs.join(',')
+    : undefined;
+
+  const { data: observations = [], isLoading: loadingObs, isError } = useStates(orgId, viewShared ? { view_shared: viewShared } : undefined);
   const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations(orgId);
 
   const location = useLocation();
@@ -153,19 +166,43 @@ export default function ObservationsList() {
   // Fetch asset inventory lists to resolve asset names
   const { data: toolsList = [] } = useQuery({ ...toolsQueryConfig, ...offlineQueryConfig });
   const { data: partsList = [] } = useQuery({ ...partsQueryConfig, ...offlineQueryConfig });
-  const { data: actionsList = [] } = useQuery({ queryKey: actionsQueryKey(), ...offlineQueryConfig });
+  const { data: actionsList = [] } = useQuery({ ...actionsQueryConfig, ...offlineQueryConfig });
+
+  // Fetch shared tools/parts for partner observation name resolution
+  const { data: sharedToolsList = [] } = useQuery({
+    queryKey: ['tools_shared', orgId, ...partnerOrgIds.sort()],
+    queryFn: async () => {
+      if (!orgId || partnerOrgIds.length === 0) return [];
+      const result = await apiService.get(`/api/tools?limit=2000&organization_id=${orgId}&view_shared=${partnerOrgIds.join(',')}`);
+      return result.data || [];
+    },
+    enabled: hasPartners,
+    ...offlineQueryConfig,
+  });
+  const { data: sharedPartsList = [] } = useQuery({
+    queryKey: ['parts_shared', orgId, ...partnerOrgIds.sort()],
+    queryFn: async () => {
+      if (!orgId || partnerOrgIds.length === 0) return [];
+      const result = await apiService.get(`/api/parts?limit=2000&organization_id=${orgId}&view_shared=${partnerOrgIds.join(',')}`);
+      return result.data || [];
+    },
+    enabled: hasPartners,
+    ...offlineQueryConfig,
+  });
 
   // Resolve the name of a linked asset
   const resolveAsset = (entityId: string, entityType: 'tool' | 'part' | 'action' | 'financial_record' | string) => {
     if (entityType === 'tool') {
-      const tool = toolsList.find((t: any) => t.id === entityId);
+      const tool = toolsList.find((t: any) => t.id === entityId)
+        || (sharedToolsList as any[]).find((t: any) => t.id === entityId);
       return {
         name: tool ? tool.name : 'Unknown Tool',
         serialNumber: tool?.serial_number,
         type: 'tool' as const
       };
     } else if (entityType === 'part') {
-      const part = partsList.find((p: any) => p.id === entityId);
+      const part = partsList.find((p: any) => p.id === entityId)
+        || (sharedPartsList as any[]).find((p: any) => p.id === entityId);
       return {
         name: part ? part.name : 'Unknown Part',
         serialNumber: part?.serial_number,
@@ -280,7 +317,7 @@ export default function ObservationsList() {
       {/* Filters Toolbar */}
       <Card className="mb-6">
         <CardContent className="pt-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Text Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -309,6 +346,14 @@ export default function ObservationsList() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Org Visibility Filter */}
+            {hasPartners && (
+              <SharedOrgSelector
+                items={observations}
+                entityTypes={['state']}
+              />
+            )}
           </div>
         </CardContent>
       </Card>
@@ -375,6 +420,11 @@ export default function ObservationsList() {
                       {obs.shared_with_partners && !isLinkedToAction && (
                         <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50 py-0 px-1.5 text-[10px]">
                           Shared
+                        </Badge>
+                      )}
+                      {obs.is_shared_inbound && (
+                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-900/50 py-0 px-1.5 text-[10px]">
+                          Partner
                         </Badge>
                       )}
                     </div>
