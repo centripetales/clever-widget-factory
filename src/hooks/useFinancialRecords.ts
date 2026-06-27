@@ -68,16 +68,29 @@ export function useCreateFinancialRecord() {
     mutationFn: (data: CreateFinancialRecordRequest) =>
       financialRecordsService.createRecord(data),
     onSuccess: (newRecord) => {
-      // Invalidate all list queries to refetch with recomputed balance
-      queryClient.invalidateQueries({
-        queryKey: financialRecordKeys.lists(),
-      });
+      // Prepend the new record to all list caches for instant UI update
+      queryClient.setQueriesData<FinancialRecordListResponse>(
+        { queryKey: financialRecordKeys.lists() },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            records: [newRecord, ...old.records],
+            total_count: old.total_count + 1,
+          } as FinancialRecordListResponse;
+        }
+      );
 
       // Seed the detail cache
       queryClient.setQueryData(
         financialRecordKeys.detail(newRecord.id),
-        newRecord
+        newRecord as FinancialRecord
       );
+
+      // Background refetch for accurate running_balance
+      queryClient.invalidateQueries({
+        queryKey: financialRecordKeys.lists(),
+      });
     },
     onError: (error) => {
       console.error('Failed to create financial record:', error);
@@ -121,7 +134,7 @@ export function useUpdateFinancialRecord() {
             records: old.records.map((record) =>
               record.id === id ? { ...record, ...data, updated_at: new Date().toISOString() } : record
             ),
-          };
+          } as FinancialRecordListResponse;
         }
       );
 
@@ -129,7 +142,7 @@ export function useUpdateFinancialRecord() {
       if (previousDetail) {
         queryClient.setQueryData<FinancialRecord>(
           financialRecordKeys.detail(id),
-          { ...previousDetail, ...data, updated_at: new Date().toISOString() }
+          { ...previousDetail, ...data, updated_at: new Date().toISOString() } as FinancialRecord
         );
       }
 

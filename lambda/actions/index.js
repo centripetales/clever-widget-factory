@@ -43,6 +43,8 @@ exports.handler = async (event) => {
   const authContext = getAuthorizerContext(event);
   const organizationId = authContext.organization_id || (authContext.accessible_organization_ids || [])[0];
   const accessibleOrgIds = authContext.accessible_organization_ids || [];
+  // Full accessible org IDs before X-Organization-Id narrows them (for cross-org shared queries)
+  const allAccessibleOrgIds = JSON.parse(event.requestContext?.authorizer?.accessible_organization_ids || '[]');
   
   if (accessibleOrgIds.length === 0) {
     return {
@@ -92,7 +94,10 @@ exports.handler = async (event) => {
         SELECT 
           a.*,
           om.full_name as assigned_to_name,
-          CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
+          CASE WHEN (
+            EXISTS (SELECT 1 FROM analysis_contexts WHERE context_id = a.id AND context_service = 'action_score')
+            OR EXISTS (SELECT 1 FROM action_scores WHERE action_id = a.id)
+          ) THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
           COALESCE(
             (
@@ -110,8 +115,6 @@ exports.handler = async (event) => {
           ) as shared_with_partners
         FROM actions a
         LEFT JOIN organization_members om ON a.assigned_to = om.user_id
-        LEFT JOIN analysis_contexts ac ON a.id = ac.context_id AND ac.context_service = 'action_score'
-        LEFT JOIN action_scores old_scores ON a.id = old_scores.action_id
         LEFT JOIN (
           SELECT DISTINCT entity_id as action_id
           FROM state_links
@@ -968,9 +971,33 @@ exports.handler = async (event) => {
           )`);
         }
         whereConditions.push(clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'false');
+      } else if (id && accessibleOrgIds.length > 0) {
+        // Direct lookup by id: allow any org the user can access, not just the current org
+        const accessible = accessibleOrgIds.map(o => `'${o.replace(/'/g, "''")}'`).join(',');
+        whereConditions.push(`a.organization_id::text IN (${accessible})`);
       } else {
+        // Default: own org + shared actions from partner orgs
         const orgFilter = buildOrganizationFilter(authContext, 'a');
-        if (orgFilter.condition) whereConditions.push(orgFilter.condition);
+        const partnerOrgs = allAccessibleOrgIds.filter(id => id !== organizationId);
+        if (partnerOrgs.length > 0) {
+          const partnerOrgsStr = partnerOrgs.map(idStr => `'${idStr.replace(/'/g, "''")}'`).join(',');
+          const clauses = [];
+          if (orgFilter.condition) clauses.push(orgFilter.condition);
+          clauses.push(`(
+            a.organization_id::text IN (${partnerOrgsStr})
+            AND EXISTS (
+              SELECT 1 FROM states s
+              JOIN state_links sl_e ON sl_e.state_id = s.id
+                AND sl_e.entity_type = 'action' AND sl_e.entity_id = a.id
+              JOIN state_links sl_o ON sl_o.state_id = s.id
+                AND sl_o.entity_type = 'organization'
+                AND sl_o.entity_id::text = '${organizationId.replace(/'/g, "''")}'
+            )
+          )`);
+          whereConditions.push(`(${clauses.join(' OR ')})`);
+        } else if (orgFilter.condition) {
+          whereConditions.push(orgFilter.condition);
+        }
       }
       if (id) {
         whereConditions.push(`a.id = '${id.replace(/'/g, "''")}'`);
@@ -1000,7 +1027,10 @@ exports.handler = async (event) => {
           a.*,
           om.full_name as assigned_to_name,
           om.favorite_color as assigned_to_color,
-          CASE WHEN (ac.context_id IS NOT NULL OR old_scores.action_id IS NOT NULL) THEN true ELSE false END as has_score,
+          CASE WHEN (
+            EXISTS (SELECT 1 FROM analysis_contexts WHERE context_id = a.id AND context_service = 'action_score')
+            OR EXISTS (SELECT 1 FROM action_scores WHERE action_id = a.id)
+          ) THEN true ELSE false END as has_score,
           CASE WHEN updates.action_id IS NOT NULL THEN true ELSE false END as has_implementation_updates,
           COALESCE(
             (
@@ -1021,8 +1051,6 @@ exports.handler = async (event) => {
           ELSE NULL END as asset
         FROM actions a
         LEFT JOIN profiles om ON a.assigned_to = om.user_id
-        LEFT JOIN analysis_contexts ac ON a.id = ac.context_id AND ac.context_service = 'action_score'
-        LEFT JOIN action_scores old_scores ON a.id = old_scores.action_id
         LEFT JOIN (
           SELECT DISTINCT entity_id as action_id
           FROM state_links

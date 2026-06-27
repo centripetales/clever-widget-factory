@@ -13,10 +13,9 @@ import { useProfile } from '@/hooks/useProfile';
 import { OrganizationSwitcher } from '@/components/OrganizationSwitcher';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useQueryClient } from '@tanstack/react-query';
-import { actionsQueryKey } from '@/lib/queryKeys';
 import { apiService } from '@/lib/apiService';
 import { offlineQueryConfig } from '@/lib/queryConfig';
-import { toolsQueryConfig, partsQueryConfig } from '@/lib/assetQueryConfigs';
+import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig } from '@/lib/assetQueryConfigs';
 import { useEffect, useRef, useState } from 'react';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -44,11 +43,7 @@ export default function Dashboard() {
     if (!user) return;
     // Actions (unresolved)
     queryClient.prefetchQuery({
-      queryKey: actionsQueryKey(),
-      queryFn: async () => {
-        const result = await apiService.get('/actions?status=unresolved');
-        return result.data || [];
-      },
+      ...actionsQueryConfig,
       ...offlineQueryConfig,
     });
     // Tools

@@ -15,7 +15,7 @@
  */
 
 import { apiService } from '@/lib/apiService';
-import { toolsQueryKey, partsQueryKey } from '@/lib/queryKeys';
+import { toolsQueryKey, partsQueryKey, actionsQueryKey, completedActionsQueryKey } from '@/lib/queryKeys';
 
 export const toolsQueryConfig = {
   queryKey: toolsQueryKey(),
@@ -29,6 +29,22 @@ export const partsQueryConfig = {
   queryKey: partsQueryKey(),
   queryFn: async () => {
     const result = await apiService.get('/parts?limit=2000');
+    return result.data || [];
+  },
+};
+
+export const actionsQueryConfig = {
+  queryKey: actionsQueryKey(),
+  queryFn: async () => {
+    const result = await apiService.get('/actions?status=unresolved');
+    return result.data || [];
+  },
+};
+
+export const completedActionsQueryConfig = {
+  queryKey: completedActionsQueryKey(),
+  queryFn: async () => {
+    const result = await apiService.get('/actions?status=completed');
     return result.data || [];
   },
 };

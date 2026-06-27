@@ -5,14 +5,17 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Users } from 'lucide-react';
 import { apiService } from '@/lib/apiService';
-import { BaseAction } from '@/types/actions';
 import { useQuery } from '@tanstack/react-query';
 
 interface SharedOrgSelectorProps {
-  actions?: BaseAction[];
+  /** @deprecated Use `items` instead */
+  actions?: Array<{ organization_id?: string; is_shared_inbound?: boolean }>;
+  items?: Array<{ organization_id?: string; is_shared_inbound?: boolean }>;
+  entityTypes?: string[];
 }
 
-export function SharedOrgSelector({ actions = [] }: SharedOrgSelectorProps) {
+export function SharedOrgSelector({ actions, items }: SharedOrgSelectorProps) {
+  const resolvedItems = items ?? actions ?? [];
   const { selectedOrgs, toggleOrg, isLoaded } = useSharedOrgs();
   const { organization: currentOrg } = useOrganization();
 
@@ -22,10 +25,9 @@ export function SharedOrgSelector({ actions = [] }: SharedOrgSelectorProps) {
       const resp: any = await apiService.get('/shared-with-me');
       const shared: Array<{ entity_type: string; source_org_id: string; source_org_name: string }> =
         resp?.shared || [];
-      // Unique orgs that have shared actions with us
       const seen = new Set<string>();
       const orgs: Array<{ id: string; name: string }> = [];
-      shared.filter(s => s.entity_type === 'action').forEach(s => {
+      shared.forEach(s => {
         if (!seen.has(s.source_org_id)) {
           seen.add(s.source_org_id);
           orgs.push({ id: s.source_org_id, name: s.source_org_name });
@@ -34,16 +36,16 @@ export function SharedOrgSelector({ actions = [] }: SharedOrgSelectorProps) {
       return orgs;
     },
     enabled: !!currentOrg?.id,
-    staleTime: 5 * 60 * 1000, // 5 minutes cache
+    staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
   });
 
   if (!isLoaded || !currentOrg) return null;
 
-  // Count per org from currently loaded actions
+  // Count per org from currently loaded items
   const countForOrg = (orgId: string): number => {
-    if (orgId === currentOrg.id) return actions.filter(a => !a.is_shared_inbound).length;
-    return actions.filter(a => a.is_shared_inbound && (a as any).organization_id === orgId).length;
+    if (orgId === currentOrg.id) return resolvedItems.filter(a => !a.is_shared_inbound).length;
+    return resolvedItems.filter(a => a.is_shared_inbound && a.organization_id === orgId).length;
   };
 
   const allOrgs = [

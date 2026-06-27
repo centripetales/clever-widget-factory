@@ -2,10 +2,11 @@ import { apiService } from '../lib/apiService';
 import type { Observation, CreateObservationData } from '../types/observations';
 
 export const stateService = {
-  async getStates(filters?: { entity_type?: string; entity_id?: string }): Promise<Observation[]> {
+  async getStates(filters?: { entity_type?: string; entity_id?: string; view_shared?: string }): Promise<Observation[]> {
     const params = new URLSearchParams();
     if (filters?.entity_type) params.append('entity_type', filters.entity_type);
     if (filters?.entity_id) params.append('entity_id', filters.entity_id);
+    if (filters?.view_shared) params.append('view_shared', filters.view_shared);
     
     const queryString = params.toString();
     return apiService.get(`/states${queryString ? `?${queryString}` : ''}`);

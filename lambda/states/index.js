@@ -179,7 +179,7 @@ async function listStates(event, authContext, headers) {
   
   try {
     const queryParams = event.queryStringParameters || {};
-    const { entity_type, entity_id, limit: limitParam } = queryParams;
+    const { entity_type, entity_id, limit: limitParam, view_shared } = queryParams;
     
     let limit = 200;
     if (limitParam) {
@@ -189,10 +189,41 @@ async function listStates(event, authContext, headers) {
       }
     }
     
-    const orgFilter = buildOrganizationFilter(authContext, 's');
+    const organizationId = authContext.organization_id;
+    let whereClause;
 
-    
-    const whereClause = orgFilter.condition;
+    if (view_shared && organizationId) {
+      const sharedArray = view_shared.split(',').map(s => s.trim().replace(/'/g, "''"));
+      const ownOrgChecked = sharedArray.includes(organizationId);
+      const partnerOrgs = sharedArray.filter(id => id !== organizationId);
+      const clauses = [];
+      if (ownOrgChecked) {
+        clauses.push(`s.organization_id = '${organizationId}'::uuid`);
+      }
+      if (partnerOrgs.length > 0) {
+        const partnerList = partnerOrgs.map(id => `'${id}'`).join(',');
+        clauses.push(`(
+          s.organization_id IN (${partnerList})
+          AND EXISTS (
+            SELECT 1 FROM state_links sl_asset
+            WHERE sl_asset.state_id = s.id
+              AND sl_asset.entity_type IN ('tool', 'part', 'action')
+              AND sl_asset.entity_id IN (
+                SELECT sl_e.entity_id FROM state_links sl_e
+                JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id
+                WHERE sl_e.entity_type IN ('tool', 'part', 'action')
+                  AND sl_o.entity_type = 'organization'
+                  AND sl_o.entity_id = '${organizationId}'::uuid
+              )
+          )
+        )`);
+      }
+      whereClause = clauses.length > 0 ? `(${clauses.join(' OR ')})` : '1=0';
+    } else {
+      const orgFilter = buildOrganizationFilter(authContext, 's');
+      whereClause = orgFilter.condition;
+    }
+
     
     // Add entity filtering if provided
     let entityFilter = '';
@@ -204,6 +235,7 @@ async function listStates(event, authContext, headers) {
       SELECT 
         s.id,
         s.organization_id,
+        CASE WHEN s.organization_id != '${authContext.organization_id}'::uuid THEN true ELSE false END as is_shared_inbound,
         s.state_text as observation_text,
         s.captured_by,
         s.captured_at,
