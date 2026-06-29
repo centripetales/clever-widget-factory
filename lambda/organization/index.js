@@ -1,5 +1,28 @@
 const { Client } = require('pg');
 const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
+const jwt = require('jsonwebtoken');
+const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
+
+const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
+const ses = new SESClient({ region: 'us-west-2' });
+
+function generateInviteToken(email, organizationId) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET environment variable is required');
+  return jwt.sign({ email, organizationId }, secret, { expiresIn: '24h' });
+}
+
+function verifyInviteToken(token) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET environment variable is required');
+  return jwt.verify(token, secret); // throws if invalid/expired
+}
+
+function generateRandomPassword() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+  return Array.from({ length: 24 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
 
 // Database configuration
 // SECURITY: Password must be provided via environment variable
@@ -49,7 +72,11 @@ exports.handler = async (event) => {
   const authContext = getAuthorizerContext(event);
   const accessibleOrgIds = authContext.accessible_organization_ids || [];
   
-  if (accessibleOrgIds.length === 0) {
+  // Unauthenticated endpoints (invite flow) — skip org access check
+  const publicPaths = ['/validate-invite-token', '/activate-user-password', '/activate-user-account'];
+  const isPublicEndpoint = publicPaths.some(p => path.endsWith(p));
+  
+  if (!isPublicEndpoint && accessibleOrgIds.length === 0) {
     return {
       statusCode: 500,
       headers: {
@@ -100,16 +127,25 @@ exports.handler = async (event) => {
         }
         
         sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT user_id, cognito_user_id, organization_id, full_name, role, favorite_color, is_active
+          SELECT user_id, cognito_user_id, organization_id, full_name, role, favorite_color, is_active, email
           FROM organization_members
           WHERE cognito_user_id = '${targetUserId.replace(/'/g, "''")}'
             AND is_active = true
           ORDER BY created_at ASC
         ) t;`;
+      } else if (queryStringParameters?.organization_id) {
+        // Specific org: return all members for management (includes id for delete)
+        const orgId = queryStringParameters.organization_id.replace(/'/g, "''");
+        sql = `SELECT json_agg(row_to_json(t)) FROM (
+          SELECT id, user_id, full_name, role, is_active, cognito_user_id, favorite_color, email, organization_id
+          FROM organization_members
+          WHERE organization_id = '${orgId}'
+          ORDER BY is_active DESC, full_name NULLS LAST
+        ) t;`;
       } else {
         // Default: deduplicated list of all members across accessible orgs
         sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT DISTINCT ON (cognito_user_id) cognito_user_id as user_id, full_name, role, cognito_user_id, favorite_color, is_active
+          SELECT DISTINCT ON (cognito_user_id) cognito_user_id as user_id, full_name, role, cognito_user_id, favorite_color, is_active, email
           FROM organization_members
           WHERE full_name IS NOT NULL 
             AND trim(full_name) != ''
@@ -132,7 +168,7 @@ exports.handler = async (event) => {
       const { organization_id = '00000000-0000-0000-0000-000000000001' } = queryStringParameters || {};
       
       const sql = `SELECT json_agg(row_to_json(t)) FROM (
-        SELECT user_id, full_name, role, is_active, created_at, super_admin, organization_id
+        SELECT id, user_id, full_name, role, is_active, created_at, super_admin, organization_id, email, cognito_user_id, favorite_color
         FROM organization_members
         WHERE organization_id = '${organization_id}'
         ORDER BY is_active DESC, full_name NULLS LAST
@@ -238,6 +274,161 @@ exports.handler = async (event) => {
       }
     }
     
+    // POST /api/invite-user — admin invites a user by email
+    if (httpMethod === 'POST' && path.endsWith('/invite-user')) {
+      const { email, organizationId, organizationName, role = 'user' } = JSON.parse(event.body || '{}');
+
+      if (!email || !organizationId || !organizationName) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'email, organizationId, and organizationName are required' }) };
+      }
+      if (!authContext.permissions?.includes('data:write:all') && authContext.user_role !== 'admin') {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Admin permission required' }) };
+      }
+
+      // Create Cognito user (suppress default welcome email — we send our own)
+      let cognitoUserId;
+      let isExistingUser = false;
+      try {
+        const createResp = await cognito.send(new AdminCreateUserCommand({
+          UserPoolId: process.env.USER_POOL_ID,
+          Username: email,
+          UserAttributes: [
+            { Name: 'email', Value: email },
+            { Name: 'email_verified', Value: 'true' },
+          ],
+          DesiredDeliveryMediums: [],
+          MessageAction: 'SUPPRESS',
+        }));
+        cognitoUserId = createResp.User.Username;
+      } catch (err) {
+        if (err.name === 'UsernameExistsException') {
+          // User exists in Cognito — look up their ID and proceed to add membership
+          isExistingUser = true;
+          const listResp = await cognito.send(new ListUsersCommand({
+            UserPoolId: process.env.USER_POOL_ID,
+            Filter: `email = "${email}"`,
+            Limit: 1,
+          }));
+          cognitoUserId = listResp.Users?.[0]?.Username;
+          if (!cognitoUserId) {
+            return { statusCode: 404, headers, body: JSON.stringify({ error: 'Could not find existing user' }) };
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      // Create organization membership
+      await queryParams(
+        `INSERT INTO organization_members (user_id, cognito_user_id, email, organization_id, role, full_name, is_active)
+         VALUES ($1, $2, $3, $4, $5, '', true)
+         ON CONFLICT (cognito_user_id, organization_id) DO NOTHING`,
+        [cognitoUserId, cognitoUserId, email, organizationId, role]
+      );
+
+      // Generate invite token and send email (non-blocking — membership is already created)
+      let emailSent = false;
+      try {
+        const token = generateInviteToken(email, organizationId);
+        const appUrl = process.env.APP_URL || 'https://stargazer-farm.com';
+        const inviteLink = `${appUrl}/accept-invite?token=${token}`;
+
+        await ses.send(new SendEmailCommand({
+          Source: process.env.SES_FROM_EMAIL || 'noreply@stargazer-farm.com',
+          Destination: { ToAddresses: [email] },
+          Message: {
+            Subject: { Data: `You've been invited to ${organizationName}` },
+            Body: {
+              Html: {
+                Data: `<p>You've been invited to join <strong>${organizationName}</strong>.</p>
+                       <p><a href="${inviteLink}">Click here to activate your account</a></p>
+                       <p>This link expires in 24 hours.</p>`
+              },
+              Text: {
+                Data: `You've been invited to join ${organizationName}.\n\nActivate your account: ${inviteLink}\n\nThis link expires in 24 hours.`
+              }
+            }
+          }
+        }));
+        emailSent = true;
+      } catch (emailErr) {
+        console.warn('Failed to send invite email:', emailErr.message);
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, cognitoUserId, emailSent }) };
+    }
+
+    // POST /api/validate-invite-token — validates a JWT invite token
+    if (httpMethod === 'POST' && path.endsWith('/validate-invite-token')) {
+      const { token } = JSON.parse(event.body || '{}');
+      if (!token) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'token is required' }) };
+      }
+
+      try {
+        const decoded = verifyInviteToken(token);
+        // Fetch org name for display
+        const orgRows = await queryParams('SELECT name FROM organizations WHERE id = $1', [decoded.organizationId]);
+        const organizationName = orgRows[0]?.name || '';
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ valid: true, email: decoded.email, organizationId: decoded.organizationId, organizationName })
+        };
+      } catch (err) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ valid: false, error: 'This invitation link is invalid or has expired.' })
+        };
+      }
+    }
+
+    // POST /api/activate-user-account — clears FORCE_CHANGE_PASSWORD after Google sign-in
+    if (httpMethod === 'POST' && path.endsWith('/activate-user-account')) {
+      const { email } = JSON.parse(event.body || '{}');
+      if (!email) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'email is required' }) };
+      }
+
+      await cognito.send(new AdminSetUserPasswordCommand({
+        UserPoolId: process.env.USER_POOL_ID,
+        Username: email,
+        Password: generateRandomPassword(),
+        Permanent: true,
+      }));
+
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+    }
+
+    // POST /api/activate-user-password — sets user password from invite flow
+    if (httpMethod === 'POST' && path.endsWith('/activate-user-password')) {
+      const { email, password, token } = JSON.parse(event.body || '{}');
+      if (!email || !password || !token) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'email, password, and token are required' }) };
+      }
+
+      let decoded;
+      try {
+        decoded = verifyInviteToken(token);
+      } catch (err) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid or expired invitation token' }) };
+      }
+
+      if (decoded.email !== email) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Email does not match invitation' }) };
+      }
+
+      await cognito.send(new AdminSetUserPasswordCommand({
+        UserPoolId: process.env.USER_POOL_ID,
+        Username: email,
+        Password: password,
+        Permanent: true,
+      }));
+
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+    }
+
     // Default 404
     return {
       statusCode: 404,

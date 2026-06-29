@@ -60,7 +60,7 @@ export function useOrganizationMembersByOrg(organizationId: string | null | unde
           favorite_color: member.favorite_color,
           cognito_user_id: member.cognito_user_id,
           auth_data: {
-            email: member.cognito_user_id || member.user_id || 'Unknown',
+            email: member.email || member.cognito_user_id || 'Unknown',
             last_sign_in_at: hasAccount ? new Date().toISOString() : null,
             created_at: member.created_at || new Date().toISOString()
           }

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Amplify } from 'aws-amplify';
-import { signIn, signUp, signOut, getCurrentUser, fetchAuthSession, resetPassword, confirmResetPassword, confirmSignIn } from 'aws-amplify/auth';
+import { signIn, signUp, signOut, getCurrentUser, fetchAuthSession, resetPassword, confirmResetPassword, confirmSignIn, signInWithRedirect } from 'aws-amplify/auth';
 import { apiService, getApiData } from '@/lib/apiService';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -12,6 +12,13 @@ Amplify.configure({
       userPoolClientId: import.meta.env.VITE_AWS_COGNITO_CLIENT_ID,
       loginWith: {
         email: true,
+        oauth: {
+          domain: import.meta.env.VITE_COGNITO_DOMAIN,
+          scopes: ['openid', 'email', 'profile'],
+          redirectSignIn: [window.location.origin + '/'],
+          redirectSignOut: [window.location.origin + '/'],
+          responseType: 'code' as const,
+        },
       },
     },
   },
@@ -40,7 +47,7 @@ interface AuthContextType {
   signOut: () => Promise<{ error: any }>;
   resetPassword: (email: string) => Promise<{ error: any }>;
   confirmResetPassword: (email: string, code: string, newPassword: string) => Promise<{ error: any }>;
-  updatePassword: (password: string) => Promise<{ error: any }>;
+  signInWithRedirect: (provider: 'Google') => Promise<{ error: any }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -137,14 +144,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           })
         ]);
         
-        // Extract full name from profile result
+        // Extract full name from profile result, fallback to Cognito attributes
         let fullName: string | undefined = undefined;
         if (profileResult.status === 'fulfilled' && profileResult.value?.full_name) {
           fullName = profileResult.value.full_name;
+          console.log('🔍 [AUTH] Got name from profile:', fullName);
+        } else {
+          console.log('🔍 [AUTH] No profile found, checking Cognito ID token...');
+          // Fallback to Cognito user attributes (for federated users like Google)
+          const session = await fetchAuthSession();
+          const idTokenPayload = session.tokens?.idToken?.payload;
+          console.log('🔍 [AUTH] ID token payload:', idTokenPayload);
+          if (idTokenPayload?.name) {
+            fullName = idTokenPayload.name as string;
+            console.log('🔍 [AUTH] Got name from ID token:', fullName);
+          } else if (idTokenPayload?.given_name && idTokenPayload?.family_name) {
+            fullName = `${idTokenPayload.given_name} ${idTokenPayload.family_name}`;
+            console.log('🔍 [AUTH] Got name from given/family names:', fullName);
+          } else {
+            console.log('🔍 [AUTH] No name found in ID token');
+          }
         }
         
         // Use email as username if available, otherwise use Cognito username
-        const email = currentUser.signInDetails?.loginId || currentUser.username;
+        const tokenEmail = session.tokens?.idToken?.payload?.email as string | undefined;
+        const email = currentUser.signInDetails?.loginId || tokenEmail || currentUser.username;
         const username = email.includes('@') ? email : currentUser.username;
         
         const userData: User = {
@@ -154,6 +178,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: email,
           name: fullName || email || currentUser.username
         };
+        
+        console.log('🔍 [AUTH] Final userData:', userData);
+        console.log('🔍 [AUTH] fullName resolved to:', fullName);
         
         setUser(userData);
         setSession(session);
@@ -313,19 +340,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         confirmationCode: code,
         newPassword: newPassword,
       });
-      return { error: null };
+      // Auto-sign-in after successful reset so user doesn't have to re-enter credentials
+      return await handleSignIn(email, newPassword);
     } catch (error: any) {
       return { error };
     }
   };
 
-  const handleUpdatePassword = async (password: string) => {
+  const handleSignInWithRedirect = async (provider: 'Google') => {
     try {
-      await confirmResetPassword({
-        username: user?.username || '',
-        confirmationCode: '', // This would come from the reset flow
-        newPassword: password,
-      });
+      await signInWithRedirect({ provider: { custom: provider } });
       return { error: null };
     } catch (error: any) {
       return { error };
@@ -348,7 +372,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signOut: handleSignOut,
       resetPassword: handleResetPassword,
       confirmResetPassword: handleConfirmResetPassword,
-      updatePassword: handleUpdatePassword,
+      signInWithRedirect: handleSignInWithRedirect,
     }}>
       {children}
     </AuthContext.Provider>
