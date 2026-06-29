@@ -31,10 +31,15 @@ interface ProfileData {
 }
 
 const fetchProfile = async (userId: string): Promise<ProfileData | null> => {
-  const response = await apiService.get(`/profiles?user_id=${userId}`);
-  const data = getApiData(response);
-  if (!data) return null;
-  return Array.isArray(data) ? (data[0] as ProfileData) : (data as ProfileData);
+  try {
+    const response = await apiService.get(`/profiles?user_id=${userId}`);
+    const data = getApiData(response);
+    if (!data || (Array.isArray(data) && data.length === 0)) return null;
+    return Array.isArray(data) ? (data[0] as ProfileData || null) : (data as ProfileData || null);
+  } catch (error) {
+    // Return null instead of undefined when profile doesn't exist
+    return null;
+  }
 };
 
 // Create organization object from membership
@@ -144,10 +149,13 @@ export function useProfile() {
   const isLoading = profileLoading || membershipsLoading;
   const isSuperAdmin = Boolean(profile?.super_admin);
 
+  // Fallback to auth context name if no profile full_name exists
+  const displayName = profile?.full_name || user?.name || '';
+
   return {
     // Profile data
     fullName: profile?.full_name || '',
-    displayName: profile?.full_name || '',
+    displayName,
     favoriteColor: profile?.favorite_color || '#6B7280',
     updateFullName,
     isLoading: isLoading || mutation.isPending,

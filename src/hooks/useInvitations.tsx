@@ -52,7 +52,7 @@ export function useInvitations(options?: UseInvitationsOptions) {
     setLoading(true);
     try {
       // Send invitation via API
-      const data = await apiService.post('/api/invite-user', {
+      const data = await apiService.post('/invite-user', {
         email,
         organizationId: organization.id,
         organizationName: organization.name,
