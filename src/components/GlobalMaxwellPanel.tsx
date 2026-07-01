@@ -9,6 +9,7 @@ import { useMaxwellStorage, EntityContext } from '@/hooks/useMaxwellStorage';
 import { extractRecordIdsFromTrace } from '@/lib/traceParser';
 import { useMaxwellRecordHighlight } from '@/contexts/MaxwellRecordHighlightContext';
 import { useEntityContext } from '@/hooks/useEntityContext';
+import { useMaxwellStarterQuestions } from '@/hooks/useMaxwellStarterQuestions';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
 import { copyConversationRich } from '@/lib/urlUtils';
@@ -260,11 +261,14 @@ export function GlobalMaxwellPanel({
   }, [activeContext, messages, saveConversation]);
 
   // Select starter questions based on entity type
-  const starterQuestions = !activeContext
+  const hardcodedStarters = !activeContext
     ? STARTER_QUESTIONS_GENERAL
     : activeContext.entityType === 'action'
       ? STARTER_QUESTIONS_ACTION
       : STARTER_QUESTIONS_ASSET;
+
+  // Fetch saved questions for this user
+  const { savedQuestions, deleteQuestion } = useMaxwellStarterQuestions();
 
   const handleCopyAll = async () => {
     await copyConversationRich(messages);
@@ -430,16 +434,36 @@ export function GlobalMaxwellPanel({
         <div className="flex-1 overflow-y-auto px-4 py-2 pb-4 space-y-3 overscroll-contain touch-pan-y">
           {messages.length === 0 && !isLoading && (
             <div className="space-y-2 pt-2">
-              {starterQuestions.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => sendMessage(q, maxwellMode)}
-                  disabled={isLoading}
-                  className="w-full rounded-xl border border-border bg-muted/50 px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted transition-colors"
-                >
-                  {q}
-                </button>
-              ))}
+              {savedQuestions.length > 0
+                ? savedQuestions.map((q) => (
+                    <div key={q.id} className="relative group/starter">
+                      <button
+                        onClick={() => sendMessage(q.question, maxwellMode)}
+                        disabled={isLoading}
+                        className="w-full rounded-xl border border-border bg-muted/50 px-4 py-2.5 pr-8 text-left text-sm text-foreground hover:bg-muted transition-colors"
+                      >
+                        {q.question}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteQuestion(q.id); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full opacity-0 group-hover/starter:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
+                        aria-label="Remove saved question"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))
+                : hardcodedStarters.map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => sendMessage(q, maxwellMode)}
+                      disabled={isLoading}
+                      className="w-full rounded-xl border border-border bg-muted/50 px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted transition-colors"
+                    >
+                      {q}
+                    </button>
+                  ))
+              }
             </div>
           )}
 

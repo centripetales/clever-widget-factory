@@ -56,6 +56,10 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
   const accumulatedChunksRef = useRef<string>('');
   // Track whether we're currently streaming via WebSocket
   const isStreamingRef = useRef(false);
+  // Track last user question and mode for save-on-complete
+  const lastQuestionRef = useRef<string>('');
+  const lastModeRef = useRef<MaxwellMode>('deep');
+  const lastStartTimeRef = useRef<number>(0);
 
   const resetSession = useCallback(() => {
     setMessages([]);
@@ -161,6 +165,19 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       isStreamingRef.current = false;
       setProgressStep(null);
       setIsLoading(false);
+
+      // Fire-and-forget: save interaction to backend
+      const durationMs = lastStartTimeRef.current ? Date.now() - lastStartTimeRef.current : null;
+      apiService.post('/maxwell/interactions', {
+        question: lastQuestionRef.current,
+        response: reply,
+        model: lastModeRef.current,
+        input_tokens: null,
+        output_tokens: null,
+        duration_ms: durationMs,
+        entity_type: sessionAttributes.entityType || null,
+        entity_id: sessionAttributes.entityId || null,
+      }).catch(() => {}); // Silent failure
     });
 
     const unsubProgress = subscribe('maxwell:progress', (payload: any) => {
@@ -216,6 +233,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       // --- WebSocket path: send via WS and stream response ---
       accumulatedChunksRef.current = '';
       isStreamingRef.current = true;
+      lastQuestionRef.current = text;
+      lastModeRef.current = mode;
+      lastStartTimeRef.current = Date.now();
 
       wsSendMessage('maxwell:chat', {
         message: enhancedText,
@@ -262,6 +282,18 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
         };
 
         setMessages(prev => [...prev, assistantMsg]);
+
+        // Fire-and-forget: save interaction to backend
+        apiService.post('/maxwell/interactions', {
+          question: text,
+          response: response.reply,
+          model: mode,
+          input_tokens: null,
+          output_tokens: null,
+          duration_ms: null,
+          entity_type: sessionAttributes.entityType || null,
+          entity_id: sessionAttributes.entityId || null,
+        }).catch(() => {}); // Silent failure
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Maxwell failed to respond. Please try again.';
         setError(message);

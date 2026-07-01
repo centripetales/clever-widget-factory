@@ -6341,6 +6341,125 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ shared: rows }) };
     }
 
+    // ========== MAXWELL INTERACTIONS ==========
+
+    if (path === '/maxwell/interactions' || path.match(/\/maxwell\/interactions\/[a-f0-9-]+$/)) {
+      const userId = authContext.cognito_user_id;
+
+      // POST /maxwell/interactions — save a new interaction
+      if (httpMethod === 'POST' && path === '/maxwell/interactions') {
+        const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+        const { question, response, model, input_tokens, output_tokens, duration_ms, entity_type, entity_id } = body;
+
+        if (!question || !response) {
+          return { statusCode: 400, headers, body: JSON.stringify({ error: 'question and response are required' }) };
+        }
+
+        const stateText = JSON.stringify({
+          type: 'maxwell_interaction',
+          question,
+          response,
+          model: model || null,
+          input_tokens: input_tokens || null,
+          output_tokens: output_tokens || null,
+          duration_ms: duration_ms || null,
+          deleted_at: null,
+        });
+
+        const client = await getDbClient();
+        try {
+          await client.query('BEGIN');
+
+          const stateResult = await client.query(
+            `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+             VALUES ($1, $2, $3::uuid, NOW())
+             RETURNING id`,
+            [organizationId, stateText, userId]
+          );
+          const stateId = stateResult.rows[0].id;
+
+          if (entity_type && entity_id) {
+            await client.query(
+              `INSERT INTO state_links (state_id, entity_type, entity_id)
+               VALUES ($1, $2, $3::uuid)`,
+              [stateId, entity_type, entity_id]
+            );
+          }
+
+          await client.query('COMMIT');
+
+          // Queue embedding (fire-and-forget)
+          sqs.send(new SendMessageCommand({
+            QueueUrl: EMBEDDINGS_QUEUE_URL,
+            MessageBody: JSON.stringify({
+              entity_type: 'state',
+              entity_id: stateId,
+              embedding_source: `${question}. ${response}`,
+              organization_id: organizationId,
+            }),
+          })).catch(err => console.error('Failed to queue maxwell interaction embedding:', err.message));
+
+          return { statusCode: 201, headers, body: JSON.stringify({ id: stateId }) };
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
+      }
+
+      // GET /maxwell/interactions — fetch recent starter questions
+      if (httpMethod === 'GET' && path === '/maxwell/interactions') {
+        const userId = authContext.cognito_user_id;
+        const rows = await queryJSON(
+          `SELECT s.id, s.state_text, s.captured_at
+           FROM states s
+           WHERE s.organization_id = $1
+             AND s.captured_by = $2::uuid
+             AND s.state_text LIKE '%"maxwell_interaction"%'
+             AND (s.state_text::jsonb->>'deleted_at') IS NULL
+           ORDER BY s.captured_at DESC
+           LIMIT 5`,
+          [organizationId, userId]
+        );
+
+        const questions = rows.map(row => {
+          try {
+            const parsed = JSON.parse(row.state_text);
+            return { id: row.id, question: parsed.question, captured_at: row.captured_at };
+          } catch {
+            return null;
+          }
+        }).filter(Boolean);
+
+        return { statusCode: 200, headers, body: JSON.stringify(questions) };
+      }
+
+      // DELETE /maxwell/interactions/:id — soft delete
+      if (httpMethod === 'DELETE' && path.match(/\/maxwell\/interactions\/[a-f0-9-]+$/)) {
+        const interactionId = path.split('/').pop();
+        const userId = authContext.cognito_user_id;
+
+        const result = await queryJSON(
+          `UPDATE states
+           SET state_text = jsonb_set(state_text::jsonb, '{deleted_at}', to_jsonb(NOW()::text))::text,
+               updated_at = NOW()
+           WHERE id = $1
+             AND organization_id = $2
+             AND captured_by = $3::uuid
+             AND state_text LIKE '%"maxwell_interaction"%'
+           RETURNING id`,
+          [interactionId, organizationId, userId]
+        );
+
+        if (result.length === 0) {
+          return { statusCode: 404, headers, body: JSON.stringify({ error: 'Not found or not yours' }) };
+        }
+
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+      }
+    }
+
     // Default 404
     return {
       statusCode: 404,
