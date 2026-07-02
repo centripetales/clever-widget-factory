@@ -7,7 +7,7 @@ import { BaseAction } from '@/types/actions';
 
 export interface EntityContext {
   entityId: string;
-  entityType: 'action' | 'tool' | 'part';
+  entityType: 'action' | 'tool' | 'part' | 'observation';
   entityName: string;
   policy: string;
   implementation: string;

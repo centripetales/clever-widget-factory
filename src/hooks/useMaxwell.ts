@@ -12,7 +12,7 @@ export interface MaxwellMessage {
 
 export interface MaxwellSessionAttributes {
   entityId: string;
-  entityType: 'tool' | 'part' | 'action';
+  entityType: 'tool' | 'part' | 'action' | 'observation';
   entityName: string;
   policy: string;
   implementation: string;
@@ -34,6 +34,7 @@ export interface UseMaxwellReturn {
   sessionId: string | null;
   sendMessage: (text: string, mode?: MaxwellMode) => Promise<void>;
   resetSession: () => void;
+  loadMessages: (msgs: MaxwellMessage[]) => void;
 }
 
 /**
@@ -167,13 +168,13 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       setIsLoading(false);
 
       // Fire-and-forget: save interaction to backend
-      const durationMs = lastStartTimeRef.current ? Date.now() - lastStartTimeRef.current : null;
+      const durationMs = payload?.durationMs || (lastStartTimeRef.current ? Date.now() - lastStartTimeRef.current : null);
       apiService.post('/maxwell/interactions', {
         question: lastQuestionRef.current,
         response: reply,
         model: lastModeRef.current,
-        input_tokens: null,
-        output_tokens: null,
+        input_tokens: payload?.inputTokens || null,
+        output_tokens: payload?.outputTokens || null,
         duration_ms: durationMs,
         entity_type: sessionAttributes.entityType || null,
         entity_id: sessionAttributes.entityId || null,
@@ -303,5 +304,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
     }
   }, [isLoading, messages, sessionId, sessionAttributes, status, wsSendMessage]);
 
-  return { messages, isLoading, progressStep, error, sessionId, sendMessage, resetSession };
+  const loadMessages = useCallback((msgs: MaxwellMessage[]) => {
+    setMessages(msgs);
+  }, []);
+
+  return { messages, isLoading, progressStep, error, sessionId, sendMessage, resetSession, loadMessages };
 }

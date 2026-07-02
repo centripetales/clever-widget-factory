@@ -6417,7 +6417,6 @@ exports.handler = async (event) => {
            WHERE s.organization_id = $1
              AND s.captured_by = $2::uuid
              AND s.state_text LIKE '%"maxwell_interaction"%'
-             AND (s.state_text::jsonb->>'deleted_at') IS NULL
            ORDER BY s.captured_at DESC
            LIMIT 5`,
           [organizationId, userId]
@@ -6426,7 +6425,7 @@ exports.handler = async (event) => {
         const questions = rows.map(row => {
           try {
             const parsed = JSON.parse(row.state_text);
-            return { id: row.id, question: parsed.question, captured_at: row.captured_at };
+            return { id: row.id, question: parsed.question, response: parsed.response, captured_at: row.captured_at };
           } catch {
             return null;
           }
@@ -6435,28 +6434,51 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify(questions) };
       }
 
-      // DELETE /maxwell/interactions/:id — soft delete
+      // DELETE /maxwell/interactions/:id — hard delete
       if (httpMethod === 'DELETE' && path.match(/\/maxwell\/interactions\/[a-f0-9-]+$/)) {
         const interactionId = path.split('/').pop();
         const userId = authContext.cognito_user_id;
 
-        const result = await queryJSON(
-          `UPDATE states
-           SET state_text = jsonb_set(state_text::jsonb, '{deleted_at}', to_jsonb(NOW()::text))::text,
-               updated_at = NOW()
-           WHERE id = $1
-             AND organization_id = $2
-             AND captured_by = $3::uuid
-             AND state_text LIKE '%"maxwell_interaction"%'
-           RETURNING id`,
-          [interactionId, organizationId, userId]
-        );
+        const client = await getDbClient();
+        try {
+          await client.query('BEGIN');
 
-        if (result.length === 0) {
-          return { statusCode: 404, headers, body: JSON.stringify({ error: 'Not found or not yours' }) };
+          // Delete from unified_embeddings first (FK or related)
+          await client.query(
+            `DELETE FROM unified_embeddings WHERE entity_type = 'state' AND entity_id = $1`,
+            [interactionId]
+          );
+
+          // Delete state_links
+          await client.query(
+            `DELETE FROM state_links WHERE state_id = $1`,
+            [interactionId]
+          );
+
+          // Delete the state itself (only if owned by user + org + is a maxwell_interaction)
+          const result = await client.query(
+            `DELETE FROM states
+             WHERE id = $1
+               AND organization_id = $2
+               AND captured_by = $3::uuid
+               AND state_text LIKE '%"maxwell_interaction"%'
+             RETURNING id`,
+            [interactionId, organizationId, userId]
+          );
+
+          await client.query('COMMIT');
+
+          if (result.rows.length === 0) {
+            return { statusCode: 404, headers, body: JSON.stringify({ error: 'Not found or not yours' }) };
+          }
+
+          return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        } finally {
+          client.release();
         }
-
-        return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
       }
     }
 

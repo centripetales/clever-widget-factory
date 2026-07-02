@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Trash2, Send, Users, Shield, User, Wrench, Star, Info, ToggleLeft, ToggleRight, ChevronDown, UserX, ArrowLeft, MessageSquare } from 'lucide-react';
+import { Trash2, Send, Users, Shield, User, Wrench, Star, Info, ToggleLeft, ToggleRight, ChevronDown, UserX, ArrowLeft, MessageSquare, Copy, Check, Link } from 'lucide-react';
 import { EditableOrganizationName } from '@/components/EditableOrganizationName';
 import { EditableMemberName } from '@/components/EditableMemberName';
 import { EditableOrganizationDomain } from '@/components/EditableOrganizationDomain';
@@ -60,6 +60,8 @@ const Organization = () => {
   
   const [newInviteEmail, setNewInviteEmail] = useState('');
   const [newInviteRole, setNewInviteRole] = useState('user');
+  const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   
   // Track which member is currently being updated
   const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
@@ -157,7 +159,30 @@ const Organization = () => {
     if (result) {
       setNewInviteEmail('');
       setNewInviteRole('user');
+      setLastInviteLink(result.inviteLink || null);
+      setLinkCopied(false);
       refetchMembers(); // Refresh to show new pending invitation
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!lastInviteLink) return;
+    try {
+      await navigator.clipboard.writeText(lastInviteLink);
+      setLinkCopied(true);
+      toast({ title: "Copied!", description: "Invite link copied to clipboard" });
+      setTimeout(() => setLinkCopied(false), 3000);
+    } catch {
+      // Fallback for browsers that don't support clipboard API
+      const textArea = document.createElement('textarea');
+      textArea.value = lastInviteLink;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setLinkCopied(true);
+      toast({ title: "Copied!", description: "Invite link copied to clipboard" });
+      setTimeout(() => setLinkCopied(false), 3000);
     }
   };
 
@@ -572,6 +597,40 @@ const Organization = () => {
                   </div>
                 </div>
               </form>
+
+              {/* Invite Link Display */}
+              {lastInviteLink && (
+                <div className="mt-4 p-4 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Link className="w-4 h-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-900 dark:text-green-100">Invite Link Ready</span>
+                  </div>
+                  <p className="text-xs text-green-700 dark:text-green-300 mb-3">
+                    Share this link with the invited user. It expires in 24 hours.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      readOnly
+                      value={lastInviteLink}
+                      className="text-xs font-mono bg-white dark:bg-gray-900"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopyInviteLink}
+                      className="shrink-0"
+                    >
+                      {linkCopied ? (
+                        <><Check className="w-4 h-4 mr-1 text-green-600" /> Copied</>
+                      ) : (
+                        <><Copy className="w-4 h-4 mr-1" /> Copy</>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 

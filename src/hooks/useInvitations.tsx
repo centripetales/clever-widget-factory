@@ -59,12 +59,21 @@ export function useInvitations(options?: UseInvitationsOptions) {
         role,
       });
 
-      toast({
-        title: "Success",
-        description: `Magic link invitation sent to ${email}`,
-      });
+      const response = data?.data || data;
 
-      return data;
+      if (response?.emailSent) {
+        toast({
+          title: "Invitation Sent",
+          description: `Invite email sent to ${email}`,
+        });
+      } else {
+        toast({
+          title: "Invitation Created",
+          description: `User added — copy the invite link below to share it with them.`,
+        });
+      }
+
+      return response;
     } catch (error) {
       console.error('Error sending invitation:', error);
       toast({
