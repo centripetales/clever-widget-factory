@@ -35,9 +35,11 @@ import { generateObservationUrl, copyToClipboard } from '@/lib/urlUtils';
 interface StatesInlineProps {
   entity_type: 'action' | 'part' | 'tool' | 'issue' | 'policy';
   entity_id: string;
+  /** The organization_id that owns this entity. When different from the active org, observations are fetched cross-org. */
+  source_organization_id?: string;
 }
 
-export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
+export function StatesInline({ entity_type, entity_id, source_organization_id }: StatesInlineProps) {
   const { toast } = useToast();
   const { uploadFiles } = useFileUpload();
   const { user } = useAuth();
@@ -50,8 +52,16 @@ export function StatesInline({ entity_type, entity_id }: StatesInlineProps) {
     return { url: r.url };
   }, [uploadFiles]);
 
+  // When entity belongs to a different org, pass view_shared to include cross-org observations
+  const isSharedEntity = source_organization_id && source_organization_id !== orgId;
+  const viewShared = isSharedEntity ? `${orgId},${source_organization_id}` : undefined;
+
   // Fetch states for this entity
-  const { data: states, isLoading, error } = useStates(orgId, { entity_type, entity_id });
+  const { data: states, isLoading, error } = useStates(orgId, {
+    entity_type,
+    entity_id,
+    ...(viewShared ? { view_shared: viewShared } : {}),
+  });
 
   // Fetch learning objectives when entity is an action
   const { data: learningData } = useLearningObjectives(
