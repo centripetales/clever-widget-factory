@@ -196,7 +196,12 @@ function composeStateEmbeddingSource(state) {
   }
 
   if (state.state_text) {
-    parts.push(state.state_text);
+    const extracted = extractMaxwellText(state.state_text);
+    if (extracted) {
+      parts.push(extracted);
+    } else {
+      parts.push(state.state_text);
+    }
   }
 
   if (state.photo_descriptions && state.photo_descriptions.length > 0) {
@@ -213,6 +218,27 @@ function composeStateEmbeddingSource(state) {
   }
 
   return parts.filter(Boolean).join('. ');
+}
+
+/**
+ * If state_text is a maxwell_interaction JSON string, extract only question + response.
+ * Returns the extracted text or null if not a maxwell_interaction.
+ */
+function extractMaxwellText(stateText) {
+  if (!stateText.includes('"maxwell_interaction"')) return null;
+
+  try {
+    const parsed = JSON.parse(stateText);
+    if (parsed.type === 'maxwell_interaction') {
+      const textParts = [];
+      if (parsed.question) textParts.push(parsed.question);
+      if (parsed.response) textParts.push(parsed.response);
+      return textParts.join('. ') || null;
+    }
+  } catch {
+    // Not valid JSON — treat as plain text
+  }
+  return null;
 }
 
 /**
@@ -251,5 +277,6 @@ module.exports = {
   composeIssueEmbeddingSource,
   composePolicyEmbeddingSource,
   composeStateEmbeddingSource,
-  composeFinancialRecordEmbeddingSource
+  composeFinancialRecordEmbeddingSource,
+  extractMaxwellText
 };

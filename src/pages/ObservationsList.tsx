@@ -37,6 +37,7 @@ import { generateObservationUrl, copyToClipboard } from '@/lib/urlUtils';
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import { SharedOrgSelector } from '@/components/SharedOrgSelector';
 import { useSharedOrgs } from '@/hooks/useSharedOrgs';
+import { PrismIcon } from '@/components/icons/PrismIcon';
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -618,6 +619,34 @@ export default function ObservationsList() {
                         ) : (
                           <Handshake className="h-4 w-4" />
                         )}
+                      </Button>
+                    )}
+
+                    {!obs.is_shared_inbound && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          const photoLines = obs.photos
+                            ?.map((p: any) => {
+                              const desc = p.photo_description || p.transcription?.replace(/^\[photo_analysis\]\s*/, '') || 'Photo';
+                              return p.photo_url ? `![${desc}](${p.photo_url})` : desc;
+                            })
+                            .filter(Boolean)
+                            .join('\n') || '';
+                          const context = {
+                            entityId: obs.id,
+                            entityType: 'observation' as any,
+                            entityName: `Observation from ${new Date(obs.captured_at).toLocaleDateString()}`,
+                            policy: obs.observation_text || '',
+                            implementation: photoLines,
+                          };
+                          window.dispatchEvent(new CustomEvent('open-maxwell', { detail: { context } }));
+                        }}
+                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        title="Ask Maxwell about this observation"
+                      >
+                        <PrismIcon size={16} />
                       </Button>
                     )}
 

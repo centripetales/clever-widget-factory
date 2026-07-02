@@ -55,8 +55,10 @@ const TONE_PROMPT = loadPrompt('tone.txt');
 const STORAGE_PROMPT = loadPrompt('storage.txt');
 const QUANTITATIVE_PROMPT = loadPrompt('quantitative.txt');
 const GENERAL_PROMPT = loadPrompt('general.txt');
+const RIGHTS_PROMPT = loadPrompt('rights.txt');
 
 // --- Keyword detection (same as maxwell-chat) ---
+const RIGHTS_KEYWORDS = /\b(rights?|file a|report|complain(t|ts)?|violat(e|ed|ion|ions)|charter|consumer|accountability|escalat(e|ion)|who do i report|arta|dti|npc|dole|ntc|due process|red tape|anti.?red.?tape|citizen.?s?.?charter|refund|return policy|labor (code|law|rights)|tenant.?s?.?rights?|landlord)\b/i;
 const STORAGE_KEYWORDS = /\b(store|storage|where.*put|where.*keep|organize|location|shelf|shed|toolbox|cabinet)\b/i;
 const QUANTITATIVE_KEYWORDS = /\b(roi|cost|revenue|profit|price|expense|budget|investment|how much|per month|per day|per week|earnings|income|margin|break.?even|spend|spent|purchase|purchased|bought|transaction|payment|balance)\b/i;
 
@@ -64,6 +66,7 @@ const QUANTITATIVE_KEYWORDS = /\b(roi|cost|revenue|profit|price|expense|budget|i
  * Detect question type and return the appropriate prompt fragment.
  */
 function detectPromptMode(message) {
+  if (RIGHTS_PROMPT && RIGHTS_KEYWORDS.test(message)) return RIGHTS_PROMPT;
   if (STORAGE_PROMPT && STORAGE_KEYWORDS.test(message)) return STORAGE_PROMPT;
   if (QUANTITATIVE_PROMPT && QUANTITATIVE_KEYWORDS.test(message)) return QUANTITATIVE_PROMPT;
   return GENERAL_PROMPT;
@@ -349,11 +352,25 @@ exports.handler = async (event) => {
 
     // Send the final complete response
     // We send a filtered lightweightTrace instead of the full trace array to stay under the 128 KB limit.
+    // Extract token usage from trace events
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const t of traceEvents) {
+      const usage = t.trace?.orchestrationTrace?.modelInvocationOutput?.metadata?.usage;
+      if (usage) {
+        inputTokens += usage.inputTokens || 0;
+        outputTokens += usage.outputTokens || 0;
+      }
+    }
+
     await postToConnection(apiGwClient, connectionId, buildEnvelope('maxwell:response_complete', {
       reply,
       sessionId: returnedSessionId || effectiveSessionId,
       traceCount: traceEvents.length,
       trace: lightweightTrace,
+      inputTokens,
+      outputTokens,
+      durationMs: tEnd - t0,
     }));
   } catch (err) {
     console.error('[MAXWELL-WORKER] Bedrock Agent error:', err);

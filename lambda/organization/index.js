@@ -326,13 +326,14 @@ exports.handler = async (event) => {
         [cognitoUserId, cognitoUserId, email, organizationId, role]
       );
 
-      // Generate invite token and send email (non-blocking — membership is already created)
+      // Generate invite token and link
+      const token = generateInviteToken(email, organizationId);
+      const appUrl = process.env.APP_URL || 'https://stargazer-farm.com';
+      const inviteLink = `${appUrl}/accept-invite?token=${token}`;
+
+      // Attempt to send email via SES (best-effort — may fail in sandbox mode)
       let emailSent = false;
       try {
-        const token = generateInviteToken(email, organizationId);
-        const appUrl = process.env.APP_URL || 'https://stargazer-farm.com';
-        const inviteLink = `${appUrl}/accept-invite?token=${token}`;
-
         await ses.send(new SendEmailCommand({
           Source: process.env.SES_FROM_EMAIL || 'noreply@stargazer-farm.com',
           Destination: { ToAddresses: [email] },
@@ -355,7 +356,7 @@ exports.handler = async (event) => {
         console.warn('Failed to send invite email:', emailErr.message);
       }
 
-      return { statusCode: 200, headers, body: JSON.stringify({ success: true, cognitoUserId, emailSent }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, cognitoUserId, emailSent, inviteLink }) };
     }
 
     // POST /api/validate-invite-token — validates a JWT invite token

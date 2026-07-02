@@ -17,13 +17,13 @@ interface InviteData {
   organizationName: string;
 }
 
-type Step = 'loading' | 'choose' | 'password' | 'success' | 'error';
+type Step = 'loading' | 'choose' | 'password' | 'success' | 'error' | 'already-signed-in';
 
 export default function AcceptInvite() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signIn, signInWithRedirect } = useAuth();
+  const { user, signIn, signInWithRedirect, signOut } = useAuth();
 
   const [step, setStep] = useState<Step>('loading');
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
@@ -70,6 +70,21 @@ export default function AcceptInvite() {
         const data = result?.data || result;
         if (data.valid) {
           setInviteData({ email: data.email, organizationId: data.organizationId, organizationName: data.organizationName });
+
+          // Check if user is already signed in as a different account
+          try {
+            const currentUser = await getCurrentUser();
+            const session = await (await import('aws-amplify/auth')).fetchAuthSession();
+            const tokenEmail = session.tokens?.idToken?.payload?.email as string | undefined;
+            const currentEmail = currentUser.signInDetails?.loginId || tokenEmail || currentUser.username;
+            if (currentEmail && currentEmail !== data.email) {
+              setStep('already-signed-in');
+              return;
+            }
+          } catch {
+            // Not signed in — continue to choose step
+          }
+
           setStep('choose');
         } else {
           setError(data.error || 'This invitation link is invalid or has expired.');
@@ -205,6 +220,42 @@ export default function AcceptInvite() {
                 Back
               </Button>
             </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // step === 'already-signed-in'
+  if (step === 'already-signed-in') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 to-secondary/5">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-500" />
+              Already Signed In
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Alert>
+              <AlertDescription>
+                You're currently signed in as a different user. To accept this invitation for <strong>{inviteData?.email}</strong>, you need to sign out first.
+              </AlertDescription>
+            </Alert>
+            <Button
+              onClick={async () => {
+                await signOut();
+                // Reload the page so the invite flow starts fresh
+                window.location.reload();
+              }}
+              className="w-full"
+            >
+              Sign Out & Continue
+            </Button>
+            <Button variant="ghost" onClick={() => navigate('/dashboard')} className="w-full">
+              Go to Dashboard Instead
+            </Button>
           </CardContent>
         </Card>
       </div>

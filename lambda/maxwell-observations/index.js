@@ -342,6 +342,8 @@ exports.handler = async (event) => {
   }
 
   const { dateFrom, dateTo } = params;
+  const limit = params.limit ? parseInt(params.limit, 10) : null;
+  const DEFAULT_LIMIT = 10;
 
   if (!entityId) {
     return buildActionGroupResponse(actionGroup, apiPath, httpMethod, 400, {
@@ -375,8 +377,18 @@ exports.handler = async (event) => {
     }
     const dateFilterClause = dateFilters.length > 0 ? `AND ${dateFilters.join(' AND ')}` : '';
 
+    // When date filters are provided, return all matching observations (no limit).
+    // When no date filters, apply a limit (default 10) to control LLM context costs.
+    // User can also pass an explicit limit parameter to override.
+    const hasDateFilter = dateFilters.length > 0;
+    const effectiveLimit = hasDateFilter ? null : (limit || DEFAULT_LIMIT);
+
+    // If limiting, fetch most recent N (DESC) then reverse for chronological output
+    const orderClause = effectiveLimit ? 'ORDER BY s.captured_at DESC' : 'ORDER BY s.captured_at ASC';
+    const limitClause = effectiveLimit ? `LIMIT ${effectiveLimit}` : '';
+
     const sql = `
-      SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) AS json_agg
+      SELECT COALESCE(json_agg(row_to_json(t) ORDER BY t.observed_at ASC), '[]'::json) AS json_agg
       FROM (
         SELECT
           s.state_text          AS observation_text,
@@ -428,7 +440,8 @@ exports.handler = async (event) => {
           AND sl.entity_id::text      = '${escapeLiteral(entityId)}'
           AND s.organization_id::text = '${escapeLiteral(organizationId)}'
           ${dateFilterClause}
-        ORDER BY s.captured_at ASC
+        ${orderClause}
+        ${limitClause}
       ) t;
     `;
 
