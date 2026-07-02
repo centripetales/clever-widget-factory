@@ -30,6 +30,7 @@ jobs:
         VITE_AWS_COGNITO_USER_POOL_ID: ${{ secrets.VITE_AWS_COGNITO_USER_POOL_ID }}
         VITE_AWS_COGNITO_CLIENT_ID: ${{ secrets.VITE_AWS_COGNITO_CLIENT_ID }}
         VITE_AWS_REGION: ${{ secrets.VITE_AWS_REGION }}
+        VITE_COGNITO_DOMAIN: cwf-stargazer.auth.us-west-2.amazoncognito.com
       run: npm run build -- --mode production
 
     - name: Setup Pages
