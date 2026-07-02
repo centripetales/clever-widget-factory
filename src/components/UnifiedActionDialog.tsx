@@ -1445,6 +1445,7 @@ export function ActionForm({
               <StatesInline
                 entity_type="action"
                 entity_id={action.id}
+                source_organization_id={(action as any).organization_id}
               />
             ) : (
               <div className="text-center text-muted-foreground py-8">
