@@ -4,6 +4,7 @@ import { apiService } from '@/lib/apiService';
 interface SavedQuestion {
   id: string;
   question: string;
+  response: string;
   captured_at: string;
 }
 

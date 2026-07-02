@@ -13,16 +13,23 @@ export function GlobalMaxwellFAB() {
   const location = useLocation();
   const isDashboard = location.pathname === '/' || location.pathname === '/dashboard';
   const isFinances = location.pathname === '/finances';
+  const isObservations = location.pathname === '/observations' || location.pathname.startsWith('/observations/');
 
   // Listen for open-maxwell events from other components (e.g. Dashboard header button)
   useEffect(() => {
-    const handleOpen = () => setIsPanelOpen(true);
+    const handleOpen = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.context) {
+        setCurrentContext(customEvent.detail.context);
+      }
+      setIsPanelOpen(true);
+    };
     window.addEventListener('open-maxwell', handleOpen);
     return () => window.removeEventListener('open-maxwell', handleOpen);
   }, []);
   
   // Keep component mounted on entity detail pages, dashboard, and finances, or if panel is already open.
-  if (!entityContext && !isDashboard && !isFinances && !isPanelOpen) {
+  if (!entityContext && !isDashboard && !isFinances && !isObservations && !isPanelOpen) {
     return null;
   }
   

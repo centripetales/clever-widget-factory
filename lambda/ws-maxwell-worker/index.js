@@ -352,11 +352,25 @@ exports.handler = async (event) => {
 
     // Send the final complete response
     // We send a filtered lightweightTrace instead of the full trace array to stay under the 128 KB limit.
+    // Extract token usage from trace events
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const t of traceEvents) {
+      const usage = t.trace?.orchestrationTrace?.modelInvocationOutput?.metadata?.usage;
+      if (usage) {
+        inputTokens += usage.inputTokens || 0;
+        outputTokens += usage.outputTokens || 0;
+      }
+    }
+
     await postToConnection(apiGwClient, connectionId, buildEnvelope('maxwell:response_complete', {
       reply,
       sessionId: returnedSessionId || effectiveSessionId,
       traceCount: traceEvents.length,
       trace: lightweightTrace,
+      inputTokens,
+      outputTokens,
+      durationMs: tEnd - t0,
     }));
   } catch (err) {
     console.error('[MAXWELL-WORKER] Bedrock Agent error:', err);
