@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, CheckCircle, XCircle, Wrench, Box, Flag, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown } from 'lucide-react';
+import { LogOut, CheckCircle, XCircle, Wrench, Box, Flag, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
@@ -16,7 +16,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
 import { offlineQueryConfig } from '@/lib/queryConfig';
 import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig } from '@/lib/assetQueryConfigs';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
@@ -78,19 +78,7 @@ export default function Dashboard() {
     }
   };
 
-  // Long-press handler for sign out — prevents accidental taps on mobile
-  const signOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleSignOutPointerDown = () => {
-    signOutTimerRef.current = setTimeout(() => {
-      handleSignOut();
-    }, 500);
-  };
-  const handleSignOutPointerUp = () => {
-    if (signOutTimerRef.current) {
-      clearTimeout(signOutTimerRef.current);
-      signOutTimerRef.current = null;
-    }
-  };
+
 
   const handleClearCache = async () => {
     // Clear TanStack Query cache
@@ -254,10 +242,7 @@ export default function Dashboard() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  onPointerDown={handleSignOutPointerDown}
-                  onPointerUp={handleSignOutPointerUp}
-                  onPointerLeave={handleSignOutPointerUp}
-                  onClick={(e) => e.preventDefault()}
+                  onClick={handleSignOut}
                   variant="outline"
                   size="sm"
                   className="p-2"
@@ -267,7 +252,7 @@ export default function Dashboard() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Hold to sign out</p>
+                <p>Sign out</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -309,6 +294,23 @@ export default function Dashboard() {
                 </Card>
               );
             })}
+            {!organization && (
+              <Card className="border border-dashed border-border/50 bg-muted/30">
+                <CardHeader className="text-center">
+                  <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                    <Loader2 className="h-8 w-8 text-muted-foreground animate-spin" />
+                  </div>
+                  <CardTitle className="text-xl text-muted-foreground">Loading...</CardTitle>
+                  <CardDescription>Loading additional modules</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button className="w-full" variant="outline" disabled>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Please wait
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
 

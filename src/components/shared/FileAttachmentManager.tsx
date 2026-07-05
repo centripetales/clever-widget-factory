@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Paperclip, X } from "lucide-react";
 import { useFileUpload } from "@/hooks/useFileUpload";
-import { getThumbnailUrl } from "@/lib/imageUtils";
+import { getThumbnailUrl, getImageUrl, getOriginalUrl } from "@/lib/imageUtils";
 
 interface FileAttachmentManagerProps {
   attachments: string[];
@@ -93,7 +93,7 @@ export const FileAttachmentManager = ({
                   {isPdf ? (
                     <div
                       className="h-16 w-16 flex items-center justify-center bg-muted rounded border cursor-pointer hover:bg-muted/80"
-                      onClick={() => window.open(url, '_blank')}
+                      onClick={() => window.open(getImageUrl(url) || url, '_blank')}
                     >
                       <svg className="h-8 w-8 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -104,7 +104,7 @@ export const FileAttachmentManager = ({
                       src={getThumbnailUrl(url) || ''}
                       alt={`Attachment ${index + 1}`}
                       className="h-16 w-16 object-cover rounded border cursor-pointer"
-                      onClick={() => window.open(url, '_blank')}
+                      onClick={() => window.open(getOriginalUrl(url) || getImageUrl(url) || url, '_blank')}
                       onError={(e) => {
                         // Fallback to original image if thumbnail doesn't exist yet
                         const target = e.target as HTMLImageElement;
