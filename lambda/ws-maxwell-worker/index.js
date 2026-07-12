@@ -26,7 +26,9 @@
  */
 
 const { BedrockAgentRuntimeClient, InvokeAgentCommand } = require('@aws-sdk/client-bedrock-agent-runtime');
+const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
@@ -36,6 +38,71 @@ const bedrockClient = new BedrockAgentRuntimeClient({
 });
 const AGENT_ID = process.env.MAXWELL_AGENT_ID;
 const AGENT_ALIAS_ID = process.env.MAXWELL_AGENT_ALIAS_ID;
+
+// --- Bedrock Runtime (direct InvokeModel for image analysis) ---
+const bedrockRuntime = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION || 'us-west-2' });
+
+// Helper to download image from S3 public URL and return base64 + mime type
+function downloadPhoto(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`Failed to download photo: HTTP ${res.statusCode}`));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        const base64Data = buffer.toString('base64');
+        let mimeType = 'image/jpeg';
+        if (url.endsWith('.png')) mimeType = 'image/png';
+        else if (url.endsWith('.webp')) mimeType = 'image/webp';
+        resolve({ base64Data, mimeType });
+      });
+    }).on('error', reject);
+  });
+}
+
+// Analyze image using direct InvokeModel (bypasses Bedrock Agent limitation)
+async function analyzeImageForAssetCreation(imageUrl) {
+  const imgData = await downloadPhoto(imageUrl);
+  const body = {
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: 800,
+    temperature: 0.1,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: imgData.mimeType, data: imgData.base64Data }
+        },
+        {
+          type: 'text',
+          text: 'You are helping register this item as an asset. Describe what you see concisely: what the item is, brand/model if visible, serial numbers or text, physical condition, color, material, approximate size, and any visible storage context (shelf, room, toolbox). If this is a structure/container that could store other items, note that. Keep it under 200 words.'
+        }
+      ]
+    }]
+  };
+
+  const command = new InvokeModelCommand({
+    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: JSON.stringify(body)
+  });
+
+  const response = await bedrockRuntime.send(command);
+  const result = JSON.parse(new TextDecoder().decode(response.body));
+  if (!result.content || result.content.length === 0) {
+    throw new Error('Empty response from image analysis');
+  }
+  return {
+    text: result.content[0].text,
+    usage: result.usage || { input_tokens: 0, output_tokens: 0 },
+  };
+}
 
 // --- Prompt loading (same pattern as lambda/maxwell-chat/index.js) ---
 const PROMPT_SET = 'sonnet46';
@@ -56,16 +123,19 @@ const STORAGE_PROMPT = loadPrompt('storage.txt');
 const QUANTITATIVE_PROMPT = loadPrompt('quantitative.txt');
 const GENERAL_PROMPT = loadPrompt('general.txt');
 const RIGHTS_PROMPT = loadPrompt('rights.txt');
+const ASSET_CREATION_PROMPT = loadPrompt('asset-creation.txt');
 
 // --- Keyword detection (same as maxwell-chat) ---
 const RIGHTS_KEYWORDS = /\b(rights?|file a|report|complain(t|ts)?|violat(e|ed|ion|ions)|charter|consumer|accountability|escalat(e|ion)|who do i report|arta|dti|npc|dole|ntc|due process|red tape|anti.?red.?tape|citizen.?s?.?charter|refund|return policy|labor (code|law|rights)|tenant.?s?.?rights?|landlord)\b/i;
 const STORAGE_KEYWORDS = /\b(store|storage|where.*put|where.*keep|organize|location|shelf|shed|toolbox|cabinet)\b/i;
 const QUANTITATIVE_KEYWORDS = /\b(roi|cost|revenue|profit|price|expense|budget|investment|how much|per month|per day|per week|earnings|income|margin|break.?even|spend|spent|purchase|purchased|bought|transaction|payment|balance)\b/i;
+const ASSET_CREATION_KEYWORDS = /\b(add|create|register|new tool|new part|log this|add to inventory|track this)\b/i;
 
 /**
  * Detect question type and return the appropriate prompt fragment.
  */
-function detectPromptMode(message) {
+function detectPromptMode(message, hasImage) {
+  if (hasImage && ASSET_CREATION_PROMPT && ASSET_CREATION_KEYWORDS.test(message)) return ASSET_CREATION_PROMPT;
   if (RIGHTS_PROMPT && RIGHTS_KEYWORDS.test(message)) return RIGHTS_PROMPT;
   if (STORAGE_PROMPT && STORAGE_KEYWORDS.test(message)) return STORAGE_PROMPT;
   if (QUANTITATIVE_PROMPT && QUANTITATIVE_KEYWORDS.test(message)) return QUANTITATIVE_PROMPT;
@@ -75,8 +145,8 @@ function detectPromptMode(message) {
 /**
  * Build the full instruction prefix for the message.
  */
-function buildInstructionPrefix(message) {
-  const modePrompt = detectPromptMode(message);
+function buildInstructionPrefix(message, hasImage) {
+  const modePrompt = detectPromptMode(message, hasImage);
   return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
 }
 
@@ -168,7 +238,7 @@ exports.handler = async (event) => {
     message: event.payload?.message?.substring(0, 100),
   }));
 
-  const { connectionId, payload, endpoint, organizationId } = event;
+  const { connectionId, payload, endpoint, organizationId, cognitoUserId } = event;
   const apiGwClient = new ApiGatewayManagementApiClient({ endpoint, region: 'us-west-2' });
 
   // Validate organization context
@@ -200,10 +270,30 @@ exports.handler = async (event) => {
   }
 
   const { message, sessionId, sessionAttributes = {}, history } = payload;
+  const hasImage = !!payload.imageUrl;
+
+  // Analyze any attached image directly via InvokeModel (Bedrock Agent can't see images)
+  let imageAnalysis = null;
+  let imageAnalysisUsage = null;
+  if (hasImage) {
+    try {
+      console.log('[MAXWELL-WORKER] Analyzing attached image...');
+      const analysisResult = await analyzeImageForAssetCreation(payload.imageUrl);
+      imageAnalysis = analysisResult.text;
+      imageAnalysisUsage = analysisResult.usage;
+      console.log(`[MAXWELL-WORKER] Image analysis complete (${imageAnalysisUsage.input_tokens}in/${imageAnalysisUsage.output_tokens}out): ${imageAnalysis.substring(0, 100)}...`);
+    } catch (err) {
+      console.error('[MAXWELL-WORKER] Image analysis failed:', err.message);
+    }
+  }
 
   // Build enhanced message with instruction prefix and entity context
-  let enhancedMessage = buildInstructionPrefix(message);
-  if (sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
+  let enhancedMessage = buildInstructionPrefix(message, hasImage);
+  const isAssetCreation = hasImage && ASSET_CREATION_KEYWORDS.test(message);
+
+  // Skip entity context for asset creation — the user is creating a new item,
+  // not asking about the current entity. This saves significant tokens.
+  if (!isAssetCreation && sessionAttributes.entityId && sessionAttributes.entityType && sessionAttributes.entityName) {
     const contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
     const policyText = normalizeContextText(sessionAttributes.policy);
     if (policyText) {
@@ -216,7 +306,13 @@ exports.handler = async (event) => {
     enhancedMessage += `[Context: ${contextParts.join('. ')}] `;
   }
   enhancedMessage += `[Today's date: ${new Date().toISOString().split('T')[0]}] `;
+  if (imageAnalysis) {
+    enhancedMessage += `[Image Analysis: ${imageAnalysis}] `;
+  }
   enhancedMessage += message;
+  if (payload.imageUrl) {
+    enhancedMessage += ` [Image URL: ${payload.imageUrl}]`;
+  }
 
   const mode = payload.mode || 'deep';
   const targetAliasId = mode === 'quick'
@@ -231,7 +327,9 @@ exports.handler = async (event) => {
     policy: normalizeContextText(sessionAttributes.policy),
     implementation: normalizeContextText(sessionAttributes.implementation, 999999),
     organization_id: organizationId,
+    cognito_user_id: cognitoUserId || '',
     current_date: new Date().toISOString().split('T')[0],
+    ...(payload.imageUrl ? { image_url: payload.imageUrl } : {}),
   };
 
   // Convert all session attribute values to strings (Bedrock requirement)
@@ -244,7 +342,15 @@ exports.handler = async (event) => {
   // Generate a session ID if not provided (Bedrock requires it)
   const effectiveSessionId = sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
-  const bedrockHistory = history && Array.isArray(history) && history.length > 0
+  // Only send conversationHistory when resuming a session from the frontend
+  // (i.e., the frontend already has a sessionId from a prior exchange).
+  // On follow-up turns within an active session, the Bedrock Agent already
+  // maintains conversation memory server-side — sending history again would
+  // double-count tokens and inflate cost.
+  const isResumedSession = !!sessionId; // frontend sent a sessionId = continuing existing session
+  const isFirstTurnWithHistory = !sessionId && history && Array.isArray(history) && history.length > 0;
+
+  const bedrockHistory = isFirstTurnWithHistory
     ? {
         messages: history.map(h => ({
           role: h.role === 'user' ? 'user' : 'assistant',
@@ -253,16 +359,19 @@ exports.handler = async (event) => {
       }
     : undefined;
 
+  // Build sessionState for Bedrock Agent
+  const sessionState = {
+    sessionAttributes: stringifiedAttributes,
+    ...(bedrockHistory ? { conversationHistory: bedrockHistory } : {}),
+  };
+
   const command = new InvokeAgentCommand({
     agentId: AGENT_ID,
     agentAliasId: targetAliasId,
     sessionId: effectiveSessionId,
     inputText: enhancedMessage,
     enableTrace: true,
-    sessionState: {
-      sessionAttributes: stringifiedAttributes,
-      conversationHistory: bedrockHistory,
-    },
+    sessionState,
   });
 
   try {
@@ -361,6 +470,12 @@ exports.handler = async (event) => {
         inputTokens += usage.inputTokens || 0;
         outputTokens += usage.outputTokens || 0;
       }
+    }
+
+    // Add image analysis tokens if applicable
+    if (imageAnalysisUsage) {
+      inputTokens += imageAnalysisUsage.input_tokens || 0;
+      outputTokens += imageAnalysisUsage.output_tokens || 0;
     }
 
     await postToConnection(apiGwClient, connectionId, buildEnvelope('maxwell:response_complete', {

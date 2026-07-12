@@ -1,0 +1,233 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Maxwell Asset Creator API",
+    "version": "1.0.0",
+    "description": "Creates tools and parts in CWF from Maxwell's conversational asset creation workflow"
+  },
+  "paths": {
+    "/create-asset": {
+      "post": {
+        "operationId": "createAsset",
+        "description": "Create a new tool or part asset with an initial observation state. Use this ONLY when the user explicitly confirms the proposal (says 'yes', 'create it', 'looks good', 'confirm'). Never invoke without user confirmation.",
+        "parameters": [
+          {
+            "name": "asset_type",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "enum": ["tool", "part"] },
+            "description": "Whether to create a tool or a part"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Name of the asset"
+          },
+          {
+            "name": "description",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Physical characteristics, condition, brand, model"
+          },
+          {
+            "name": "storage_location",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Where the item is stored"
+          },
+          {
+            "name": "serial_number",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Visible serial/model number (tools only)"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["available", "in_use", "maintenance", "damaged"] },
+            "description": "Current status (tools only, default: available)"
+          },
+          {
+            "name": "is_location",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "\"true\" or \"false\", whether this tool is a storage location (tools only)"
+          },
+          {
+            "name": "image_url",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "S3 URL of the uploaded photo"
+          },
+          {
+            "name": "policy",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Care instructions, usage notes"
+          },
+          {
+            "name": "initial_condition_text",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "AI-generated description for the initial observation"
+          },
+          {
+            "name": "photo_description",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "AI-generated description of the photo content"
+          },
+          {
+            "name": "current_quantity",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Current quantity (parts only, default: 1)"
+          },
+          {
+            "name": "minimum_quantity",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Reorder threshold (parts only)"
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Unit of measurement (parts only: pieces, kg, liters, meters)"
+          },
+          {
+            "name": "cost_per_unit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Cost per unit (parts only)"
+          },
+          {
+            "name": "sellable",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "\"true\" or \"false\" (parts only)"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Asset created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "asset_type": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get-categories": {
+      "get": {
+        "operationId": "getCategories",
+        "description": "Get all existing categories from tools and parts in the organization. Use this to suggest category options to the user.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of categories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "categories": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get-image-metadata": {
+      "get": {
+        "operationId": "getImageMetadata",
+        "description": "Get GPS and EXIF metadata extracted from an uploaded photo. Call this after the user uploads an image to check if location data is available.",
+        "parameters": [
+          {
+            "name": "photo_url",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The S3 URL or filename of the uploaded photo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "has_gps": { "type": "boolean" },
+                    "gps_latitude": { "type": "number" },
+                    "gps_longitude": { "type": "number" },
+                    "gps_altitude": { "type": "number" },
+                    "captured_at": { "type": "string" },
+                    "device": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -654,8 +654,16 @@ export default function ObservationsList() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => navigate(`/observations/edit/${obs.id}`)}
+                        onClick={() => {
+                          const assetLink = obs.links?.find((link: any) => link.entity_type === 'tool' || link.entity_type === 'part');
+                          if (assetLink) {
+                            navigate(`/combined-assets/${assetLink.entity_id}`);
+                          } else {
+                            navigate(`/observations/edit/${obs.id}`);
+                          }
+                        }}
                         className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        title={obs.links?.some((link: any) => link.entity_type === 'tool' || link.entity_type === 'part') ? 'Edit linked asset' : 'Edit observation'}
                       >
                         <Edit2 className="h-4 w-4" />
                       </Button>

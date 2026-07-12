@@ -29,6 +29,7 @@ import Dashboard from "./pages/Dashboard";
 
 import InventorySummary from "./pages/InventorySummary";
 import CombinedAssets from "./pages/CombinedAssets";
+import AssetPage from "./pages/AssetPage";
 import AddObservation from "./pages/AddObservation";
 import ObservationsList from "./pages/ObservationsList";
 import Missions from "./pages/Missions";
@@ -144,6 +145,16 @@ function AppContent() {
             <ProtectedRoute>
               <FeatureGuardRoute featureKey="assets" featureName="Assets">
                 <CombinedAssets />
+              </FeatureGuardRoute>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/combined-assets/:id"
+          element={
+            <ProtectedRoute>
+              <FeatureGuardRoute featureKey="assets" featureName="Assets">
+                <AssetPage />
               </FeatureGuardRoute>
             </ProtectedRoute>
           }
