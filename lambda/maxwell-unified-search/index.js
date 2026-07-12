@@ -41,9 +41,28 @@ function buildActionGroupResponse(actionGroup, apiPath, httpMethod, statusCode, 
 }
 
 /**
+ * Map entity type to its relevant date column for filtering.
+ */
+function getDateColumn(entityType) {
+  switch (entityType) {
+    case 'action': return 'a.created_at';
+    case 'financial_record': return 'fr.transaction_date';
+    case 'part': return 'p.created_at';
+    case 'tool': return 't.created_at';
+    case 'issue': return 'i.created_at';
+    case 'policy': return 'po.created_at';
+    case 'state':
+    case 'action_existing_state':
+    case 'state_space_model':
+      return 'ue.created_at';
+    default: return null;
+  }
+}
+
+/**
  * Build a per-type subquery for the UNION ALL.
  */
-function buildSubquery(entityType, embeddingVector, safeOrgId, perTypeLimit) {
+function buildSubquery(entityType, embeddingVector, safeOrgId, perTypeLimit, dateFrom, dateTo) {
   const baseSelect = `
   ue.entity_type,
   ue.entity_id,
@@ -55,6 +74,16 @@ function buildSubquery(entityType, embeddingVector, safeOrgId, perTypeLimit) {
 
   const orderLimit = `ORDER BY similarity DESC
   LIMIT ${perTypeLimit}`;
+
+  // Build date filter based on entity type's relevant date column
+  let dateFilter = '';
+  if (dateFrom || dateTo) {
+    const dateCol = getDateColumn(entityType);
+    if (dateCol) {
+      if (dateFrom) dateFilter += ` AND ${dateCol} >= '${escapeLiteral(dateFrom)}'::timestamptz`;
+      if (dateTo) dateFilter += ` AND ${dateCol} <= '${escapeLiteral(dateTo)}'::timestamptz + interval '1 day'`;
+    }
+  }
 
   switch (entityType) {
     case 'part':
@@ -71,7 +100,7 @@ function buildSubquery(entityType, embeddingVector, safeOrgId, perTypeLimit) {
   ) AS details
 FROM unified_embeddings ue
 JOIN parts p ON ue.entity_id = p.id AND p.organization_id = '${safeOrgId}'::uuid
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     case 'tool':
@@ -85,7 +114,7 @@ ${orderLimit})`;
   ) AS details
 FROM unified_embeddings ue
 JOIN tools t ON ue.entity_id = t.id AND t.organization_id = '${safeOrgId}'::uuid
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     case 'action':
@@ -99,7 +128,7 @@ ${orderLimit})`;
   ) AS details
 FROM unified_embeddings ue
 JOIN actions a ON ue.entity_id = a.id AND a.organization_id = '${safeOrgId}'::uuid
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     case 'issue':
@@ -112,7 +141,7 @@ ${orderLimit})`;
   ) AS details
 FROM unified_embeddings ue
 JOIN issues i ON ue.entity_id = i.id AND i.organization_id = '${safeOrgId}'::uuid
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     case 'policy':
@@ -125,7 +154,7 @@ ${orderLimit})`;
   ) AS details
 FROM unified_embeddings ue
 JOIN policy po ON ue.entity_id = po.id
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     case 'financial_record':
@@ -142,7 +171,7 @@ JOIN financial_records fr ON ue.entity_id = fr.id AND fr.organization_id = '${sa
 JOIN state_links sl ON sl.entity_id = fr.id AND sl.entity_type = 'financial_record'
 JOIN states s ON s.id = sl.state_id
 LEFT JOIN organization_members om ON fr.created_by::text = om.cognito_user_id::text AND om.organization_id = fr.organization_id
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
     // state, action_existing_state, state_space_model — embedding-only types
@@ -150,7 +179,7 @@ ${orderLimit})`;
       return `(SELECT ${baseSelect},
   json_build_object('description', ue.embedding_source) AS details
 FROM unified_embeddings ue
-WHERE ${baseWhere}
+WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
   }
 }
@@ -169,7 +198,7 @@ exports.handler = async (event) => {
 
   // Parse parameters from Bedrock Action Group format
   const params = parseActionGroupParams(event);
-  const { query, entity_types, per_type_limit } = params;
+  const { query, entity_types, per_type_limit, date_from, date_to } = params;
 
   // Validate required parameters
   if (!query || query.trim() === '') {
@@ -213,7 +242,7 @@ exports.handler = async (event) => {
 
     // Build UNION ALL SQL — one subquery per active entity type
     const subqueries = activeTypes.map((type) =>
-      buildSubquery(type, embeddingVector, safeOrgId, perTypeLimit)
+      buildSubquery(type, embeddingVector, safeOrgId, perTypeLimit, date_from, date_to)
     );
 
     const sql = `SELECT * FROM (

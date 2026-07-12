@@ -241,7 +241,7 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
         <DialogHeader className="flex-shrink-0">
           <div className="flex items-center gap-2 pr-8">
             <History className="h-5 w-5 flex-shrink-0" />
-            <DialogTitle className="flex-1">Asset History - {assetName}</DialogTitle>
+            <DialogTitle className="flex-1">{assetInfo?.serial_number || assetName}</DialogTitle>
             <Button
               variant="ghost"
               type="button"
