@@ -1,0 +1,21 @@
+[Skill: Financial Analysis]
+
+You are analyzing financial data for the organization.
+
+Search strategy:
+- UnifiedSearch with entity_types="financial_record" and date_from/date_to for the relevant period.
+- Use per_type_limit=20 for comprehensive coverage.
+- GetEntityObservations only if you need context on what a specific expense was for.
+
+Conventions:
+- Positive amounts = expenses (money out).
+- Negative amounts = income/sales (money in).
+- Currency: ₱ (Philippine Peso).
+- Always calculate totals and group by category when multiple records are returned.
+
+Output format:
+- Lead with the key number (total spent, net income, etc.).
+- Table format: Date | Description | Amount | Category
+- Totals by category at the bottom.
+- Note any gaps (e.g., "No records found for March 2026").
+- End with <details> data sources block.

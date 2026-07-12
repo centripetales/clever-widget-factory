@@ -104,7 +104,7 @@ async function analyzeImageForAssetCreation(imageUrl) {
   };
 }
 
-// --- Prompt loading (same pattern as lambda/maxwell-chat/index.js) ---
+// --- Prompt loading ---
 const PROMPT_SET = 'sonnet46';
 const PROMPTS_DIR = path.join(__dirname, 'prompts', PROMPT_SET);
 console.log(`[MAXWELL-WORKER] Loading prompt set: ${PROMPT_SET} from ${PROMPTS_DIR}`);
@@ -118,36 +118,42 @@ const loadPrompt = (name) => {
   }
 };
 
-const TONE_PROMPT = loadPrompt('tone.txt');
-const STORAGE_PROMPT = loadPrompt('storage.txt');
-const QUANTITATIVE_PROMPT = loadPrompt('quantitative.txt');
-const GENERAL_PROMPT = loadPrompt('general.txt');
-const RIGHTS_PROMPT = loadPrompt('rights.txt');
-const ASSET_CREATION_PROMPT = loadPrompt('asset-creation.txt');
+// --- Skill prompts (Option C architecture) ---
+const SKILL_GENERAL_QA = loadPrompt('skill-general-qa.txt');
+const SKILL_COMPLIANCE = loadPrompt('skill-compliance-estimator.txt');
+const SKILL_FINANCIAL = loadPrompt('skill-financial-analysis.txt');
+const SKILL_ASSET_CREATION = loadPrompt('asset-creation.txt');
+const SKILL_RIGHTS = loadPrompt('rights.txt');
 
-// --- Keyword detection (same as maxwell-chat) ---
-const RIGHTS_KEYWORDS = /\b(rights?|file a|report|complain(t|ts)?|violat(e|ed|ion|ions)|charter|consumer|accountability|escalat(e|ion)|who do i report|arta|dti|npc|dole|ntc|due process|red tape|anti.?red.?tape|citizen.?s?.?charter|refund|return policy|labor (code|law|rights)|tenant.?s?.?rights?|landlord)\b/i;
-const STORAGE_KEYWORDS = /\b(store|storage|where.*put|where.*keep|organize|location|shelf|shed|toolbox|cabinet)\b/i;
-const QUANTITATIVE_KEYWORDS = /\b(roi|cost|revenue|profit|price|expense|budget|investment|how much|per month|per day|per week|earnings|income|margin|break.?even|spend|spent|purchase|purchased|bought|transaction|payment|balance)\b/i;
+// --- Keyword detection for skill routing ---
+const COMPLIANCE_KEYWORDS = /\b(compliance|bir|sec|denr|arta|nwrb|sss|pagibig|philhealth|government|gov|permit|filing|regulation|regulatory)\b/i;
+const FINANCIAL_KEYWORDS = /\b(roi|cost|revenue|profit|price|expense|budget|investment|how much|per month|per day|per week|earnings|income|margin|break.?even|spend|spent|purchase|purchased|bought|transaction|payment|balance|financial)\b/i;
 const ASSET_CREATION_KEYWORDS = /\b(add|create|register|new tool|new part|log this|add to inventory|track this)\b/i;
+const RIGHTS_KEYWORDS = /\b(rights?|file a|report|complain(t|ts)?|violat(e|ed|ion|ions)|charter|consumer|accountability|escalat(e|ion)|who do i report|dti|npc|dole|ntc|due process|red tape|anti.?red.?tape|citizen.?s?.?charter|refund|return policy|labor (code|law|rights)|tenant.?s?.?rights?|landlord)\b/i;
 
 /**
- * Detect question type and return the appropriate prompt fragment.
+ * Detect skill based on message intent. Returns the skill prompt to prepend.
+ * Priority order matters — more specific skills take precedence.
  */
-function detectPromptMode(message, hasImage) {
-  if (hasImage && ASSET_CREATION_PROMPT && ASSET_CREATION_KEYWORDS.test(message)) return ASSET_CREATION_PROMPT;
-  if (RIGHTS_PROMPT && RIGHTS_KEYWORDS.test(message)) return RIGHTS_PROMPT;
-  if (STORAGE_PROMPT && STORAGE_KEYWORDS.test(message)) return STORAGE_PROMPT;
-  if (QUANTITATIVE_PROMPT && QUANTITATIVE_KEYWORDS.test(message)) return QUANTITATIVE_PROMPT;
-  return GENERAL_PROMPT;
+function detectSkill(message, hasImage) {
+  // Asset creation: image + creation intent
+  if (hasImage && SKILL_ASSET_CREATION && ASSET_CREATION_KEYWORDS.test(message)) return SKILL_ASSET_CREATION;
+  // Compliance: government/regulatory questions
+  if (SKILL_COMPLIANCE && COMPLIANCE_KEYWORDS.test(message)) return SKILL_COMPLIANCE;
+  // Rights: consumer/labor rights
+  if (SKILL_RIGHTS && RIGHTS_KEYWORDS.test(message)) return SKILL_RIGHTS;
+  // Financial: cost/expense/revenue questions (only if not compliance)
+  if (SKILL_FINANCIAL && FINANCIAL_KEYWORDS.test(message)) return SKILL_FINANCIAL;
+  // Default: general Q&A
+  return SKILL_GENERAL_QA;
 }
 
 /**
- * Build the full instruction prefix for the message.
+ * Build the instruction prefix for the message.
  */
 function buildInstructionPrefix(message, hasImage) {
-  const modePrompt = detectPromptMode(message, hasImage);
-  return `[Instructions: ${TONE_PROMPT}\n\n${modePrompt}]\n\n`;
+  const skill = detectSkill(message, hasImage);
+  return `${skill}\n\n`;
 }
 
 function normalizeContextText(value, maxLength = 900) {
