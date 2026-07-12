@@ -12,6 +12,7 @@ import InventoryTrackingChart from '@/components/InventoryTrackingChart';
 import InventoryUsageHeatmap from '@/components/InventoryUsageHeatmap';
 import ActionUpdatesChart from '@/components/ActionUpdatesChart';
 import ObservationsChart from '@/components/ObservationsChart';
+import TimeAllocationChart from '@/components/TimeAllocationChart';
 import { EnergeiaSchema } from '@/components/EnergeiaSchema/EnergeiaSchema';
 // Removed IssuesCreatedChart
 import { useEnhancedStrategicAttributes, type EnhancedAttributeAnalytics } from '@/hooks/useEnhancedStrategicAttributes';
@@ -301,6 +302,13 @@ export default function AnalyticsDashboard() {
 
           {/* Observations (stacked bar) */}
           <ObservationsChart
+            startDate={effectiveStartDate}
+            endDate={effectiveEndDate}
+            selectedUsers={radarSelectedUsers}
+          />
+
+          {/* Time Allocation (AI-computed daily summaries) */}
+          <TimeAllocationChart
             startDate={effectiveStartDate}
             endDate={effectiveEndDate}
             selectedUsers={radarSelectedUsers}

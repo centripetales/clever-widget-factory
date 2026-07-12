@@ -1,4 +1,7 @@
 const { Client } = require('pg');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-west-2' });
 
 const getDbConfig = () => ({
   host: process.env.DB_HOST || 'cwf-dev-postgres.ctmma86ykgeb.us-west-2.rds.amazonaws.com',
@@ -171,6 +174,165 @@ exports.handler = async (event) => {
       };
     }
     
+    // Time summaries endpoint (daily AI-computed time perspectives)
+    if (path.endsWith('/analytics/time-summaries') && method === 'GET') {
+      const { start_date, end_date, user_id, tags, boundary_type, confidence } = queryParams;
+
+      if (!start_date || !end_date) {
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: 'start_date and end_date required' })
+        };
+      }
+
+      // Query existing summaries (both fresh and stale)
+      const summaryQuery = `
+        SELECT id, state_text, captured_at
+        FROM states
+        WHERE organization_id = $1
+          AND (state_text LIKE '[summary:day]%' OR state_text LIKE '[stale][summary:day]%')
+        ORDER BY captured_at
+      `;
+      const summaryResult = await client.query(summaryQuery, [organizationId]);
+
+      // Parse summaries and filter by date range
+      const summaries = [];
+      const staleDates = [];
+      const existingDates = new Set();
+
+      for (const row of summaryResult.rows) {
+        try {
+          const isStale = row.state_text.startsWith('[stale]');
+          const jsonStr = row.state_text.replace(/^\[stale\]\[summary:day\]\s*/, '').replace(/^\[summary:day\]\s*/, '');
+          const parsed = JSON.parse(jsonStr);
+
+          if (parsed.date >= start_date && parsed.date <= end_date) {
+            existingDates.add(parsed.date);
+            if (isStale) staleDates.push(parsed.date);
+
+            // Apply filters
+            let entries = parsed.entries || [];
+            if (user_id) entries = entries.filter(e => e.user_id === user_id);
+            if (tags) {
+              const tagList = tags.split(',').map(t => t.trim().toLowerCase());
+              entries = entries.filter(e => e.tags?.some(t => tagList.includes(t.toLowerCase())));
+            }
+            if (boundary_type) entries = entries.filter(e => e.boundary_type === boundary_type);
+            if (confidence) {
+              const levels = ['high', 'medium', 'low', 'unknown'];
+              const minIdx = levels.indexOf(confidence);
+              entries = entries.filter(e => levels.indexOf(e.confidence) <= minIdx);
+            }
+
+            summaries.push({
+              date: parsed.date,
+              state_id: row.id,
+              entries,
+              notes: parsed.notes || '',
+              is_stale: isStale,
+            });
+          }
+        } catch (parseErr) {
+          console.error('Failed to parse summary:', row.id, parseErr.message);
+        }
+      }
+
+      // Find missing days in the range
+      const missingDates = [];
+      const startD = new Date(start_date + 'T00:00:00+08:00');
+      const endD = new Date(end_date + 'T00:00:00+08:00');
+      for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().split('T')[0];
+        if (!existingDates.has(dateStr)) missingDates.push(dateStr);
+      }
+
+      // Trigger computation for missing + stale days
+      const datesToCompute = [...missingDates, ...staleDates];
+      let daysComputed = 0;
+
+      if (datesToCompute.length > 0) {
+        try {
+          console.log(`[ANALYTICS] Triggering time-perspective-worker for ${datesToCompute.length} days`);
+          const invokeResult = await lambdaClient.send(new InvokeCommand({
+            FunctionName: 'time-perspective-worker',
+            InvocationType: 'RequestResponse',
+            Payload: JSON.stringify({
+              organization_id: organizationId,
+              dates: datesToCompute,
+              force_recompute: false,
+            }),
+          }));
+
+          const workerResponse = JSON.parse(new TextDecoder().decode(invokeResult.Payload));
+          daysComputed = workerResponse.computed?.filter(c => c.success && !c.skipped).length || 0;
+
+          // Re-query if new summaries were computed
+          if (daysComputed > 0) {
+            const refreshResult = await client.query(summaryQuery, [organizationId]);
+            summaries.length = 0; // Clear and re-parse
+
+            for (const row of refreshResult.rows) {
+              try {
+                const isStale = row.state_text.startsWith('[stale]');
+                const jsonStr = row.state_text.replace(/^\[stale\]\[summary:day\]\s*/, '').replace(/^\[summary:day\]\s*/, '');
+                const parsed = JSON.parse(jsonStr);
+
+                if (parsed.date >= start_date && parsed.date <= end_date) {
+                  let entries = parsed.entries || [];
+                  if (user_id) entries = entries.filter(e => e.user_id === user_id);
+                  if (tags) {
+                    const tagList = tags.split(',').map(t => t.trim().toLowerCase());
+                    entries = entries.filter(e => e.tags?.some(t => tagList.includes(t.toLowerCase())));
+                  }
+                  if (boundary_type) entries = entries.filter(e => e.boundary_type === boundary_type);
+                  if (confidence) {
+                    const levels = ['high', 'medium', 'low', 'unknown'];
+                    const minIdx = levels.indexOf(confidence);
+                    entries = entries.filter(e => levels.indexOf(e.confidence) <= minIdx);
+                  }
+
+                  summaries.push({
+                    date: parsed.date,
+                    state_id: row.id,
+                    entries,
+                    notes: parsed.notes || '',
+                    is_stale: isStale,
+                  });
+                }
+              } catch (parseErr) {
+                // skip malformed
+              }
+            }
+          }
+        } catch (workerErr) {
+          console.error('[ANALYTICS] time-perspective-worker invocation failed:', workerErr.message);
+        }
+      }
+
+      // Sort by date
+      summaries.sort((a, b) => a.date.localeCompare(b.date));
+
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Organization-Id,X-Connection-Id',
+          'Access-Control-Allow-Methods': 'GET,OPTIONS'
+        },
+        body: JSON.stringify({
+          summaries,
+          computation_status: {
+            days_requested: Math.round((endD - startD) / (1000 * 60 * 60 * 24)) + 1,
+            days_with_data: summaries.length,
+            days_computed: daysComputed,
+            stale_count: summaries.filter(s => s.is_stale).length,
+          }
+        })
+      };
+    }
+
     return {
       statusCode: 404,
       headers: { 
