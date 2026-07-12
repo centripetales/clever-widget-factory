@@ -41,7 +41,7 @@ exports.handler = async (event) => {
       const toolId = path.split('/').pop();
       
       // Get asset info
-      const assetSql = `SELECT created_at, updated_at FROM tools WHERE id::text = '${escapeLiteral(toolId)}';`;
+      const assetSql = `SELECT created_at, updated_at, serial_number FROM tools WHERE id::text = '${escapeLiteral(toolId)}';`;
       const assetResult = await queryJSON(assetSql);
       
       // Get checkouts

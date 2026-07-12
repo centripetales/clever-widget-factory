@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { apiService, getApiData } from '@/lib/apiService';
 import { partsOrdersQueryKey } from '@/lib/queryKeys';
@@ -372,18 +372,41 @@ export const CombinedAssetsContainer = () => {
   }, []);
 
   // Handle edit parameter from URL (backward compatibility)
+  const [editRefetchAttempted, setEditRefetchAttempted] = useState(false);
+  const queryClient = useQueryClient();
   useEffect(() => {
-    if (editParam && assets.length > 0) {
-      const assetToEdit = assets.find(asset => asset.id === editParam);
-      if (assetToEdit) {
-        handleEdit(assetToEdit);
-        // Clear URL parameter
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.delete('edit');
-        window.history.replaceState({}, '', newUrl.toString());
+    if (!editParam) return;
+    
+    // Search paginated assets first, then fall back to full TanStack cache
+    let assetToEdit = assets.find(asset => asset.id === editParam) || null;
+    
+    if (!assetToEdit) {
+      // Look up directly in the full cached tools/parts arrays (bypasses pagination)
+      const allTools: any[] = queryClient.getQueryData(['tools']) || [];
+      const allParts: any[] = queryClient.getQueryData(['parts']) || [];
+      const tool = allTools.find((t: any) => t.id === editParam);
+      if (tool) {
+        assetToEdit = { ...tool, type: 'asset' } as CombinedAsset;
+      } else {
+        const part = allParts.find((p: any) => p.id === editParam);
+        if (part) {
+          assetToEdit = { ...part, type: 'stock' } as CombinedAsset;
+        }
       }
     }
-  }, [editParam, assets, handleEdit]);
+
+    if (assetToEdit) {
+      handleEdit(assetToEdit);
+      setEditRefetchAttempted(false);
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.delete('edit');
+      newUrl.searchParams.delete('view');
+      window.history.replaceState({}, '', newUrl.toString());
+    } else if (!loading && !editRefetchAttempted) {
+      setEditRefetchAttempted(true);
+      refetch();
+    }
+  }, [editParam, assets, handleEdit, loading, refetch, editRefetchAttempted, queryClient]);
 
   const handleRemove = useCallback((asset: CombinedAsset) => {
     setSelectedAssetId(asset.id);

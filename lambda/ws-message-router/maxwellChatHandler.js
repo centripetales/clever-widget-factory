@@ -75,6 +75,7 @@ async function handleMaxwellChat(connectionId, payload, event) {
   // Extract authorizer context
   const authContext = event.requestContext.authorizer || {};
   const organizationId = authContext.organization_id;
+  const cognitoUserId = authContext.cognito_user_id;
 
   if (!organizationId) {
     console.warn('[MAXWELL-WS] No organization context in authorizer');
@@ -104,6 +105,7 @@ async function handleMaxwellChat(connectionId, payload, event) {
         payload,
         endpoint,
         organizationId,
+        cognitoUserId,
       }),
     }));
     console.log('[MAXWELL-WS] Worker Lambda invoked asynchronously');

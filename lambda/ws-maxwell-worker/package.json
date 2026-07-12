@@ -3,8 +3,17 @@
   "version": "1.0.0",
   "description": "Async worker Lambda for Maxwell chat — invokes Bedrock Agent and streams responses via WebSocket postToConnection",
   "main": "index.js",
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest --run"
+  },
   "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.0.0",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.0.0",
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.0.0"
+    "@aws-sdk/client-bedrock-runtime": "^3.0.0"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2",
+    "vitest": "^4.1.10"
   }
 }

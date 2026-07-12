@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Send, RefreshCw, Loader2, Copy, Check, Code, ArrowRight, Maximize2, Minimize2, Zap, BookOpen, Info } from 'lucide-react';
+import { X, Send, RefreshCw, Loader2, Copy, Check, Code, ArrowRight, Maximize2, Minimize2, Zap, BookOpen, Info, Camera } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { extractRecordIdsFromTrace } from '@/lib/traceParser';
 import { useMaxwellRecordHighlight } from '@/contexts/MaxwellRecordHighlightContext';
 import { useEntityContext } from '@/hooks/useEntityContext';
 import { useMaxwellStarterQuestions } from '@/hooks/useMaxwellStarterQuestions';
+import { useImageUpload } from '@/hooks/useImageUpload';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { getImageUrl } from '@/lib/imageUtils';
 import { copyConversationRich } from '@/lib/urlUtils';
@@ -135,6 +136,20 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           )}
         </div>
       )}
+      {/* Token usage & cost for assistant messages */}
+      {!isUser && message.inputTokens != null && (
+        <div className="max-w-[85%] flex items-center gap-2 text-[10px] text-muted-foreground/60 px-1">
+          <span>⚡ {((message.inputTokens || 0) + (message.outputTokens || 0)).toLocaleString()} tokens</span>
+          <span>·</span>
+          <span>~${(((message.inputTokens || 0) * 0.003 + (message.outputTokens || 0) * 0.015) / 1000).toFixed(4)}</span>
+          {message.durationMs && (
+            <>
+              <span>·</span>
+              <span>{(message.durationMs / 1000).toFixed(1)}s</span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -152,9 +167,13 @@ export function GlobalMaxwellPanel({
   const [isExpanded, setIsExpanded] = useState(false);
   const [maxwellMode, setMaxwellMode] = useState<MaxwellMode>('quick');
   const [activeContext, setActiveContext] = useState<EntityContext | null>(context);
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const { uploadSingleImage } = useImageUpload();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Don't use focus trap - allow navigation while panel is open
   // useFocusTrap(panelRef, open);
@@ -276,6 +295,31 @@ export function GlobalMaxwellPanel({
     }
   }, [messages, isLoading, progressStep, open]);
 
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      e.target.value = '';
+      return;
+    }
+    // Clone file reference before resetting input (mobile browsers may lose the reference)
+    const fileToUpload = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
+    e.target.value = ''; // Reset file input
+
+    setIsUploadingImage(true);
+    try {
+      const result = await uploadSingleImage(fileToUpload, {
+        maxSizeMB: 2,
+        maxWidthOrHeight: 1920,
+      });
+      setPendingImageUrl(result.url);
+    } catch (error) {
+      console.error('Image upload failed:', error);
+      // Toast is already shown by useImageUpload hook
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
   const handleSend = async () => {
     const text = input.trim();
     if (!text || isLoading) return;
@@ -284,7 +328,9 @@ export function GlobalMaxwellPanel({
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
     }
-    await sendMessage(text, maxwellMode);
+    const imageToSend = pendingImageUrl;
+    setPendingImageUrl(null);
+    await sendMessage(text, maxwellMode, imageToSend || undefined);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -518,11 +564,58 @@ export function GlobalMaxwellPanel({
               </div>
             </div>
           </div>
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleImageSelect}
+          />
+
+          {/* Upload progress indicator */}
+          {isUploadingImage && (
+            <div className="flex items-center gap-2 px-4 py-1.5">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Uploading image...</span>
+            </div>
+          )}
+
+          {/* Image preview thumbnail */}
+          {pendingImageUrl && (
+            <div className="flex items-center gap-2 px-4 py-1.5">
+              <div className="relative">
+                <img
+                  src={pendingImageUrl}
+                  alt="Attached"
+                  className="h-12 w-12 rounded-lg object-cover border"
+                />
+                <button
+                  onClick={() => { setPendingImageUrl(null); }}
+                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+                  aria-label="Remove image"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+              <span className="text-xs text-muted-foreground">Image attached</span>
+            </div>
+          )}
+
           {/* Input row */}
           <div
             className="flex items-end gap-2 px-4 pt-1 pb-3"
             style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
           >
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading || !!pendingImageUrl || isUploadingImage}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted disabled:opacity-40 mb-0.5"
+            aria-label="Attach image"
+          >
+            <Camera className="h-4 w-4" />
+          </button>
           <textarea
             ref={inputRef}
             rows={1}
@@ -545,7 +638,7 @@ export function GlobalMaxwellPanel({
           />
           <button
             onClick={handleSend}
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || !input.trim() || isUploadingImage}
             className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40 mb-0.5"
             aria-label="Send message"
           >

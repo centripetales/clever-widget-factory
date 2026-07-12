@@ -332,6 +332,7 @@ async function listStates(event, authContext, headers) {
       WHERE ${whereClause}${entityFilter}
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"maxwell_interaction"%')
         
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
       ORDER BY s.captured_at DESC

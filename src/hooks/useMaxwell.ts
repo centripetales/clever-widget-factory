@@ -8,6 +8,9 @@ export interface MaxwellMessage {
   timestamp: Date;
   trace?: any[]; // Bedrock Agent trace events
   rawReply?: string; // Original reply before stripping tags
+  inputTokens?: number;
+  outputTokens?: number;
+  durationMs?: number;
 }
 
 export interface MaxwellSessionAttributes {
@@ -32,7 +35,7 @@ export interface UseMaxwellReturn {
   progressStep: string | null;
   error: string | null;
   sessionId: string | null;
-  sendMessage: (text: string, mode?: MaxwellMode) => Promise<void>;
+  sendMessage: (text: string, mode?: MaxwellMode, imageUrl?: string) => Promise<void>;
   resetSession: () => void;
   loadMessages: (msgs: MaxwellMessage[]) => void;
 }
@@ -137,6 +140,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
 
       // Finalize the assistant message with the complete reply
       const finalContent = stripReferencedRecords(reply);
+      const msgInputTokens = payload?.inputTokens || undefined;
+      const msgOutputTokens = payload?.outputTokens || undefined;
+      const msgDurationMs = payload?.durationMs || undefined;
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last && last.role === 'assistant') {
@@ -146,6 +152,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
             content: finalContent,
             trace,
             rawReply: reply,
+            inputTokens: msgInputTokens,
+            outputTokens: msgOutputTokens,
+            durationMs: msgDurationMs,
           };
           return updated;
         }
@@ -158,6 +167,9 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
             timestamp: new Date(),
             trace,
             rawReply: reply,
+            inputTokens: msgInputTokens,
+            outputTokens: msgOutputTokens,
+            durationMs: msgDurationMs,
           },
         ];
       });
@@ -206,7 +218,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
     };
   }, [subscribe]);
 
-  const sendMessage = useCallback(async (text: string, mode: MaxwellMode = 'deep') => {
+  const sendMessage = useCallback(async (text: string, mode: MaxwellMode = 'deep', imageUrl?: string) => {
     if (!text.trim() || isLoading) return;
 
     // Prepend mode instruction so the agent adjusts its behavior
@@ -243,6 +255,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
         sessionId: sessionId ?? undefined,
         mode,
         history,
+        ...(imageUrl ? { imageUrl } : {}),
         sessionAttributes: {
           entityId: sessionAttributes.entityId,
           entityType: sessionAttributes.entityType,
@@ -269,6 +282,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
           sessionId,
           mode,
           history,
+          ...(imageUrl ? { imageUrl } : {}),
           sessionAttributes,
         });
 

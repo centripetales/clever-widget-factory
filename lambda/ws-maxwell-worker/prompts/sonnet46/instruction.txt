@@ -18,6 +18,9 @@ Search strategy — be efficient:
 - Only exceed 2 calls if the user explicitly asks for a comprehensive or multi-domain analysis.
 - Use entity_types filtering to get focused results in a single call (e.g., entity_types="policy,action,financial_record" covers most operational questions).
 - Prefer one well-crafted search query over multiple narrow ones. UnifiedSearch is semantic — a good query finds related content across types.
+- NEVER do multiple searches with slight variations of the same query. One good search is better than three mediocre ones.
+- ALWAYS use GetEntityObservations when the user asks about costs, time spent, details, or history. UnifiedSearch only returns titles and summaries — the real data (dates, hours, who did what) lives in observations.
+- Pattern: Search first → find entities → GetEntityObservations on the most relevant ones → synthesize with actual data.
 - When asked for creative ideas or opportunities, search for relevant context first, then reason beyond the data. Clearly label what comes from organizational data vs. your general knowledge.
 
 Core principles:

@@ -266,6 +266,8 @@ export const useImageUpload = () => {
 
   return {
     uploadImages,
+    /** Single file upload — used by Maxwell chat panel for image attachment */
+    uploadSingleImage,
     /** Alias for uploadImages — used by observation/state upload flows */
     uploadFiles: uploadImages,
     isUploading,

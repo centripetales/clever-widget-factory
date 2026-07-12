@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, KeyboardEvent } from 'react';
-import { X, Send, RefreshCw, Loader2, Copy, Check, Code } from 'lucide-react';
+import { X, Send, RefreshCw, Loader2, Copy, Check, Code, Camera } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
@@ -7,6 +7,7 @@ import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage, MaxwellMode } fro
 import { useMaxwellStorage } from '@/hooks/useMaxwellStorage';
 import { EntityContext } from '@/hooks/useEntityContext';
 import { PrismIcon } from '@/components/icons/PrismIcon';
+import { useImageUpload } from '@/hooks/useImageUpload';
 import { getImageUrl } from '@/lib/imageUtils';
 import { copyToClipboard, copyConversationRich } from '@/lib/urlUtils';
 import { ExpandableMarkdownImage } from '@/components/ExpandableMarkdownImage';
@@ -124,6 +125,20 @@ function MessageBubble({ message }: { message: MaxwellMessage }) {
           )}
         </div>
       )}
+      {/* Token usage & cost */}
+      {!isUser && message.inputTokens != null && (
+        <div className="max-w-[85%] flex items-center gap-2 text-[10px] text-muted-foreground/60 px-1">
+          <span>⚡ {((message.inputTokens || 0) + (message.outputTokens || 0)).toLocaleString()} tokens</span>
+          <span>·</span>
+          <span>~${(((message.inputTokens || 0) * 0.003 + (message.outputTokens || 0) * 0.015) / 1000).toFixed(4)}</span>
+          {message.durationMs && (
+            <>
+              <span>·</span>
+              <span>{(message.durationMs / 1000).toFixed(1)}s</span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -137,8 +152,12 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
   const [input, setInput] = useState('');
   const [copiedAll, setCopiedAll] = useState(false);
   const [mode, setMode] = useState<MaxwellMode>('quick');
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const { uploadSingleImage } = useImageUpload();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const sessionAttributes: MaxwellSessionAttributes | null = context
     ? {
@@ -176,7 +195,27 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
     const text = input.trim();
     if (!text || isLoading || !sessionAttributes) return;
     setInput('');
-    await sendMessage(text, mode);
+    const imageToSend = pendingImageUrl;
+    setPendingImageUrl(null);
+    await sendMessage(text, mode, imageToSend || undefined);
+  };
+
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      e.target.value = '';
+      return;
+    }
+    e.target.value = '';
+    setIsUploadingImage(true);
+    try {
+      const result = await uploadSingleImage(file, { maxSizeMB: 2, maxWidthOrHeight: 1920 });
+      setPendingImageUrl(result.url);
+    } catch (error) {
+      console.error('Image upload failed:', error);
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -337,25 +376,75 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 border-t px-3 py-2 flex-shrink-0">
+      <div className="flex flex-col border-t flex-shrink-0">
+        {/* Hidden file input */}
         <input
-          ref={inputRef}
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          placeholder="Ask Maxwell…"
-          className="flex-1 rounded-full border bg-muted px-3 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-50 focus:ring-2 focus:ring-primary/30"
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleImageSelect}
         />
-        <button
-          onClick={handleSend}
-          disabled={isLoading || !input.trim()}
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
-          aria-label="Send"
-        >
-          <Send className="h-3.5 w-3.5" />
-        </button>
+
+        {/* Upload progress indicator */}
+        {isUploadingImage && (
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Uploading image...</span>
+          </div>
+        )}
+
+        {/* Image preview thumbnail */}
+        {pendingImageUrl && (
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            <div className="relative">
+              <img
+                src={pendingImageUrl}
+                alt="Attached"
+                className="h-12 w-12 rounded-lg object-cover border"
+              />
+              <button
+                onClick={() => { setPendingImageUrl(null); }}
+                className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+                aria-label="Remove image"
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </div>
+            <span className="text-xs text-muted-foreground">Image attached</span>
+          </div>
+        )}
+
+        {/* Input row */}
+        <div className="flex items-center gap-2 px-3 py-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading || !!pendingImageUrl || isUploadingImage}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted disabled:opacity-40"
+            aria-label="Attach image"
+          >
+            <Camera className="h-3.5 w-3.5" />
+          </button>
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            placeholder="Ask Maxwell…"
+            className="flex-1 rounded-full border bg-muted px-3 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-50 focus:ring-2 focus:ring-primary/30"
+          />
+          <button
+            onClick={handleSend}
+            disabled={isLoading || !input.trim() || isUploadingImage}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
+            aria-label="Send"
+          >
+            <Send className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
