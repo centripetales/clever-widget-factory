@@ -567,6 +567,24 @@ async function createState(event, authContext, headers) {
 
     await client.query('COMMIT');
 
+    // Mark any existing daily time summaries as stale for this day (PHT timezone)
+    try {
+      const phtDate = new Date(state.captured_at || new Date()).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const staleResult = await client.query(`
+        UPDATE states
+        SET state_text = '[stale]' || state_text
+        WHERE organization_id = '${escapeLiteral(organizationId)}'
+          AND state_text LIKE '[summary:day]%'
+          AND state_text LIKE '%"date":"${phtDate}"%'
+          AND state_text NOT LIKE '[stale]%'
+      `);
+      if (staleResult.rowCount > 0) {
+        console.log(`[STATES] Marked ${staleResult.rowCount} daily summary as stale for ${phtDate}`);
+      }
+    } catch (staleErr) {
+      console.error('[STATES] Failed to mark daily summary as stale:', staleErr.message);
+    }
+
     // Broadcast cache invalidation
     try {
       await broadcastInvalidation({

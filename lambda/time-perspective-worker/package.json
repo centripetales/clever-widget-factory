@@ -1,0 +1,17 @@
+{
+  "name": "time-perspective-worker",
+  "version": "1.0.0",
+  "description": "Computes daily time summaries from observations using Bedrock AI (tool_use). Stores results as [summary:day] states.",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest --run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.0.0",
+    "@aws-sdk/client-sqs": "^3.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}
