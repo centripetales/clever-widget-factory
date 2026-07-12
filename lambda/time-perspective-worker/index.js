@@ -55,7 +55,7 @@ const TOOL_CONFIG = {
               hours: { type: 'number', description: 'Estimated hours' },
               confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
               evidence: { type: 'string', description: 'Why this estimate — cite timestamps, stated durations, or inference' },
-              source_ids: { type: 'array', items: { type: 'string' }, description: 'State IDs that informed this entry' },
+              source_ids: { type: 'array', items: { type: 'string' }, description: 'The observation IDs (UUIDs from the "id:" field) that informed this entry' },
               energy_weights: {
                 type: 'object',
                 properties: {
@@ -118,7 +118,6 @@ async function fetchDayObservations(client, organizationId, date) {
       (SELECT json_agg(json_build_object(
         'photo_url', sp.photo_url,
         'photo_description', sp.photo_description,
-        'captured_at', sp.created_at,
         'ai_description', (
           SELECT s2.state_text FROM state_links sl2
           JOIN states s2 ON sl2.state_id = s2.id
@@ -179,7 +178,6 @@ function buildUserPrompt(date, observations) {
   const obsText = observations.map((obs, i) => {
     const photoText = obs.photos?.map(p => {
       const parts = [];
-      if (p.captured_at) parts.push(`timestamp: ${p.captured_at}`);
       if (p.photo_description) parts.push(`caption: ${p.photo_description}`);
       if (p.ai_description) parts.push(`AI: ${p.ai_description.replace('[photo_analysis] ', '')}`);
       return parts.join(', ');
@@ -187,7 +185,7 @@ function buildUserPrompt(date, observations) {
 
     const linkedText = obs.linked_entities?.map(e => `${e.entity_type}: "${e.entity_name}"`).join(', ') || 'none';
 
-    return `--- Observation ${i + 1} ---
+    return `--- Observation ${i + 1} (id: ${obs.id}) ---
 Recorded by: ${obs.captured_by_name || 'Unknown'} (${obs.captured_by})
 Time: ${obs.captured_at}
 Text: ${obs.state_text || '(no text)'}
