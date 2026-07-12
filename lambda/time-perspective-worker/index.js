@@ -66,7 +66,7 @@ const TOOL_CONFIG = {
                 required: ['dynamis', 'oikonomia', 'techne']
               },
               boundary_type: { type: 'string', enum: ['internal', 'external'] },
-              tags: { type: 'array', items: { type: 'string' } }
+              tags: { type: 'array', items: { type: 'string', enum: ['agriculture', 'compliance', 'infrastructure', 'maintenance', 'procurement', 'admin', 'product', 'reactive'] } }
             },
             required: ['user_id', 'activity', 'hours', 'confidence', 'evidence', 'source_ids', 'energy_weights', 'boundary_type', 'tags']
           }
@@ -102,7 +102,15 @@ Rules:
 - If evidence is insufficient, set confidence to "unknown"
 - energy_weights must sum to 1.0 (dynamis=exploration/growth, oikonomia=sustaining operations, techne=improving how work is done)
 - boundary_type: "internal" for farm/org operations, "external" for government/vendor/agency interactions
-- tags: include relevant agencies (SEC, BIR, DENR, SSS), activity types (electrical, livestock, AI, software, agriculture), or qualifiers (rework)
+- tags: use ONLY from this list (one or more per entry): agriculture, compliance, infrastructure, maintenance, procurement, admin, product, reactive
+  - agriculture: planting, harvesting, livestock, soil, irrigation, crops
+  - compliance: government regulatory (BIR, SEC, DENR, SSS, PAGIBIG, permits, filings)
+  - infrastructure: construction, electrical, plumbing, solar, buildings, fencing
+  - maintenance: routine upkeep, cleaning, repairs, feeding schedules
+  - procurement: buying, sourcing, deliveries, vendor interactions
+  - admin: planning, paperwork, digital/computer work, coordination, meetings
+  - product: processing, packaging, sales, sari-sari, value-add (wine, biochar)
+  - reactive: unplanned response to something breaking, an emergency, or urgent external demand
 - Include unaccounted time in notes field`;
 
 // ─── Core processing ─────────────────────────────────────────────────────────
