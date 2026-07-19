@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, CheckCircle, XCircle, Wrench, Box, Flag, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
+import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
@@ -126,14 +126,6 @@ export default function Dashboard() {
       path: "/actions",
       color: "bg-yellow-500",
       featureKey: "actions"
-    },
-    {
-      title: "Stargazer Projects",
-      description: "Manage objectives and track progress",
-      icon: Flag,
-      path: "/missions",
-      color: "bg-blue-500",
-      featureKey: "missions"
     },
     {
       title: "Sari Sari Store",

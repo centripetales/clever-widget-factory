@@ -4,7 +4,7 @@ const client = new BedrockRuntimeClient({
   region: process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-west-2'
 });
 
-const MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
+const MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 const VALID_BOUNDARY_TYPES = new Set(['internal', 'external']);
 
@@ -110,16 +110,27 @@ async function labelCluster(cluster) {
     const parsed = JSON.parse(responseText);
 
     const text = parsed.content?.[0]?.text || '';
-    const label = JSON.parse(text.trim());
+    // Strip markdown code fences if Claude wraps the JSON in them
+    const cleanedText = text.trim().replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const label = JSON.parse(cleanedText);
+
+    console.log(`[bedrockClient] Cluster ${cluster.id}: Claude returned ${Object.keys(label.action_energy_map || {}).length} energy map entries for ${cluster.actionTitles.length} action titles`);
 
     const boundaryType = VALID_BOUNDARY_TYPES.has(label.boundary_type)
       ? label.boundary_type
       : 'internal';
 
     const actionEnergyMap = {};
+    let matchCount = 0;
     for (const title of cluster.actionTitles) {
       const raw = label.action_energy_map?.[title];
+      if (raw) matchCount++;
       actionEnergyMap[title] = validateAndNormalizeWeights(raw);
+    }
+    console.log(`[bedrockClient] Cluster ${cluster.id}: ${matchCount}/${cluster.actionTitles.length} titles matched in action_energy_map`);
+    if (matchCount === 0 && cluster.actionTitles.length > 0) {
+      console.log(`[bedrockClient] Cluster ${cluster.id}: Expected keys sample:`, cluster.actionTitles.slice(0, 3));
+      console.log(`[bedrockClient] Cluster ${cluster.id}: Got keys sample:`, Object.keys(label.action_energy_map || {}).slice(0, 3));
     }
 
     return {

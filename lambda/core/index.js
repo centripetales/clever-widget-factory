@@ -2262,12 +2262,13 @@ exports.handler = async (event) => {
         }
 
         const sql = `
-          INSERT INTO scoring_prompts (name, prompt_text, is_default, created_by, created_at, updated_at)
+          INSERT INTO scoring_prompts (name, prompt_text, is_default, created_by, organization_id, created_at, updated_at)
           VALUES (
             ${formatSqlValue(name)},
             ${formatSqlValue(prompt_text)},
             ${is_default},
             ${formatSqlValue(created_by)},
+            ${formatSqlValue(organizationId)},
             NOW(),
             NOW()
           )

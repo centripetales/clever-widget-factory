@@ -333,6 +333,8 @@ async function listStates(event, authContext, headers) {
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"maxwell_interaction"%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[summary:%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[stale][summary:%')
         
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
       ORDER BY s.captured_at DESC
@@ -566,6 +568,24 @@ async function createState(event, authContext, headers) {
     await handleSharingUpdate(client, state.id, actualSharedWithPartners, organizationId);
 
     await client.query('COMMIT');
+
+    // Mark any existing daily time summaries as stale for this day (PHT timezone)
+    try {
+      const phtDate = new Date(state.captured_at || new Date()).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const staleResult = await client.query(`
+        UPDATE states
+        SET state_text = '[stale]' || state_text
+        WHERE organization_id = '${escapeLiteral(organizationId)}'
+          AND state_text LIKE '[summary:day]%'
+          AND state_text LIKE '%"date":"${phtDate}"%'
+          AND state_text NOT LIKE '[stale]%'
+      `);
+      if (staleResult.rowCount > 0) {
+        console.log(`[STATES] Marked ${staleResult.rowCount} daily summary as stale for ${phtDate}`);
+      }
+    } catch (staleErr) {
+      console.error('[STATES] Failed to mark daily summary as stale:', staleErr.message);
+    }
 
     // Broadcast cache invalidation
     try {

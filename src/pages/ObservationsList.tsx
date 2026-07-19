@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
-import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig } from '@/lib/assetQueryConfigs';
+import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig, completedActionsQueryConfig } from '@/lib/assetQueryConfigs';
 import { offlineQueryConfig } from '@/lib/queryConfig';
 import { apiService } from '@/lib/apiService';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -168,6 +168,7 @@ export default function ObservationsList() {
   const { data: toolsList = [] } = useQuery({ ...toolsQueryConfig, ...offlineQueryConfig });
   const { data: partsList = [] } = useQuery({ ...partsQueryConfig, ...offlineQueryConfig });
   const { data: actionsList = [] } = useQuery({ ...actionsQueryConfig, ...offlineQueryConfig });
+  const { data: completedActionsList = [] } = useQuery({ ...completedActionsQueryConfig, ...offlineQueryConfig });
 
   // Fetch shared tools/parts for partner observation name resolution
   const { data: sharedToolsList = [] } = useQuery({
@@ -227,6 +228,7 @@ export default function ObservationsList() {
       };
     } else {
       const action = (actionsList as any).find((a: any) => a.id === entityId)
+        || (completedActionsList as any[]).find((a: any) => a.id === entityId)
         || (sharedActionsList as any[]).find((a: any) => a.id === entityId);
       return {
         name: action ? (action.title || 'Action') : 'Unknown Action',

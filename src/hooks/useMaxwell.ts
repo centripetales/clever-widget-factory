@@ -64,6 +64,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
   const lastQuestionRef = useRef<string>('');
   const lastModeRef = useRef<MaxwellMode>('deep');
   const lastStartTimeRef = useRef<number>(0);
+  const firstQuestionRef = useRef<string>(''); // First user message in conversation (for history display)
 
   const resetSession = useCallback(() => {
     setMessages([]);
@@ -73,6 +74,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
     setProgressStep(null);
     accumulatedChunksRef.current = '';
     isStreamingRef.current = false;
+    firstQuestionRef.current = '';
   }, []);
 
   // Reset session when entity changes (session isolation)
@@ -182,7 +184,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       // Fire-and-forget: save interaction to backend
       const durationMs = payload?.durationMs || (lastStartTimeRef.current ? Date.now() - lastStartTimeRef.current : null);
       apiService.post('/maxwell/interactions', {
-        question: lastQuestionRef.current,
+        question: firstQuestionRef.current || lastQuestionRef.current,
         response: reply,
         model: lastModeRef.current,
         input_tokens: payload?.inputTokens || null,
@@ -249,6 +251,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
       lastQuestionRef.current = text;
       lastModeRef.current = mode;
       lastStartTimeRef.current = Date.now();
+      if (!firstQuestionRef.current) firstQuestionRef.current = text;
 
       wsSendMessage('maxwell:chat', {
         message: enhancedText,
@@ -300,7 +303,7 @@ export function useMaxwell(sessionAttributes: MaxwellSessionAttributes): UseMaxw
 
         // Fire-and-forget: save interaction to backend
         apiService.post('/maxwell/interactions', {
-          question: text,
+          question: firstQuestionRef.current || text,
           response: response.reply,
           model: mode,
           input_tokens: null,
