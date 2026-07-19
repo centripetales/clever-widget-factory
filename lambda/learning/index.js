@@ -635,7 +635,7 @@ GAP AXES (person needs to improve on these):
 ${gapAxesDescription}
 
 INSTRUCTIONS:
-- For each gap axis, generate 3-6 learning objectives
+- For each gap axis, generate exactly 3 learning objectives
 - Each objective should describe what the person needs to UNDERSTAND (Bloom's level 2) — focus on "why" rather than "how to"
 - Use the action's expected outcome (S') as the primary driver — what does the person need to understand to achieve the desired outcome?
 - Objectives should be specific, measurable, and relevant to the action context
@@ -652,7 +652,7 @@ No markdown, no code fences, no explanation.`;
 
   const payload = {
     anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 2000,
+    max_tokens: 4096,
     temperature: 0.7,
     messages: [{ role: 'user', content: prompt }]
   };
@@ -1058,6 +1058,9 @@ async function handleQuizGenerate(actionId, body, organizationId) {
       };
     });
 
+    // Limit to 3 objectives per quiz call to stay within API Gateway 29s timeout
+    const quizObjectives = objectives.slice(0, 3);
+
     // 3. Fetch ALL learning objectives for this axis to determine Recognition completion
     const allAxisObjectivesResult = await db.query(
       `SELECT s.id, s.state_text
@@ -1203,7 +1206,7 @@ async function handleQuizGenerate(actionId, body, organizationId) {
       const questions = await generateQuizViaBedrock(
         action,
         targetAxis,
-        objectives,
+        quizObjectives,
         { observations: [], photoUrls: [] },
         [],
         knowledgeStatesForAxis,
@@ -1608,12 +1611,19 @@ Return ONLY a JSON object with:
 
 No markdown, no code fences, no explanation outside the JSON.`;
 
-  const payload = {
-    anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 2000,
-    temperature: 0.7,
-    messages: [{ role: 'user', content: prompt }]
-  };
+  const isNova = MODEL_FAST.includes('nova');
+  
+  const payload = isNova
+    ? {
+        inferenceConfig: { maxTokens: 4096, temperature: 0.7 },
+        messages: [{ role: 'user', content: [{ text: prompt }] }]
+      }
+    : {
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 4096,
+        temperature: 0.7,
+        messages: [{ role: 'user', content: prompt }]
+      };
 
   console.log(`[MODEL] generateQuizViaBedrock using: ${MODEL_FAST}, prompt=${prompt.length} chars`);
   const command = new InvokeModelCommand({
@@ -1626,18 +1636,21 @@ No markdown, no code fences, no explanation outside the JSON.`;
   const response = await bedrock.send(command);
   const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
-  if (!responseBody.content?.[0]?.text) {
+  const text = isNova
+    ? (responseBody.output?.message?.content?.[0]?.text || '')
+    : (responseBody.content?.[0]?.text || '');
+
+  if (!text) {
     throw new Error('Invalid response from Bedrock: missing content');
   }
 
-  const text = responseBody.content[0].text.trim();
-  const cleaned = text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+  const cleaned = text.trim().replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
 
   try {
     const parsed = JSON.parse(cleaned);
     return parsed.questions || [];
   } catch (parseErr) {
-    console.error('Failed to parse Bedrock quiz response:', text);
+    console.error('Failed to parse Bedrock quiz response:', text.substring(0, 200), '...TRUNCATED...', text.substring(text.length - 200));
     throw new Error('Failed to generate quiz questions — AI returned invalid format');
   }
 }

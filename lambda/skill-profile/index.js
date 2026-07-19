@@ -328,7 +328,7 @@ Respond with ONLY the JSON object, no markdown formatting, no code fences, no ex
  * @returns {Promise<Object>} Parsed skill profile object
  */
 async function callBedrockForSkillProfile(prompt) {
-  const MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
+  const MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
   const payload = {
     anthropic_version: 'bedrock-2023-05-31',
