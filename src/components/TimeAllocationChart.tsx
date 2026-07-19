@@ -34,11 +34,11 @@ interface DaySummary {
 
 type ViewMode = 'energy' | 'person' | 'boundary';
 
-// Energy type colors matching Energeia Schema
+// Energy type colors matching Energeia Schema exactly
 const ENERGY_COLORS = {
-  dynamis: '#ff6b35',
-  oikonomia: '#00e5ff',
-  techne: '#a855f7',
+  dynamis: '#00e5ff',    // cyan — exploration/growth
+  oikonomia: '#4f46e5',  // indigo — sustaining operations
+  techne: '#a855f7',     // purple — improving process
 };
 
 const PERSON_COLORS = [
@@ -85,10 +85,10 @@ export default function TimeAllocationChart({ startDate, endDate, selectedUsers 
     const fetchSummaries = async () => {
       setLoading(true);
       try {
-        // Temporarily limit to last 3 days for testing
+        // Temporarily limit to last 7 days for testing
         const today = new Date();
-        const threeDaysAgo = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
-        const effectiveStart = threeDaysAgo.toISOString().split('T')[0];
+        const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const effectiveStart = weekAgo.toISOString().split('T')[0];
         const effectiveEnd = today.toISOString().split('T')[0];
         const params = new URLSearchParams({ start_date: effectiveStart, end_date: effectiveEnd });
         const result = await apiService.get(`/analytics/time-summaries?${params}`);
@@ -173,6 +173,15 @@ export default function TimeAllocationChart({ startDate, endDate, selectedUsers 
   }, [summaries, activePeople, activeTags, viewMode, allPeople]);
 
   const totalHours = useMemo(() => chartData.reduce((sum, d) => sum + (d.total || 0), 0), [chartData]);
+
+  // Compute unfiltered max Y so axis stays stable when toggling tags
+  const yAxisMax = useMemo(() => {
+    const unfilteredTotals = summaries.map(day => {
+      const filtered = day.entries.filter(e => activePeople.has(e.user_id));
+      return filtered.reduce((sum, e) => sum + (e.hours || 0), 0);
+    });
+    return Math.ceil(Math.max(...unfilteredTotals, 1));
+  }, [summaries, activePeople]);
 
   // Detail panel data for selected day
   const selectedDayData = useMemo(() => {
@@ -317,14 +326,22 @@ export default function TimeAllocationChart({ startDate, endDate, selectedUsers 
             }
           }}>
             <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} domain={[0, yAxisMax]} />
             <Tooltip content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
               const data = payload[0]?.payload;
+              const entries = (data?.entries || []) as TimeSummaryEntry[];
               return (
-                <div className="bg-background border rounded-lg shadow-lg p-2 text-xs">
-                  <p className="font-semibold">{data?.label} — {data?.total}h</p>
-                  <p className="text-muted-foreground">Click for details</p>
+                <div className="bg-background border rounded-lg shadow-lg p-2.5 text-xs max-w-72">
+                  <p className="font-semibold mb-1.5">{data?.label} — {data?.total}h</p>
+                  {entries.slice(0, 5).map((entry: TimeSummaryEntry, i: number) => (
+                    <div key={i} className="py-0.5 flex justify-between gap-2">
+                      <span className="truncate"><span className="font-medium">{nameMap[entry.user_id] || '?'}</span> {entry.activity}</span>
+                      <span className="flex-shrink-0 text-muted-foreground">{entry.hours}h</span>
+                    </div>
+                  ))}
+                  {entries.length > 5 && <p className="text-muted-foreground mt-1">+{entries.length - 5} more...</p>}
+                  <p className="text-muted-foreground mt-1 border-t pt-1">Click bar for full breakdown</p>
                 </div>
               );
             }} />

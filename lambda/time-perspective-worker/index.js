@@ -93,13 +93,24 @@ Known team patterns:
 - Stefan (${STEFAN_ID}): typically computer/AI/admin work until 14:00-15:00, then outdoor/agriculture
 - Stefan documents observations on behalf of Mae frequently
 - Electrical work typically involves Stefan + Lester together
-- Government office trips to Roxas typically involve Stefan + Mae + Lester
 - Morning chicken care is routine (~0.5-1 hour)
 - "whole morning" ≈ 4 hours, "spent the day" ≈ 8 hours, "afternoon" ≈ 4 hours
 
+Travel and multi-person rules:
+- ANY trip to Roxas (notary, BIR, SEC, SSS, PAGIBIG, LGU, banks, LBC) = FULL DAY (8 hours) per person. The drive is 1 hour each way + waiting + processing. A Roxas trip consumes the entire working day.
+- Lester is the only one who drives the tricycle to Roxas. If a Roxas trip happened, Lester was there.
+- If Stefan documents a Roxas trip AND Mae/Lester have no observations that day, assume they went too. Create a SEPARATE entry for EACH person involved.
+- Even if the observation is brief ("went to notary"), the time cost is the full trip (8 hours per person), not just the task duration at the office.
+- Confidence for Roxas travel time should be "high" — it's a known fixed cost, not an inference.
+
 Rules:
-- Do NOT force totals to equal 8 hours. Report what evidence supports.
-- If evidence is insufficient, set confidence to "unknown"
+- ASSUME a full working day (8 hours) for each person who has ANY observation that day OR is mentioned in someone else's observation. The goal is to estimate what filled their day, not just what was explicitly documented.
+- If a person has NO observations AND is not mentioned by anyone else that day, OMIT them entirely — they may be out/absent.
+- If someone recorded one observation about a physical task (construction, electrical, agriculture), assume that task filled MOST of their working day unless evidence suggests otherwise.
+- Do NOT merge unrelated activities into one entry. Each distinct task gets its own entry even if they were documented in the same observation. BIR filing is not the same as writing a report is not the same as attending a meeting.
+- Use judgment to infer what ELSE someone likely did that day based on patterns, even if not explicitly documented. E.g., Stefan working on software/AI in the morning is a near-certainty on most days. Mark inferred activities with confidence "low".
+- Do NOT force totals to equal exactly 8 hours, but DO aim to account for a full working day per person. Flag genuinely unaccounted time in notes.
+- If evidence is insufficient for a specific activity, set confidence to "unknown"
 - energy_weights must sum to 1.0 (dynamis=exploration/growth, oikonomia=sustaining operations, techne=improving how work is done)
 - boundary_type: "internal" for farm/org operations, "external" for government/vendor/agency interactions
 - tags: use ONLY from this list (one or more per entry): agriculture, compliance, infrastructure, maintenance, procurement, admin, product, reactive
@@ -221,7 +232,7 @@ Produce a time estimate for each person for each distinct activity.`;
 async function invokeBedrock(userPrompt) {
   const body = {
     anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 2000,
+    max_tokens: 4096,
     temperature: 0.1,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
@@ -345,7 +356,18 @@ async function processDay(client, organizationId, date, forceRecompute) {
 exports.handler = async (event) => {
   console.log('[TIME-PERSPECTIVE] Event:', JSON.stringify(event));
 
-  const { organization_id, dates, force_recompute = false } = event;
+  // Support EventBridge scheduled invocation: detect scheduled event and default to today (PHT)
+  let { organization_id, dates, force_recompute = false } = event;
+
+  if (event.source === 'aws.events' || event['detail-type'] === 'Scheduled Event') {
+    // Nightly batch: compute today's date in PHT (UTC+8)
+    const now = new Date();
+    const phtDate = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+    dates = dates || [phtDate];
+    organization_id = organization_id || '00000000-0000-0000-0000-000000000001';
+    force_recompute = force_recompute || true; // recompute stale on nightly run
+    console.log(`[TIME-PERSPECTIVE] Scheduled invocation — computing for ${phtDate}`);
+  }
 
   if (!organization_id || !dates || !Array.isArray(dates) || dates.length === 0) {
     return { error: 'Missing required fields: organization_id, dates (array)' };

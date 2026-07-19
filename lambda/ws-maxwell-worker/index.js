@@ -348,15 +348,12 @@ exports.handler = async (event) => {
   // Generate a session ID if not provided (Bedrock requires it)
   const effectiveSessionId = sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
-  // Only send conversationHistory when resuming a session from the frontend
-  // (i.e., the frontend already has a sessionId from a prior exchange).
-  // On follow-up turns within an active session, the Bedrock Agent already
-  // maintains conversation memory server-side — sending history again would
-  // double-count tokens and inflate cost.
-  const isResumedSession = !!sessionId; // frontend sent a sessionId = continuing existing session
-  const isFirstTurnWithHistory = !sessionId && history && Array.isArray(history) && history.length > 0;
-
-  const bedrockHistory = isFirstTurnWithHistory
+  // Always send conversationHistory so the agent has full conversation context.
+  // Bedrock Agent session memory is unreliable in async Lambda worker patterns
+  // (each invocation may hit a different execution context, and the Bedrock
+  // session state isn't guaranteed to persist between InvokeAgent calls even
+  // with the same sessionId).
+  const bedrockHistory = (history && Array.isArray(history) && history.length > 0)
     ? {
         messages: history.map(h => ({
           role: h.role === 'user' ? 'user' : 'assistant',
