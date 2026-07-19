@@ -104,12 +104,13 @@ Travel and multi-person rules:
 - Confidence for Roxas travel time should be "high" — it's a known fixed cost, not an inference.
 
 Rules:
-- ASSUME a full working day (8 hours) for each person who has ANY observation that day OR is mentioned in someone else's observation. The goal is to estimate what filled their day, not just what was explicitly documented.
+- On WEEKDAYS (Mon–Fri), assume a full working day (8 hours) for each person who has ANY observation that day OR is mentioned in someone else's observation.
+- On WEEKENDS (Sat–Sun), only report what evidence directly supports. Do NOT pad to 8 hours. Weekend work is optional and often partial.
+- NEVER create "unaccounted time" or "other work" filler entries. Only report activities with actual evidence or strong pattern-based inference. If the total is less than 8 hours, that's fine — leave it as-is and note in "notes" that the day was partially documented.
 - If a person has NO observations AND is not mentioned by anyone else that day, OMIT them entirely — they may be out/absent.
-- If someone recorded one observation about a physical task (construction, electrical, agriculture), assume that task filled MOST of their working day unless evidence suggests otherwise.
+- If someone recorded one observation about a physical task (construction, electrical, agriculture) on a WEEKDAY, assume that task filled MOST of their working day unless evidence suggests otherwise.
 - Do NOT merge unrelated activities into one entry. Each distinct task gets its own entry even if they were documented in the same observation. BIR filing is not the same as writing a report is not the same as attending a meeting.
-- Use judgment to infer what ELSE someone likely did that day based on patterns, even if not explicitly documented. E.g., Stefan working on software/AI in the morning is a near-certainty on most days. Mark inferred activities with confidence "low".
-- Do NOT force totals to equal exactly 8 hours, but DO aim to account for a full working day per person. Flag genuinely unaccounted time in notes.
+- Use judgment to infer what ELSE someone likely did that day based on patterns, but ONLY on weekdays and only when there is strong pattern evidence. Mark inferred activities with confidence "low".
 - If evidence is insufficient for a specific activity, set confidence to "unknown"
 - energy_weights must sum to 1.0 (dynamis=exploration/growth, oikonomia=sustaining operations, techne=improving how work is done)
 - boundary_type: "internal" for farm/org operations, "external" for government/vendor/agency interactions
