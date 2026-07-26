@@ -315,16 +315,20 @@ async function processPendingRecord(client, record) {
   });
 
   // Download photos and track mapping
+  // Disabled: photo_analysis is off and perspectives use text only. Re-enable when funding allows.
+  const PHOTO_DOWNLOAD_ENABLED = false;
   const images = [];
   const photoMap = new Map();
-  for (const photo of (state.photos || [])) {
-    if (!photo.photo_url) continue;
-    try {
-      const imgData = await downloadPhoto(photo.photo_url);
-      images.push(imgData);
-      photoMap.set(photo.photo_url, imgData);
-    } catch (err) {
-      console.error(`Failed to download photo ${photo.photo_url}:`, err.message);
+  if (PHOTO_DOWNLOAD_ENABLED) {
+    for (const photo of (state.photos || [])) {
+      if (!photo.photo_url) continue;
+      try {
+        const imgData = await downloadPhoto(photo.photo_url);
+        images.push(imgData);
+        photoMap.set(photo.photo_url, imgData);
+      } catch (err) {
+        console.error(`Failed to download photo ${photo.photo_url}:`, err.message);
+      }
     }
   }
 
