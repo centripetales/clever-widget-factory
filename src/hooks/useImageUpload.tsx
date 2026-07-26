@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { apiService } from '@/lib/apiService';
 import { useEnhancedToast } from './useEnhancedToast';
 import { compressImageSimple } from '@/lib/simpleImageCompression';
+import { reinjectExif } from '@/lib/exifReinject';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -145,7 +146,12 @@ export const useImageUpload = () => {
             maxSizeMB: 0.5,
             maxWidthOrHeight: 1024,
           });
-          fileToUpload = compressionResult.file;
+          // Canvas compression strips EXIF (GPS, timestamp, device) by construction.
+          // Copy it back in from the original so the upload still carries it for
+          // the server-side cwf-image-compressor Lambda to extract into
+          // photo_metadata_extractions. No-ops harmlessly if the original has no
+          // parseable EXIF (e.g. HEIC source, or PNG).
+          fileToUpload = await reinjectExif(file, compressionResult.file);
           compressedSize = compressionResult.compressedSize;
           compressionRatio = compressionResult.compressionRatio;
 

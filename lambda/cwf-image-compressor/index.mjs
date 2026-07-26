@@ -41,8 +41,8 @@ export const handler = async (event) => {
         exifrOutput = await exifr.parse(imageBuffer, {
           gps: true,
           tiff: true,
-          xmp: false,
-          iptc: false
+          xmp: true,
+          iptc: true
         });
         console.log('Parsed EXIF successfully:', exifrOutput ? Object.keys(exifrOutput) : 'null');
       } catch (exifErr) {
