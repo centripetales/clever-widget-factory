@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { X, GripVertical, Loader2, AlertCircle, Camera, Sparkles } from 'lucide-react';
+import { X, GripVertical, Loader2, AlertCircle, Camera, ImagePlus, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { apiService } from '@/lib/apiService';
@@ -112,7 +112,9 @@ export function PhotoUploadPanel({
   onPhotoAnalyzed,
 }: PhotoUploadPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
+  const cameraInputId = useId();
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
 
@@ -342,7 +344,33 @@ export function PhotoUploadPanel({
 
   return (
     <div className={cn('space-y-3', className)}>
-      <div>
+      <div className="flex gap-2">
+        {/* Direct camera capture (bypasses the gallery picker) so the resulting
+            file comes straight from the camera intent with EXIF GPS intact,
+            instead of being redacted by Android's MediaStore-backed picker. */}
+        <input
+          id={cameraInputId}
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleFileSelect}
+          disabled={disabled || atMaxPhotos}
+        />
+        <label
+          htmlFor={disabled || atMaxPhotos ? undefined : cameraInputId}
+          className={cn(
+            'flex flex-1 items-center justify-center h-10 px-4 py-2 rounded-md border border-input bg-background text-sm font-medium ring-offset-background transition-colors',
+            disabled || atMaxPhotos
+              ? 'cursor-not-allowed opacity-50'
+              : 'cursor-pointer hover:bg-accent hover:text-accent-foreground'
+          )}
+        >
+          <Camera className="h-4 w-4 mr-2" />
+          Take Photo
+        </label>
+
         <input
           id={inputId}
           ref={fileInputRef}
@@ -356,13 +384,13 @@ export function PhotoUploadPanel({
         <label
           htmlFor={disabled || atMaxPhotos ? undefined : inputId}
           className={cn(
-            'flex items-center justify-center w-full h-10 px-4 py-2 rounded-md border border-input bg-background text-sm font-medium ring-offset-background transition-colors',
+            'flex flex-1 items-center justify-center h-10 px-4 py-2 rounded-md border border-input bg-background text-sm font-medium ring-offset-background transition-colors',
             disabled || atMaxPhotos
               ? 'cursor-not-allowed opacity-50'
               : 'cursor-pointer hover:bg-accent hover:text-accent-foreground'
           )}
         >
-          <Camera className="h-4 w-4 mr-2" />
+          <ImagePlus className="h-4 w-4 mr-2" />
           {atMaxPhotos ? `Maximum ${maxPhotos} photos reached` : 'Add Photos'}
         </label>
       </div>
