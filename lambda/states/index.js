@@ -13,6 +13,26 @@ const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/c
 const PERSPECTIVES_QUEUE_URL = process.env.PERSPECTIVES_QUEUE_URL;
 if (!PERSPECTIVES_QUEUE_URL) throw new Error('Missing required environment variable: PERSPECTIVES_QUEUE_URL');
 
+// Must match the qualifyingTypes check in lambda/rsp-worker/index.js — states linked to
+// anything other than these types are rejected by the worker, so there's no point enqueueing them.
+const QUALIFYING_LINK_TYPES = ['observation', 'action'];
+
+/**
+ * Whether a state has a link type the perspectives worker will actually process.
+ * Pass `knownLinks` when the caller already has the state's current links in memory
+ * (e.g. just inserted them) to avoid a redundant query; omit it to look them up.
+ */
+async function stateQualifiesForPerspectives(client, stateId, knownLinks) {
+  if (knownLinks !== undefined) {
+    return knownLinks.some(link => QUALIFYING_LINK_TYPES.includes(link.entity_type));
+  }
+  const linksRes = await client.query(
+    `SELECT 1 FROM state_links WHERE state_id = $1 AND entity_type = ANY($2) LIMIT 1`,
+    [stateId, QUALIFYING_LINK_TYPES]
+  );
+  return linksRes.rows.length > 0;
+}
+
 /**
  * Resolve state composition data and queue embedding generation via SQS.
  * Uses its own DB client from the pool since this runs after the main transaction's client is released.
@@ -600,16 +620,18 @@ async function createState(event, authContext, headers) {
       console.error('Failed to broadcast cache invalidation:', err);
     }
 
-    try {
-      const pClient = await getDbClient();
-      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
-      pClient.release();
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: PERSPECTIVES_QUEUE_URL,
-        MessageBody: JSON.stringify({ stateId: state.id, organizationId })
-      }));
-    } catch (pErr) {
-      console.error('Failed to queue observation for perspectives:', pErr);
+    if (await stateQualifiesForPerspectives(client, state.id, links)) {
+      try {
+        const pClient = await getDbClient();
+        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
+        pClient.release();
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: state.id, organizationId })
+        }));
+      } catch (pErr) {
+        console.error('Failed to queue observation for perspectives:', pErr);
+      }
     }
 
     // Explicitly await queueing to prevent AWS Lambda environment freeze
@@ -666,18 +688,20 @@ async function updateState(event, id, authContext, headers) {
       `, [requested_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0', photo_id]);
       
       await client.query('COMMIT');
-      
+
       // 3. Queue SQS perspective run
       try {
-        const pClient = await getDbClient();
-        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
-        pClient.release();
-        
-        await sqs.send(new SendMessageCommand({
-          QueueUrl: PERSPECTIVES_QUEUE_URL,
-          MessageBody: JSON.stringify({ stateId: id, organizationId })
-        }));
-        console.log('[Reanalyze] Queued perspective run successfully.');
+        if (await stateQualifiesForPerspectives(client, id)) {
+          const pClient = await getDbClient();
+          await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+          pClient.release();
+
+          await sqs.send(new SendMessageCommand({
+            QueueUrl: PERSPECTIVES_QUEUE_URL,
+            MessageBody: JSON.stringify({ stateId: id, organizationId })
+          }));
+          console.log('[Reanalyze] Queued perspective run successfully.');
+        }
       } catch (pErr) {
         console.error('[Reanalyze] Failed to queue perspectives:', pErr);
       }
@@ -865,13 +889,15 @@ async function updateState(event, id, authContext, headers) {
     }
 
     try {
-      const pClient = await getDbClient();
-      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
-      pClient.release();
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: PERSPECTIVES_QUEUE_URL,
-        MessageBody: JSON.stringify({ stateId: id, organizationId })
-      }));
+      if (await stateQualifiesForPerspectives(client, id, links)) {
+        const pClient = await getDbClient();
+        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+        pClient.release();
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: id, organizationId })
+        }));
+      }
     } catch (pErr) {
       console.error('Failed to queue observation for perspectives:', pErr);
     }
