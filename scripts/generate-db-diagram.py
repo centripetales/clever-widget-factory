@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate database schema diagram in Mermaid ERD format
-Usage: python3 scripts/generate-db-diagram.py > docs/DATABASE_SCHEMA.md
+Usage: python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md
 """
 
 import json
@@ -74,6 +74,14 @@ def run_query(query):
 def generate_mermaid_diagram():
     """Generate Mermaid ERD diagram"""
     print("# Database Schema Diagram\n")
+    print("Auto-generated — do not hand-edit, it will be overwritten on the next run.\n")
+    print("Regenerate with:")
+    print("```bash")
+    print("python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md")
+    print("```")
+    print("Or let the Kiro hook do it automatically on migration changes — see")
+    print("`.kiro/hooks/update-schema-diagram.md`. For a PDF export, see")
+    print("`scripts/generate-db-pdf.sh`.\n")
     print("```mermaid")
     print("erDiagram")
     

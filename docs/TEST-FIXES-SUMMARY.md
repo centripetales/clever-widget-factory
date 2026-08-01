@@ -90,7 +90,7 @@ INTEGRATION_TESTS=true npm test
 
 1. `scripts/skip-all-exploration-tests.sh` - Skip exploration tests
 2. `scripts/add-integration-skip.sh` - Add integration skip pattern
-3. `docs/INTEGRATION-TEST-SETUP.md` - Integration test documentation
+3. `docs/architecture/INTEGRATION_TESTING.md` - Integration test documentation
 
 ## Next Steps (Optional)
 

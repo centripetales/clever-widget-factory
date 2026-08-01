@@ -196,7 +196,8 @@ TOKEN="Bearer eyJraWQ..."
 ./tests/api/action-implementation-updates-502.test.sh "$TOKEN"
 ```
 
-See `docs/502-ERROR-ACTION-IMPLEMENTATION-UPDATES.md` for troubleshooting 502 errors.
+See [`docs/README.md`](docs/README.md) for the full documentation index —
+architecture references, design docs, and archived specs.
 
 ### Legacy Files (To Be Removed)
 The following files are legacy from the Supabase era and should be ignored:
@@ -234,13 +235,6 @@ POST /api/semantic-search
 ```
 
 ### TODO / Known Issues
-
-- **Proper Solution**: Implement presigned URL generation via backend Lambda
-  1. Create Lambda endpoint: `POST /api/upload/presigned-url`
-  2. Lambda generates temporary presigned URL with expiration
-  3. Frontend uploads directly to S3 using presigned URL
-  4. Remove `VITE_AWS_ACCESS_KEY_ID` and `VITE_AWS_SECRET_ACCESS_KEY` from frontend
-- **Files**: `src/hooks/useImageUpload.tsx`, `src/lib/s3Client.ts`
 
 #### Database Functions & Triggers
 

@@ -34,7 +34,7 @@ Check for files that shouldn't be in a PR:
 - Any `TASK_*` or `FIX_*` markdown files in root (these are working docs)
 - Untracked large markdown files in root that aren't permanent docs
 
-Permanent docs to ignore: `README.md`, `QUICKSTART.md`, `ENGINEERING_GUIDE.md`, `ENVIRONMENT_SETUP.md`, `ARCHITECTURE_DIAGRAM.md`, `CURRENT_ARCHITECTURE.md`, `INTEGRATION_TEST_SETUP.md`, `PARTNER_AGENCY_RBAC_DESIGN.md`
+Permanent docs to ignore: `README.md`, `ENGINEERING_GUIDE.md`, `ARCHITECTURE_DIAGRAM.md`, `CURRENT_ARCHITECTURE.md`, and anything under `docs/` (see `docs/README.md` for the index)
 
 Report: ✅ Clean or ⚠️ list files that should be removed or added to `.gitignore`.
 
@@ -72,7 +72,7 @@ If migrations were detected:
 ### 6a: Update Schema Diagram
 
 ```bash
-python3 scripts/generate-db-diagram.py > docs/DATABASE_SCHEMA.md
+python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md
 ```
 
 Verify the file was generated and report what tables/relationships changed.

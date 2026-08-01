@@ -128,7 +128,7 @@ After deployment, verify:
 - Database Migration: `migrations/003-migrate-action-updates-to-states.sql`
 - Migration Verification: `migrations/003-migration-verification-report.md`
 - States System Migration: `migrations/MIGRATION_STATUS.md`
-- Original Observations Roadmap: `docs/OBSERVATIONS_SYSTEM_ROADMAP.md`
+- Original Observations Roadmap: `docs/design/OBSERVATIONS_SYSTEM.md`
 
 ## Next Steps
 

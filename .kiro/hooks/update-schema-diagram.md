@@ -15,7 +15,7 @@ Run this hook when:
 
 2. **Generate schema diagram**
    ```bash
-   python3 scripts/generate-db-diagram.py > docs/DATABASE_SCHEMA.md
+   python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md
    ```
 
 3. **Verify output**
@@ -24,7 +24,7 @@ Run this hook when:
    - Compare with previous version to see what changed
 
 4. **Add to PR with context**
-   - Stage the file: `git add docs/DATABASE_SCHEMA.md`
+   - Stage the file: `git add docs/architecture/DATABASE_SCHEMA.md`
    - Provide explanation: "Updated schema diagram to reflect [specific changes]"
    - Agent can describe what tables/relationships changed
 
@@ -40,7 +40,7 @@ If script fails:
 
 User can always run manually:
 ```bash
-python3 scripts/generate-db-diagram.py > docs/DATABASE_SCHEMA.md
+python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md
 ```
 
 ## Benefits of Kiro Hook Approach

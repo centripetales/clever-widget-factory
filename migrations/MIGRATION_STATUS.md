@@ -200,7 +200,7 @@ If rollback is needed:
 - Migration script: `migrations/002-rename-observations-to-states.sql`
 - Rollback script: `migrations/002-rollback-rename-observations-to-states.sql`
 - Lambda function: `lambda/states/index.js`
-- Original observations roadmap: `docs/OBSERVATIONS_SYSTEM_ROADMAP.md`
+- Original observations roadmap: `docs/design/OBSERVATIONS_SYSTEM.md`
 
 ---
 

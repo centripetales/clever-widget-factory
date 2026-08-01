@@ -69,7 +69,7 @@ aws apigateway get-export \
 ## Combined with Schema Update
 
 This hook can run together with database schema update:
-- Database schema changes → Update `docs/DATABASE_SCHEMA.md`
+- Database schema changes → Update `docs/architecture/DATABASE_SCHEMA.md`
 - API endpoint changes → Update `docs/api/openapi.yaml`
 - Both in same PR for complete documentation
 

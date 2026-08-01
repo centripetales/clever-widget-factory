@@ -1,5 +1,13 @@
 # Tool Audit System Requirements
 
+**Status:** archived — this feature has been implemented
+(`src/pages/Audit.tsx`, `src/pages/AuditTool.tsx`, matching
+`found_in_vicinity`/`found_in_location`/`condition_found`/`last_audited_at`/
+`audit_status` columns confirmed in the current schema). Kept as a historical
+record of the original spec, not a live requirements doc — check the actual
+pages/schema if you need current behavior, not this file.
+**Last verified:** 2026-08-01.
+
 ## Overview
 Create a comprehensive tool audit system to verify tool locations and conditions through random sampling and systematic tracking.
 
