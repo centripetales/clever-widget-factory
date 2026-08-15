@@ -110,9 +110,14 @@ const TOOL_SCHEMA = {
       lighting_condition: { type: 'string', enum: ['direct_sun', 'shade', 'overcast', 'indoor', 'backlit', 'unknown'] },
       frame_contains_non_vessel_vegetation: { type: 'boolean', description: 'True if there is visible plant material in the frame that is clearly not inside/part of the vessel (e.g. background leaves, garden plants).' },
       most_interesting_observation: { type: 'string', description: 'The single most noteworthy, specific thing visible in this photo that a quick glance might miss. State ONLY what is directly visible (position, count, shape, color, arrangement) — do not infer a cause, mechanism, or explanation for why it looks that way. If you cannot confidently identify what an object or feature specifically is, describe its visible properties (shape, color, size, position) rather than naming what it is — e.g. write "an elongated white streak" rather than "a pipette" unless you are certain. A hedged, generic description is more useful than a specific but unconfirmed one.' },
+      notable_organisms_visible: {
+        type: 'array',
+        description: 'Any animals, insects, or other organisms directly visible in the photo that are not the azolla/duckweed crop itself (e.g. a duck, a frog, tadpoles, insects). One short factual description per organism (what it is or looks like, roughly where in the frame). State only what is visible — do not infer whether it is beneficial, harmful, or why it is there. Empty array if none visible.',
+        items: { type: 'string' }
+      },
       uncertainty_flags: { type: 'array', items: { type: 'string' } }
     },
-    required: ['vessel_present', 'vessel_type', 'plant_material_visible', 'plant_sample_points', 'dominant_plant_color', 'species_guess', 'species_guess_basis', 'lighting_condition', 'frame_contains_non_vessel_vegetation', 'most_interesting_observation', 'uncertainty_flags']
+    required: ['vessel_present', 'vessel_type', 'plant_material_visible', 'plant_sample_points', 'dominant_plant_color', 'species_guess', 'species_guess_basis', 'lighting_condition', 'frame_contains_non_vessel_vegetation', 'most_interesting_observation', 'notable_organisms_visible', 'uncertainty_flags']
   }
 };
 

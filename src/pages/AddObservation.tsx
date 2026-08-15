@@ -349,11 +349,24 @@ export default function AddObservation() {
       }
 
       // Build final photo list: include all photos with URLs (existing + eagerly uploaded + just uploaded)
+      // client_captured_at/capture_method/original_*/client_gps_* are write-once
+      // capture-time fields (see PhotoUploadPanel) — existing photos re-populated
+      // from an observation being edited never have them set, so they're simply
+      // omitted here rather than resent/overwritten.
       const finalPhotos = photos
         .map((photo) => ({
           photo_url: photo.photo_url || (photo.id ? uploadedUrls.get(photo.id) : undefined) || '',
           photo_description: photo.photo_description || '',
-          photo_order: 0
+          photo_order: 0,
+          client_captured_at: photo.client_captured_at,
+          capture_method: photo.capture_method,
+          original_filename: photo.original_filename,
+          original_file_size_bytes: photo.original_file_size_bytes,
+          original_mime_type: photo.original_mime_type,
+          original_width: photo.original_width,
+          original_height: photo.original_height,
+          client_gps_latitude: photo.client_gps_latitude,
+          client_gps_longitude: photo.client_gps_longitude,
         }))
         .filter(p => p.photo_url)
         .map((p, index) => ({ ...p, photo_order: index }));

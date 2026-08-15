@@ -13,6 +13,26 @@ const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/c
 const PERSPECTIVES_QUEUE_URL = process.env.PERSPECTIVES_QUEUE_URL;
 if (!PERSPECTIVES_QUEUE_URL) throw new Error('Missing required environment variable: PERSPECTIVES_QUEUE_URL');
 
+// Must match the qualifyingTypes check in lambda/rsp-worker/index.js — states linked to
+// anything other than these types are rejected by the worker, so there's no point enqueueing them.
+const QUALIFYING_LINK_TYPES = ['observation', 'action'];
+
+/**
+ * Whether a state has a link type the perspectives worker will actually process.
+ * Pass `knownLinks` when the caller already has the state's current links in memory
+ * (e.g. just inserted them) to avoid a redundant query; omit it to look them up.
+ */
+async function stateQualifiesForPerspectives(client, stateId, knownLinks) {
+  if (knownLinks !== undefined) {
+    return knownLinks.some(link => QUALIFYING_LINK_TYPES.includes(link.entity_type));
+  }
+  const linksRes = await client.query(
+    `SELECT 1 FROM state_links WHERE state_id = $1 AND entity_type = ANY($2) LIMIT 1`,
+    [stateId, QUALIFYING_LINK_TYPES]
+  );
+  return linksRes.rows.length > 0;
+}
+
 /**
  * Resolve state composition data and queue embedding generation via SQS.
  * Uses its own DB client from the pool since this runs after the main transaction's client is released.
@@ -138,6 +158,8 @@ const headers = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
 };
 
+// Deployed via the versioned-alias pattern (see scripts/deploy/README.md) —
+// this comment is a no-op change to exercise/verify that pipeline.
 exports.handler = async (event) => {
   const { httpMethod, pathParameters } = event;
 
@@ -484,6 +506,83 @@ async function getState(id, authContext, headers) {
   }
 }
 
+// photo_metadata_extractions.captured_at is stored as raw local (Asia/Manila)
+// clock digits, not true UTC, despite being a timestamptz column — matching
+// the pre-existing EXIF convention (see cwf-image-compressor). Philippines
+// has no DST, so shifting the real UTC instant by +8h and storing that as
+// the "UTC" value makes later UTC-getter reads (e.g. getUTCHours()) return
+// Manila wall-clock digits, consistent with how EXIF captured_at is read
+// elsewhere (scripts/azolla-coverage-fetch-data.js's manilaLocalFromUTC()).
+function manilaLocalDigitsAsUtc(isoString) {
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getTime() + 8 * 3600 * 1000).toISOString();
+}
+
+// Writes browser-captured photo metadata (File.lastModified, capture method,
+// original file info, device GPS) into photo_metadata_extractions, source-
+// tagged 'file'/'device'. This table also has an independent async writer
+// (cwf-image-compressor, source 'exif') for the same photo_url — EXIF is the
+// more trustworthy source, so the upsert below must never let this weaker
+// 'file'/'device' write clobber an exif-sourced value, regardless of which
+// writer's INSERT happens to land first (EXIF extraction is event-triggered
+// and can arrive before or after this synchronous request completes).
+async function writeClientCaptureMetadata(client, photo) {
+  const hasAnyMetadata = photo.client_captured_at || photo.capture_method ||
+    photo.original_filename || photo.original_file_size_bytes || photo.original_mime_type ||
+    photo.original_width || photo.original_height ||
+    photo.client_gps_latitude != null || photo.client_gps_longitude != null;
+  if (!hasAnyMetadata) return;
+
+  const capturedAt = photo.client_captured_at ? manilaLocalDigitsAsUtc(photo.client_captured_at) : null;
+  const latitude = photo.client_gps_latitude ?? null;
+  const longitude = photo.client_gps_longitude ?? null;
+
+  await client.query(`
+    INSERT INTO photo_metadata_extractions (
+      photo_url, captured_at, captured_at_source, capture_method, original_filename,
+      original_file_size_bytes, original_mime_type, original_width, original_height,
+      gps_latitude, gps_longitude, gps_source
+    )
+    VALUES (
+      ${formatSqlValue(photo.photo_url)}, ${formatSqlValue(capturedAt)}, 'file',
+      ${formatSqlValue(photo.capture_method ?? null)}, ${formatSqlValue(photo.original_filename ?? null)},
+      ${formatSqlValue(photo.original_file_size_bytes ?? null)}, ${formatSqlValue(photo.original_mime_type ?? null)},
+      ${formatSqlValue(photo.original_width ?? null)}, ${formatSqlValue(photo.original_height ?? null)},
+      ${formatSqlValue(latitude)}, ${formatSqlValue(longitude)},
+      ${latitude !== null ? "'device'" : 'NULL'}
+    )
+    ON CONFLICT (photo_url) DO UPDATE SET
+      captured_at = CASE
+        WHEN photo_metadata_extractions.captured_at_source = 'exif' THEN photo_metadata_extractions.captured_at
+        ELSE COALESCE(EXCLUDED.captured_at, photo_metadata_extractions.captured_at)
+      END,
+      captured_at_source = CASE
+        WHEN photo_metadata_extractions.captured_at_source = 'exif' THEN 'exif'
+        ELSE COALESCE(EXCLUDED.captured_at_source, photo_metadata_extractions.captured_at_source)
+      END,
+      gps_latitude = CASE
+        WHEN photo_metadata_extractions.gps_source = 'exif' THEN photo_metadata_extractions.gps_latitude
+        ELSE COALESCE(EXCLUDED.gps_latitude, photo_metadata_extractions.gps_latitude)
+      END,
+      gps_longitude = CASE
+        WHEN photo_metadata_extractions.gps_source = 'exif' THEN photo_metadata_extractions.gps_longitude
+        ELSE COALESCE(EXCLUDED.gps_longitude, photo_metadata_extractions.gps_longitude)
+      END,
+      gps_source = CASE
+        WHEN photo_metadata_extractions.gps_source = 'exif' THEN 'exif'
+        ELSE COALESCE(EXCLUDED.gps_source, photo_metadata_extractions.gps_source)
+      END,
+      capture_method = COALESCE(photo_metadata_extractions.capture_method, EXCLUDED.capture_method),
+      original_filename = COALESCE(photo_metadata_extractions.original_filename, EXCLUDED.original_filename),
+      original_file_size_bytes = COALESCE(photo_metadata_extractions.original_file_size_bytes, EXCLUDED.original_file_size_bytes),
+      original_mime_type = COALESCE(photo_metadata_extractions.original_mime_type, EXCLUDED.original_mime_type),
+      original_width = COALESCE(photo_metadata_extractions.original_width, EXCLUDED.original_width),
+      original_height = COALESCE(photo_metadata_extractions.original_height, EXCLUDED.original_height),
+      updated_at = NOW()
+  `);
+}
+
 async function createState(event, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
   const { action, state_text, captured_at, photos = [], links = [], shared_with_partners } = body;
@@ -541,6 +640,17 @@ async function createState(event, authContext, headers) {
           id: photoResult.rows[0].id,
           photo_url: photo.photo_url
         });
+
+        // Best-effort: record client-captured metadata (File.lastModified,
+        // capture method, original file info, device GPS) alongside whatever
+        // EXIF cwf-image-compressor extracts asynchronously for this same
+        // photo_url. Never let a failure here fail the observation save —
+        // this is supplementary metadata, not required for a photo to exist.
+        try {
+          await writeClientCaptureMetadata(client, photo);
+        } catch (metaErr) {
+          console.error('[STATES] Failed to write client capture metadata:', photo.photo_url, metaErr.message);
+        }
       }
     }
 
@@ -600,16 +710,18 @@ async function createState(event, authContext, headers) {
       console.error('Failed to broadcast cache invalidation:', err);
     }
 
-    try {
-      const pClient = await getDbClient();
-      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
-      pClient.release();
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: PERSPECTIVES_QUEUE_URL,
-        MessageBody: JSON.stringify({ stateId: state.id, organizationId })
-      }));
-    } catch (pErr) {
-      console.error('Failed to queue observation for perspectives:', pErr);
+    if (await stateQualifiesForPerspectives(client, state.id, links)) {
+      try {
+        const pClient = await getDbClient();
+        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
+        pClient.release();
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: state.id, organizationId })
+        }));
+      } catch (pErr) {
+        console.error('Failed to queue observation for perspectives:', pErr);
+      }
     }
 
     // Explicitly await queueing to prevent AWS Lambda environment freeze
@@ -666,18 +778,20 @@ async function updateState(event, id, authContext, headers) {
       `, [requested_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0', photo_id]);
       
       await client.query('COMMIT');
-      
+
       // 3. Queue SQS perspective run
       try {
-        const pClient = await getDbClient();
-        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
-        pClient.release();
-        
-        await sqs.send(new SendMessageCommand({
-          QueueUrl: PERSPECTIVES_QUEUE_URL,
-          MessageBody: JSON.stringify({ stateId: id, organizationId })
-        }));
-        console.log('[Reanalyze] Queued perspective run successfully.');
+        if (await stateQualifiesForPerspectives(client, id)) {
+          const pClient = await getDbClient();
+          await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+          pClient.release();
+
+          await sqs.send(new SendMessageCommand({
+            QueueUrl: PERSPECTIVES_QUEUE_URL,
+            MessageBody: JSON.stringify({ stateId: id, organizationId })
+          }));
+          console.log('[Reanalyze] Queued perspective run successfully.');
+        }
       } catch (pErr) {
         console.error('[Reanalyze] Failed to queue perspectives:', pErr);
       }
@@ -797,6 +911,16 @@ async function updateState(event, id, authContext, headers) {
             id: photoResult.rows[0].id,
             photo_url: photo.photo_url
           });
+
+          // Same as createState: a genuinely new photo_url added during an
+          // edit (e.g. via StatesInline's edit flow) still deserves its own
+          // capture metadata — this isn't re-deriving anything for existing
+          // photos, just covering the "insert new photo" branch above.
+          try {
+            await writeClientCaptureMetadata(client, photo);
+          } catch (metaErr) {
+            console.error('[STATES] Failed to write client capture metadata:', photo.photo_url, metaErr.message);
+          }
         }
       }
       
@@ -865,13 +989,15 @@ async function updateState(event, id, authContext, headers) {
     }
 
     try {
-      const pClient = await getDbClient();
-      await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
-      pClient.release();
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: PERSPECTIVES_QUEUE_URL,
-        MessageBody: JSON.stringify({ stateId: id, organizationId })
-      }));
+      if (await stateQualifiesForPerspectives(client, id, links)) {
+        const pClient = await getDbClient();
+        await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
+        pClient.release();
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: id, organizationId })
+        }));
+      }
     } catch (pErr) {
       console.error('Failed to queue observation for perspectives:', pErr);
     }

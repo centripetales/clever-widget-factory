@@ -4,7 +4,11 @@ set -e
 API_ID="0720au267k"
 REGION="us-west-2"
 AUTHORIZER_ID="pjg8xs"
-LAMBDA_ARN="arn:aws:lambda:us-west-2:131745734428:function:cwf-states-lambda"
+# :live alias, not the bare function — cwf-states-lambda is onboarded to the
+# versioned-alias deploy pattern (see scripts/deploy/README.md). Wiring a new
+# route to the unqualified ARN would silently invoke $LATEST instead, bypassing
+# the alias and breaking the assumption that rollback-lambda.sh controls what's live.
+LAMBDA_ARN="arn:aws:lambda:us-west-2:131745734428:function:cwf-states-lambda:live"
 
 echo "🔧 Setting up API Gateway routes for states..."
 

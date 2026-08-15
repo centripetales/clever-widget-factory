@@ -47,3 +47,33 @@ echo "🧹 Cleaning up local ZIP package..."
 rm -f function.zip
 
 echo "✅ Code deployed successfully to $FUNCTION_NAME in ${ELAPSED}s!"
+
+# Publish a version and move the "live" alias to it, if this function has
+# been onboarded to the alias pattern (see scripts/deploy/README.md). If
+# no "live" alias exists yet, this still publishes a version (harmless,
+# just an unreferenced snapshot) but skips the alias move — onboarding a
+# function is a one-time setup, not something this script does implicitly.
+aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$REGION"
+
+NEW_VERSION=$(aws lambda publish-version \
+  --function-name "$FUNCTION_NAME" \
+  --region "$REGION" \
+  --query 'Version' --output text)
+
+CURRENT_ALIAS_VERSION=$(aws lambda get-alias \
+  --function-name "$FUNCTION_NAME" \
+  --name live \
+  --region "$REGION" \
+  --query 'FunctionVersion' --output text 2>/dev/null || echo "")
+
+if [ -n "$CURRENT_ALIAS_VERSION" ]; then
+  aws lambda update-alias \
+    --function-name "$FUNCTION_NAME" \
+    --name live \
+    --function-version "$NEW_VERSION" \
+    --region "$REGION" > /dev/null
+  echo "✅ live alias: v${CURRENT_ALIAS_VERSION} → v${NEW_VERSION}"
+  echo "   Rollback with: scripts/deploy/rollback-lambda.sh $FUNCTION_NAME $CURRENT_ALIAS_VERSION"
+else
+  echo "ℹ️  Published v${NEW_VERSION} (no 'live' alias for $FUNCTION_NAME yet — API Gateway/trigger still points at \$LATEST)"
+fi

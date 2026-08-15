@@ -1,5 +1,15 @@
 # Database Schema Diagram
 
+Auto-generated — do not hand-edit, it will be overwritten on the next run.
+
+Regenerate with:
+```bash
+python3 scripts/generate-db-diagram.py > docs/architecture/DATABASE_SCHEMA.md
+```
+Or let the Kiro hook do it automatically on migration changes — see
+`.kiro/hooks/update-schema-diagram.md`. For a PDF export, see
+`scripts/generate-db-pdf.sh`.
+
 ```mermaid
 erDiagram
   action_embedding {
@@ -11,8 +21,8 @@ erDiagram
     timestamp with time zone created_at
   }
   action_exploration {
-    uuid action_id PK NOT NULL
     uuid action_id NOT NULL
+    uuid action_id PK NOT NULL
     uuid exploration_id NOT NULL
     uuid exploration_id PK NOT NULL
     timestamp without time zone created_at
@@ -125,6 +135,25 @@ erDiagram
     text notes
     uuid organization_id NOT NULL
     timestamp with time zone created_at NOT NULL
+  }
+  azolla_duckweed_observation_perspectives {
+    uuid id PK NOT NULL
+    uuid id NOT NULL
+    boolean vessel_present
+    text vessel_type
+    numeric vessel_frame_occupancy_percent
+    boolean plant_material_visible
+    numeric plant_coverage_percent_estimate
+    numeric water_visible_percent_estimate
+    character varying dominant_plant_color
+    character varying species_guess
+    text species_guess_basis
+    character varying lighting_condition
+    boolean frame_contains_non_vessel_vegetation
+    text most_interesting_observation
+    jsonb plant_sample_points
+    jsonb uncertainty_flags
+    jsonb content NOT NULL
   }
   checkins {
     uuid id PK NOT NULL
@@ -262,6 +291,27 @@ erDiagram
     timestamp with time zone created_at
     timestamp with time zone updated_at
     uuid created_by
+  }
+  growth_color_metrics_perspectives {
+    uuid id PK NOT NULL
+    uuid id NOT NULL
+    character varying sample_method NOT NULL
+    integer image_width NOT NULL
+    integer image_height NOT NULL
+    integer sampled_pixel_count NOT NULL
+    integer green_pixel_count NOT NULL
+    numeric green_pixel_percent NOT NULL
+    numeric green_mean_hue_degrees
+    numeric green_mean_saturation
+    numeric green_mean_value
+    numeric frame_mean_value
+    jsonb content NOT NULL
+    numeric green_median_value
+    numeric green_median_hue_degrees
+    numeric frame_median_value
+    numeric value_ratio_to_frame
+    numeric exg_mean
+    numeric exg_median
   }
   issue_history {
     uuid id PK NOT NULL
@@ -700,6 +750,7 @@ erDiagram
     USER-DEFINED search_embedding_v2
     text policy
     bigint target_population_scale NOT NULL
+    boolean is_location
   }
   unified_embeddings {
     uuid id PK NOT NULL
@@ -773,6 +824,7 @@ erDiagram
   analyses ||--o{ analysis_scores : analysis_id
   organizations ||--o{ asset_history : organization_id
   tools ||--o{ asset_history : asset_id
+  state_perspectives ||--o{ azolla_duckweed_observation_perspectives : id
   checkouts ||--o{ checkins : checkout_id
   organizations ||--o{ checkins : organization_id
   tools ||--o{ checkins : tool_id
@@ -797,6 +849,7 @@ erDiagram
   organizations ||--o{ financial_records : organization_id
   issues ||--o{ five_whys_sessions : issue_id
   organizations ||--o{ five_whys_sessions : organization_id
+  state_perspectives ||--o{ growth_color_metrics_perspectives : id
   organizations ||--o{ issue_history : organization_id
   organizations ||--o{ issue_requirements : organization_id
   organizations ||--o{ issues : organization_id

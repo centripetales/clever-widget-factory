@@ -1,5 +1,5 @@
 // Version management for debugging and tracking
-export const APP_VERSION = "1.2.0";
+export const APP_VERSION = "1.2.1";
 export const BUILD_DATE = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 export const BUILD_TIMESTAMP = new Date().toISOString(); // Full timestamp with time
 

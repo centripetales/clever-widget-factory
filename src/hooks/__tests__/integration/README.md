@@ -107,7 +107,7 @@ npm run test:integration
 npm run test:integration -- assetCheckoutValidation.test.tsx
 ```
 
-See [INTEGRATION_TEST_SETUP.md](../../../INTEGRATION_TEST_SETUP.md) for detailed setup instructions.
+See [docs/architecture/INTEGRATION_TESTING.md](../../../docs/architecture/INTEGRATION_TESTING.md) for current setup instructions (this file has known drift, see that doc).
 
 ### Environment Variables
 
