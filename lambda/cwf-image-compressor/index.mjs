@@ -144,19 +144,40 @@ export const handler = async (event) => {
         }
         const rawExifJson = JSON.stringify(cleanExif).replace(/'/g, "''");
         
+        // EXIF is the highest-priority source for captured_at/gps_*, so it
+        // should always WIN when it actually has a value — but "Take Photo"
+        // captures routinely have partial or no EXIF (confirmed live: a
+        // camera capture with GPS EXIF but no DateTimeOriginal), so this
+        // writer must not blindly overwrite with NULL when EXIF didn't find
+        // something. Each CASE below only overwrites when EXCLUDED (this
+        // write) actually has a value; otherwise it keeps whatever the
+        // "file" writer in lambda/states/index.js already recorded — the
+        // same clobber bug the CASE-based upsert there was meant to prevent,
+        // just showing up from the opposite direction (a real write with a
+        // partially-null payload, not a stale weaker write).
+        // capture_method and the original_* columns are deliberately NOT in
+        // this SET clause at all: this writer doesn't know those fields, and
+        // omitting them (rather than setting to NULL) preserves whatever the
+        // "file" writer already recorded, regardless of which writer lands first.
         const sql = `
           INSERT INTO photo_metadata_extractions (
-            photo_url, gps_latitude, gps_longitude, gps_altitude, captured_at, device_make, device_model, raw_exif
+            photo_url, gps_latitude, gps_longitude, gps_altitude, captured_at,
+            captured_at_source, device_make, device_model, raw_exif, gps_source
           )
           VALUES (
-            '${photoUrl.replace(/'/g, "''")}', ${latitude}, ${longitude}, ${altitude}, ${capturedAt}, ${deviceMake}, ${deviceModel}, '${rawExifJson}'::jsonb
+            '${photoUrl.replace(/'/g, "''")}', ${latitude}, ${longitude}, ${altitude}, ${capturedAt},
+            CASE WHEN ${capturedAt} IS NOT NULL THEN 'exif' ELSE NULL END,
+            ${deviceMake}, ${deviceModel}, '${rawExifJson}'::jsonb,
+            CASE WHEN ${latitude} IS NOT NULL THEN 'exif' ELSE NULL END
           )
           ON CONFLICT (photo_url)
           DO UPDATE SET
-            gps_latitude = EXCLUDED.gps_latitude,
-            gps_longitude = EXCLUDED.gps_longitude,
-            gps_altitude = EXCLUDED.gps_altitude,
-            captured_at = EXCLUDED.captured_at,
+            gps_latitude = CASE WHEN EXCLUDED.gps_latitude IS NOT NULL THEN EXCLUDED.gps_latitude ELSE photo_metadata_extractions.gps_latitude END,
+            gps_longitude = CASE WHEN EXCLUDED.gps_latitude IS NOT NULL THEN EXCLUDED.gps_longitude ELSE photo_metadata_extractions.gps_longitude END,
+            gps_altitude = CASE WHEN EXCLUDED.gps_latitude IS NOT NULL THEN EXCLUDED.gps_altitude ELSE photo_metadata_extractions.gps_altitude END,
+            gps_source = CASE WHEN EXCLUDED.gps_latitude IS NOT NULL THEN 'exif' ELSE photo_metadata_extractions.gps_source END,
+            captured_at = CASE WHEN EXCLUDED.captured_at IS NOT NULL THEN EXCLUDED.captured_at ELSE photo_metadata_extractions.captured_at END,
+            captured_at_source = CASE WHEN EXCLUDED.captured_at IS NOT NULL THEN 'exif' ELSE photo_metadata_extractions.captured_at_source END,
             device_make = EXCLUDED.device_make,
             device_model = EXCLUDED.device_model,
             raw_exif = EXCLUDED.raw_exif,

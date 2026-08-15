@@ -26,6 +26,17 @@ export interface PhotoItem {
   isUploading?: boolean;
   isExisting?: boolean;
   uploadFailed?: boolean;
+  /** Captured client-side at selection time — see writeup below. Write-once,
+   *  never re-derived for existing photos (no live File to read it from). */
+  client_captured_at?: string;
+  capture_method?: 'camera' | 'gallery';
+  original_filename?: string;
+  original_file_size_bytes?: number;
+  original_mime_type?: string;
+  original_width?: number;
+  original_height?: number;
+  client_gps_latitude?: number;
+  client_gps_longitude?: number;
 }
 
 export interface PhotoUploadPanelProps {
@@ -93,6 +104,51 @@ async function extractExifThumbnail(file: File): Promise<string | null> {
 const isMobileDevice = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 /**
+ * File.lastModified is usually a real timestamp, but camera-captured Files
+ * (canvas/Blob re-encoded, no EXIF pipeline) have been observed to carry an
+ * invalid value on some browsers — new Date(invalid).toISOString() throws,
+ * which would abort building the whole photo item before it ever renders.
+ * Falls back to "now" rather than leaving the field unset, since some
+ * timestamp (even if only capture-attempt-time) is better than none for the
+ * "Take Photo" path this exists to help most.
+ */
+function safeCapturedAtIso(lastModified: number): string {
+  const d = new Date(lastModified);
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+/** Pre-compression pixel dimensions, read from the original file. */
+async function readImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const dims = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return dims;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Device GPS at the moment of photo selection, gated on the user's existing
+ * browser permission — never prompts more than the browser's own once-per-
+ * origin dialog, and never blocks or fails the upload if denied/unavailable.
+ */
+function getDeviceLocation(): Promise<{ latitude: number; longitude: number } | null> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 8000, maximumAge: 5 * 60 * 1000 }
+    );
+  });
+}
+
+/**
  * Shared, reusable photo upload panel.
  *
  * Handles file selection (with mobile camera capture), lightweight previews
@@ -146,6 +202,8 @@ export function PhotoUploadPanel({
       const slotsAvailable =
         maxPhotos != null ? maxPhotos - photos.length : Infinity;
       const filesToAdd = fileArray.slice(0, slotsAvailable);
+      const captureMethod: 'camera' | 'gallery' =
+        e.target === cameraInputRef.current ? 'camera' : 'gallery';
 
       const newItems: PhotoItem[] = filesToAdd.map((file, index) => ({
         id: `photo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -156,9 +214,48 @@ export function PhotoUploadPanel({
         previewUrl: '', // thumbnail generated async below
         isUploading: !!onEagerUpload,
         isExisting: false,
+        // File.lastModified is a real timestamp regardless of EXIF presence —
+        // it's the fallback that makes "Take Photo" captures (which have
+        // almost no EXIF) get a meaningful timestamp at all.
+        client_captured_at: safeCapturedAtIso(file.lastModified),
+        capture_method: captureMethod,
+        original_filename: file.name,
+        original_file_size_bytes: file.size,
+        original_mime_type: file.type,
       }));
 
       onPhotosChange([...photos, ...newItems]);
+
+      // Pre-compression dimensions, read async per photo — never blocks
+      // upload, just backfills the PhotoItem once resolved.
+      (async () => {
+        await new Promise(r => setTimeout(r, 0));
+        for (const item of newItems) {
+          if (!item.file || !item.id) continue;
+          const dims = await readImageDimensions(item.file);
+          if (!dims) continue;
+          const latest = photosRef.current.map((p) =>
+            p.id === item.id ? { ...p, original_width: dims.width, original_height: dims.height } : p
+          );
+          onPhotosChange(latest);
+        }
+      })();
+
+      // Device GPS — requested once per selection batch (not once per photo),
+      // matching the browser's own once-per-origin permission prompt. Never
+      // blocks or gates upload: if denied/unavailable/timed out, the photo
+      // items simply keep no client_gps_* fields.
+      (async () => {
+        const location = await getDeviceLocation();
+        if (!location) return;
+        const ids = new Set(newItems.map((i) => i.id));
+        const latest = photosRef.current.map((p) =>
+          p.id && ids.has(p.id)
+            ? { ...p, client_gps_latitude: location.latitude, client_gps_longitude: location.longitude }
+            : p
+        );
+        onPhotosChange(latest);
+      })();
 
       // Generate lightweight EXIF thumbnails (sequential, one at a time).
       // For JPEGs: extracts the ~10-20KB embedded thumbnail from the first 64KB.

@@ -79,8 +79,9 @@ function manilaLocalFromUTC(utcDate) {
 }
 
 // `d` must already carry local wall-clock digits in its UTC getters —
-// either a shifted-UTC app timestamp (see above), or an EXIF timestamp
-// used as-is (see the note by exif_captured_at below).
+// either a shifted-UTC app timestamp (see above), or a
+// photo_metadata_extractions.captured_at value used as-is (see the note
+// in the main query loop below).
 function dateKeyFromLocalDigits(d) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -102,11 +103,11 @@ async function main() {
     const res = await client.query(`
       SELECT
         t.id as tool_id, t.name as container_name,
-        s.id as state_id, s.captured_at,
+        s.id as state_id, s.captured_at as captured_at_from_state,
         s.state_text as observation_notes, sp.photo_description as photo_notes,
         sp.id as photo_id, sp.photo_url,
         p.plant_coverage_percent_estimate as photo_coverage,
-        pme.captured_at as exif_captured_at
+        pme.captured_at, pme.captured_at_source
       FROM metric_snapshots ms
       JOIN metrics m ON m.metric_id = ms.metric_id AND m.name = 'Coverage %'
       JOIN tools t ON t.id = m.tool_id
@@ -121,21 +122,29 @@ async function main() {
 
     const days = new Map();
     for (const r of res.rows) {
-      // Prefer the photo's own EXIF capture time over when it was
-      // successfully submitted — a delayed/retried upload (bad signal,
-      // connectivity issues) should count toward the day it was actually
-      // taken, not the day it finally went through. photo_metadata_
-      // extractions.captured_at is stored as the raw local Manila clock
-      // reading (confirmed by cross-checking against app timestamps across
-      // several people) despite being a timestamptz column, so it's used
-      // AS-IS here, not converted again — converting it a second time would
-      // double-shift it by another 8 hours. Guarded against broken device
-      // clocks (e.g. a dead battery resetting an old Android phone to
-      // 2017): only trust EXIF if its year is close to the app's own year.
-      const appLocal = manilaLocalFromUTC(r.captured_at);
+      // Prefer the photo's own capture time (EXIF, or failing that the
+      // browser's File.lastModified at selection time — see migration 016)
+      // over when it was successfully submitted — a delayed/retried upload
+      // (bad signal, connectivity issues) should count toward the day it was
+      // actually taken, not the day it finally went through.
+      //
+      // photo_metadata_extractions.captured_at is stored as raw local Manila
+      // clock digits regardless of source (both writers use this convention —
+      // see migration 016's column comment), so it's used AS-IS here, not
+      // converted again — converting it a second time would double-shift it
+      // by another 8 hours. Guarded against broken device clocks (e.g. a dead
+      // battery resetting an old Android phone to 2017): only trust it if its
+      // year is close to the app's own year.
+      const appLocal = manilaLocalFromUTC(r.captured_at_from_state);
       let trueTime = appLocal;
-      if (r.exif_captured_at && Math.abs(r.exif_captured_at.getUTCFullYear() - appLocal.getUTCFullYear()) <= 1) {
-        trueTime = r.exif_captured_at;
+      let timeSource = 'submitted';
+      if (r.captured_at && Math.abs(r.captured_at.getUTCFullYear() - appLocal.getUTCFullYear()) <= 1) {
+        trueTime = r.captured_at;
+        // captured_at_source is NULL for every row written before migration
+        // 016 added the column — that's all pre-existing EXIF data (the only
+        // writer at the time), so NULL here means 'exif' just as much as the
+        // literal string does. Only an explicit 'file' means the weaker source.
+        timeSource = r.captured_at_source === 'file' ? 'file' : 'photo';
       }
       const dt = dateKeyFromLocalDigits(trueTime);
       const key = `${r.tool_id}|${dt}`;
@@ -155,25 +164,9 @@ async function main() {
           state_id: r.state_id,
           photo_coverage: r.photo_coverage !== null ? Number(r.photo_coverage) : null,
           time: timeStrFromLocalDigits(trueTime),
-          time_source: trueTime === r.exif_captured_at ? 'photo' : 'submitted',
+          time_source: timeSource,
         });
       }
-    }
-
-    // Keyword heuristic for marker shape — NOT deep understanding of the
-    // note, just word matching. Good enough to surface "something happened
-    // here" at a glance; treat it as a starting point, not ground truth.
-    // Destructive checked first and wins on overlap (e.g. "fertilizer
-    // burned the leaves" is worth flagging as destructive, not just action).
-    const DESTRUCTIVE_WORDS = /\b(died|dying|dead|damage[ds]?|destroyed|killed|infest(ed|ation)?|pest[s]?|disease[ds]?|rot(ted|ting)?|mold(y)?|wilt(ed|ing)?|algae bloom|spill(ed)?|contaminat(ed|ion)|burned|burnt|die-?off|toxic|poison(ed)?)\b/i;
-    const ACTION_WORDS = /\b(fertiliz(e|ed|er|ing)|fertilis(e|ed|er|ing)|manure|compost(ed)?|nutrient[s]?|treat(ed|ment)|applied|apply(ing)?|added|adding|dose[ds]?|dosed|spray(ed|ing)?|fed|feeding|transplant(ed)?|relocat(ed|e)|harvest(ed)?|thin(ned)?|prune[d]?|crimp(ed|ing)?|remove[ds]?|removing|mixed in|topped up|top-?dress(ed|ing)?)\b/i;
-
-    function classifyMarker(images) {
-      const text = images.map((i) => i.notes || '').join(' ');
-      if (!text.trim()) return 'normal';
-      if (DESTRUCTIVE_WORDS.test(text)) return 'destructive';
-      if (ACTION_WORDS.test(text)) return 'action';
-      return 'normal';
     }
 
     const points = [];
@@ -182,9 +175,15 @@ async function main() {
       const covs = images.map((i) => i.photo_coverage).filter((v) => v !== null);
       if (covs.length === 0) continue;
       const avg = covs.reduce((a, b) => a + b, 0) / covs.length;
+      // Plotted value is the day's max, not the mean — a lower estimate
+      // often just means someone photographed a sparser corner of the
+      // container to document it honestly, not that overall coverage
+      // dropped. Penalizing that in the plotted number discourages taking
+      // photos of weaker spots. Mean is still computed and kept in the
+      // data (avg_value) for reference, just not what gets plotted.
+      const max = Math.max(...covs);
       const numStates = new Set(images.map((i) => i.state_id)).size;
-      const marker = classifyMarker(images);
-      points.push({ tool_id: d.tool_id, container_name: d.container_name, date: d.date, avg_value: avg, num_states: numStates, images, marker });
+      points.push({ tool_id: d.tool_id, container_name: d.container_name, date: d.date, avg_value: avg, max_value: max, num_states: numStates, images });
     }
 
     fs.writeFileSync(path.join(SCRATCH_DIR, 'coverage_points_by_day.json'), JSON.stringify(points, null, 2));

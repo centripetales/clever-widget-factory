@@ -22,7 +22,7 @@ import html
 import hashlib
 import io
 from datetime import datetime, timedelta
-from PIL import Image
+from PIL import Image, ImageOps
 
 if len(sys.argv) != 3:
     print("Usage: python3 azolla-coverage-chart.py <scratch_dir> <output_html>")
@@ -56,7 +56,13 @@ def data_uri_for(url):
     if not os.path.exists(path):
         return ''
     with open(path, 'rb') as imgf:
-        img = Image.open(io.BytesIO(imgf.read())).convert('RGB')
+        img = Image.open(io.BytesIO(imgf.read()))
+    # PIL reads raw pixel data regardless of the EXIF Orientation tag —
+    # phones often store landscape-sensor pixels with a "rotate on display"
+    # tag rather than physically rotating them, so without this call photos
+    # show up sideways/upside-down here even though most phone galleries
+    # and modern browsers render the same file upright.
+    img = ImageOps.exif_transpose(img).convert('RGB')
     img.thumbnail((320, 320))
     buf = io.BytesIO()
     img.save(buf, 'JPEG', quality=55)
@@ -148,17 +154,21 @@ def marker_svg(marker, x, y, color, common_attrs):
 
 for name, pts in containers.items():
     color = COLORS[name]
-    path_d = " ".join(f"{'M' if i==0 else 'L'}{x_pos(p['dt']):.1f},{y_pos(p['avg_value']):.1f}" for i, p in enumerate(pts))
+    # Plotted value is each day's max coverage estimate, not the mean — see
+    # azolla-coverage-fetch-data.js for why. Mean is still carried through
+    # as data-mean for the tooltip, just not what's plotted.
+    path_d = " ".join(f"{'M' if i==0 else 'L'}{x_pos(p['dt']):.1f},{y_pos(p['max_value']):.1f}" for i, p in enumerate(pts))
     svg_parts.append(f'<g class="series" data-series="{slug(name)}">')
     svg_parts.append(f'<path d="{path_d}" fill="none" stroke="{color}" stroke-width="2.5" opacity="0.85" />')
     for p in pts:
-        x, y = x_pos(p['dt']), y_pos(p['avg_value'])
+        x, y = x_pos(p['dt']), y_pos(p['max_value'])
         date_str = p['dt'].strftime('%b %d, %Y')
         common_attrs = (
-            f'class="pt" data-name="{html.escape(name)}" data-date="{date_str}" data-value="{p["avg_value"]:.0f}" '
+            f'class="pt" data-name="{html.escape(name)}" data-date="{date_str}" data-value="{p["max_value"]:.0f}" '
+            f'data-mean="{p["avg_value"]:.0f}" '
             f'data-asset="{p["asset_url"]}" data-images=\'{html.escape(json.dumps(p["images"]))}\''
         )
-        svg_parts.append(marker_svg(p.get('marker', 'normal'), x, y, color, common_attrs))
+        svg_parts.append(marker_svg('normal', x, y, color, common_attrs))
     svg_parts.append('</g>')
 
 svg_content = "\n".join(svg_parts)
@@ -233,7 +243,7 @@ html_out = f'''<title>Azolla Coverage % Over Time</title>
 
 <div class="wrap">
   <h1>Azolla / Duckweed Coverage % Over Time</h1>
-  <p class="subtitle">{len(points)} daily points across {len(containers)} registered containers. Hover a point for that day's photos and notes.</p>
+  <p class="subtitle">{len(points)} daily points across {len(containers)} registered containers. Plotted value is each day's max coverage estimate (lower photos are often honest documentation of a sparser spot, not a real drop) — hover a point for the mean, every photo, and notes.</p>
 
   <div class="chart-container">
     <svg viewBox="0 0 {W} {H}" role="img" aria-label="Coverage percent over time, one line per container">
@@ -294,7 +304,7 @@ html_out = f'''<title>Azolla Coverage % Over Time</title>
     return images.map(img => `
       <div class="tt-shot">
         <img src="${{img.src}}" alt="" />
-        <div class="tt-shot-time">${{img.time ? img.time + (img.time_source === 'photo' ? ' (from photo)' : ' (submitted \\u2014 no reliable photo timestamp)') : ''}}${{img.coverage !== null ? ' \\u00b7 ' + img.coverage + '% in this photo' : ''}} &middot; <a href="${{img.edit_url}}" target="_blank" rel="noopener">edit &rarr;</a></div>
+        <div class="tt-shot-time">${{img.time ? img.time + (img.time_source === 'photo' ? ' (from photo EXIF)' : img.time_source === 'file' ? ' (from photo file)' : ' (submitted \\u2014 no reliable photo timestamp)') : ''}}${{img.coverage !== null ? ' \\u00b7 ' + img.coverage + '% in this photo' : ''}} &middot; <a href="${{img.edit_url}}" target="_blank" rel="noopener">edit &rarr;</a></div>
         ${{img.notes ? `<div class="tt-shot-notes"><span class="tt-shot-notes-label">Their note</span>${{esc(img.notes)}}</div>` : ''}}
       </div>
     `).join('');
@@ -305,7 +315,7 @@ html_out = f'''<title>Azolla Coverage % Over Time</title>
       cancelHide();
       const images = JSON.parse(pt.dataset.images);
       ttName.textContent = pt.dataset.name;
-      ttMeta.textContent = pt.dataset.date + ' \\u2014 ' + pt.dataset.value + '% avg coverage \\u2014 ' + images.length + ' photo' + (images.length === 1 ? '' : 's');
+      ttMeta.textContent = pt.dataset.date + ' \\u2014 ' + pt.dataset.value + '% max (' + pt.dataset.mean + '% mean) \\u2014 ' + images.length + ' photo' + (images.length === 1 ? '' : 's');
       ttShots.innerHTML = renderShots(images);
       ttAsset.href = pt.dataset.asset;
       tooltip.style.display = 'block';

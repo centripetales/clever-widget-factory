@@ -48,6 +48,18 @@ export interface CreateObservationData {
     photo_url: string;
     photo_description?: string;
     photo_order?: number;
+    // Write-once, client-captured-at-selection-time metadata (see
+    // PhotoUploadPanel's PhotoItem). Never round-tripped from an existing
+    // photo — only present for newly selected photos in this submission.
+    client_captured_at?: string;
+    capture_method?: 'camera' | 'gallery';
+    original_filename?: string;
+    original_file_size_bytes?: number;
+    original_mime_type?: string;
+    original_width?: number;
+    original_height?: number;
+    client_gps_latitude?: number;
+    client_gps_longitude?: number;
   }>;
   links?: Array<{
     entity_type: string;
@@ -63,6 +75,19 @@ export interface UpdateObservationData {
     photo_url: string;
     photo_description?: string;
     photo_order?: number;
+    // Only meaningful for a photo_url not already attached to this
+    // observation (i.e. a genuinely new photo added during an edit) — see
+    // CreateObservationData for the full field docs. Ignored for existing
+    // photos, which never carry these anyway.
+    client_captured_at?: string;
+    capture_method?: 'camera' | 'gallery';
+    original_filename?: string;
+    original_file_size_bytes?: number;
+    original_mime_type?: string;
+    original_width?: number;
+    original_height?: number;
+    client_gps_latitude?: number;
+    client_gps_longitude?: number;
   }>;
   links?: Array<{
     entity_type: string;

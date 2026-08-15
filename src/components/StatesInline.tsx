@@ -273,7 +273,20 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
       const photosSnapshot = [...photos];
 
       // Process photos: upload new ones, keep existing ones
-      let uploadedPhotos: Array<{ photo_url: string; photo_description: string; photo_order: number }> = [];
+      let uploadedPhotos: Array<{
+        photo_url: string;
+        photo_description: string;
+        photo_order: number;
+        client_captured_at?: string;
+        capture_method?: 'camera' | 'gallery';
+        original_filename?: string;
+        original_file_size_bytes?: number;
+        original_mime_type?: string;
+        original_width?: number;
+        original_height?: number;
+        client_gps_latitude?: number;
+        client_gps_longitude?: number;
+      }> = [];
 
       if (photosSnapshot.length > 0) {
         const newPhotos = photosSnapshot.filter(p => !p.isExisting && p.file && !p.photo_url);
@@ -301,7 +314,16 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
             uploadedPhotos.push({
               photo_url: photoUrl,
               photo_description: photo.photo_description || '',
-              photo_order: uploadedPhotos.length
+              photo_order: uploadedPhotos.length,
+              client_captured_at: photo.client_captured_at,
+              capture_method: photo.capture_method,
+              original_filename: photo.original_filename,
+              original_file_size_bytes: photo.original_file_size_bytes,
+              original_mime_type: photo.original_mime_type,
+              original_width: photo.original_width,
+              original_height: photo.original_height,
+              client_gps_latitude: photo.client_gps_latitude,
+              client_gps_longitude: photo.client_gps_longitude,
             });
           } catch (uploadErr) {
             console.error('Failed to upload photo on save:', photo.file.name, uploadErr);
@@ -314,7 +336,18 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
           uploadedPhotos.push({
             photo_url: photo.photo_url!,
             photo_description: photo.photo_description || '',
-            photo_order: uploadedPhotos.length
+            photo_order: uploadedPhotos.length,
+            // Existing (isExisting) photos never carry these — write-once,
+            // set only at original capture time — so this is a no-op for them.
+            client_captured_at: photo.client_captured_at,
+            capture_method: photo.capture_method,
+            original_filename: photo.original_filename,
+            original_file_size_bytes: photo.original_file_size_bytes,
+            original_mime_type: photo.original_mime_type,
+            original_width: photo.original_width,
+            original_height: photo.original_height,
+            client_gps_latitude: photo.client_gps_latitude,
+            client_gps_longitude: photo.client_gps_longitude,
           });
         });
       }
