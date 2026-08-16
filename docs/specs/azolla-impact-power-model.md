@@ -279,8 +279,24 @@ model, response)` → `state_perspectives` + child table mechanism already
 proposed for `AUTHENTICITY` (§4/§7 point 2), so the whole backfill uses one
 consistent pattern instead of inventing a second one.
 
-**Renamed twice, 2026-08-15 — `INITIAL_STATE_SYNTHESIS` → `STATE_SYNTHESIS`
-→ `AZOLLA_STATE`.** First rename: "initial" was smuggling in a role
+**Superseded, 2026-08-16 — `AZOLLA_STATE` as its own generated perspective
+is dropped.** Tested side by side against the existing `CLAIM` perspective
+(already computed automatically via `rsp-worker` for any state that
+qualifies, no new call needed) on real Stefan data, and `CLAIM` produced
+materially the same content, cleaner — `AZOLLA_STATE`'s prose summary
+added nothing but a drift into interpretation (a trailing "this suggests…"
+sentence) that blurs exactly the fact/interpretation line the
+`CLAIM`/`SIGNIFICANCE` split was designed to preserve. **Use `CLAIM`
+directly as a state's text going forward — do not build or run the
+`AZOLLA_STATE` generation step.** The structured fields (coverage %,
+water color, phosphorus/pH estimate+basis) that only `AZOLLA_STATE` could
+have provided are deferred until something concrete actually needs to
+query them (YAGNI) — not built preemptively. `azolla_state_perspectives`
+(migration 015) and its multi-observation chaining design below are kept
+in this doc as a record of the reasoning, not as something to implement.
+
+~~Renamed twice, 2026-08-15 — `INITIAL_STATE_SYNTHESIS` → `STATE_SYNTHESIS`
+→ `AZOLLA_STATE`.~~ First rename: "initial" was smuggling in a role
 that isn't actually a property of the state itself — experiences chain
 (the final state of one experience is the initial state of the next), so a
 synthesis belongs to *the state*, not to whichever pairing happens to be
@@ -385,10 +401,44 @@ Consequences of this choice:
 ## 5. Individual power & group power
 
 **Individual power** = accumulated, authenticity-gated, impact-weighted
-history of a person's experiences. Has a non-zero floor for honest,
-well-reasoned documentation alone (an experience is already internally
-relational — cause connected to effect — before it connects to anyone
-else's).
+history of a person's experiences.
+
+**Revised, 2026-08-16 — power is strictly action-gated, not a floor for
+documentation alone.** This corrects the line above (kept struck-through in
+spirit, not deleted, so the reasoning that led here isn't lost): the
+original position was "individual power has a non-zero floor for honest,
+well-reasoned documentation alone, independent of whether anyone else
+engages with it." Stefan's sharper read: a bare observation with no action
+attached produces no power change, full stop — checking in and looking is
+a real, separate, valuable signal (see below), but it isn't power.
+
+This is actually the *more* rigorous Spinozist position, not a departure
+from §2's grounding. Spinoza's *potentia* is specifically the capacity to
+**act** (*agere*) from one's own nature — passive affects (registering,
+observing, undergoing) are, in his technical vocabulary, definitionally the
+low end of the power spectrum, not their own credit-worthy category. Mere
+observation without action is closer to *being acted upon* than to
+exercising power.
+
+This does not exclude careful reasoning or measurement — `entropy_reduction`
+actions (§4-adjacent, see the AZOLLA_STATE/ACTION_HYPOTHESIS section below)
+already count a measurement, a test-kit reading, or consulting AI as a real
+action. The bar is "something was done," not "the container was physically
+transformed" — but a plain status check with no action attached, transformative
+or entropy-reducing, produces zero power change.
+
+**A second, deliberately separate concept — not power, not built yet.**
+Someone checking in and documenting current status with no action taken
+still shows presence and consideration — they looked, and (implicitly)
+chose not to act. Spinoza would call this unactualized *potentia* — capacity
+that exists whether or not it's currently being exercised. Its purpose is
+explicitly instrumental to the experiment design: aligning the short-term
+incentive (check your container today) with the group's longer-term
+interest (sustained monitoring compounds into problems caught early, more
+data, more continuity) — without conflating "I checked in" with "I did
+something," which would reopen the passive-documentation-farming problem
+this whole design was built to avoid. **Explicitly out of scope for now**
+(2026-08-16) — noted so it isn't lost, not being tracked or built.
 
 **Group power** — the part that had to be designed carefully to avoid a
 real failure mode caught mid-design: *"this metric would improve if slow
@@ -407,6 +457,102 @@ Fix, structural not aspirational:
   under every path through the metric.
 - Departure/inactivity = explicit loss of that member's ongoing
   contribution to the rolling sum.
+
+## 5a. SASR experience formation (finalized design, 2026-08-16)
+
+The unit is state → action → state → reward. Finalized shape after
+extensive prompt-testing against Stefan's real container history:
+
+- **State text** = the existing `CLAIM` perspective (§5, supersedes
+  `AZOLLA_STATE`). No new generation step.
+- **Experience boundaries are action-gated, not adjacency-gated.** Walk a
+  container's states chronologically. Run action extraction
+  (`ACTION_HYPOTHESIS`, still needed — this is the one piece `CLAIM` can't
+  replace, since it requires photo-level citation `CLAIM` doesn't carry)
+  on each **consecutive** pair, exactly as already built and tuned. But an
+  `experiences` row only gets created for a pair where a real action was
+  extracted (`no_action_found=false`) — a plain-observation pair (no
+  action) does not close an experience. Maintain a `pending_initial_state`
+  pointer per container: it starts at the first state, and only resets
+  (to the current state) after an experience closes. A run of several
+  plain observations in a row just gets absorbed as background — the
+  eventual experience's `initial_state` is whatever was pending, which may
+  be several observations back, not necessarily the immediately preceding
+  one.
+- **No schema change needed.** `experience_components` already just holds
+  `state_id`/`action_id` references with no adjacency constraint — this is
+  entirely a change to the pairing *algorithm* in the propose script, not
+  the data model.
+- **One experience per closed transition, multiple actions allowed.** A
+  transition with several distinct confirmed actions (e.g. Stefan's Aug
+  9→14: manure application + two separate phosphate readings) becomes one
+  `experiences` row with multiple `action` components attached — not
+  three separate experiences — since reward is computed once per
+  `(initial_state, final_state)` span regardless of how many actions
+  contributed to it.
+- **Reward is computed on demand, not stored.** Consistent with §4's
+  original position ("reward is not an AI judgment, plain arithmetic over
+  `metric_snapshots`, no scoring table needed") — a coverage-%-delta (or
+  other outcome metric) between `initial_state` and `final_state` can
+  always be recomputed from `metric_snapshots`, so no new column or table
+  is needed to persist it redundantly.
+- **Coverage % is a *perceived* metric, not a measured one — provenance
+  matters.** It originates as the vision-LLM's `plant_coverage_percent_estimate`
+  (`AZOLLA_DUCKWEED_OBSERVATION` perspective), promoted into
+  `metrics`/`metric_snapshots` for time-series convenience. "Metric" is the
+  storage abstraction (name, unit, tracked over time), source-agnostic — it
+  says nothing about reliability. A **measured** metric (a real test-kit
+  reading, like Stefan's phosphate/pH readings — not yet wired into
+  `metrics` at all, still just observation text) is more trustworthy than a
+  **perceived** one (an AI's interpretive read of a photo). A reward
+  computed from a perceived metric carries that same uncertainty forward.
+  Not yet decided whether provenance becomes an explicit field on `metrics`
+  or stays a documented convention — open question.
+- **Score (`action_scores`) is not the reward — it's an input to it,
+  "environment"-computed separately.** RL framing, confirmed correct: an
+  agent takes an action, lands in a new state, and *the environment*
+  computes the reward — the action's intrinsic quality (an AI judgment) and
+  the environment's outcome (the actual state transition) are different
+  things. `action_scores` holds the former: an AI-judged score (number +
+  reasoning) of an action's authenticity, causal clarity, innovativeness,
+  and entropy-reduction character — not the reward itself. Reward is
+  computed by our logic reading the actual state transition (today: the
+  coverage-%-delta above; eventually the richer environment-power synthesis
+  discussed below), optionally informed by the action_scores judgment as a
+  shaping term — the two stay architecturally distinct, never conflated
+  into one number.
+- **`action_scores.action_id` was `UNIQUE`** (one row per action, ever —
+  re-scoring meant `UPDATE`-in-place, losing the trail of how a score
+  evolved). **Dropped in migration 016** (2026-08-16) — action impact is
+  explicitly retrospective and revisable (§4), so scoring needs to be able
+  to run again later as evidence accumulates, as a new row, not an
+  overwrite (same multiple-rows-over-time pattern already used by
+  `state_perspectives`, most recent row = current). Confirmed safe to drop:
+  `action_scores` is currently only read (`EXISTS` checks in
+  `lambda/actions/index.js`), nothing depends on the constraint for an
+  `ON CONFLICT` upsert.
+- **Open, not yet designed: the actual scoring prompt/schema for
+  `action_scores`** — a new `scoring_prompts` row scoring each action on
+  authenticity (gate), causal clarity, innovativeness, and entropy-reduction,
+  producing a number + reasoning. Two open sub-questions: (1) does
+  "innovativeness" need cross-participant context (novel relative to what
+  others have tried, not just this person's own history) — real scope
+  question, no prompt built for cross-container context yet; (2) impact
+  can't be assessed at action-time at all — first pass should flag it
+  "not yet assessable" rather than guess, revisited on a later scoring pass.
+- **Environment power — proposed, not built.** A `state_perspectives` type
+  (not a metric) synthesizing a holistic "how much realized potentia does
+  this state show" read across whatever metrics+text exist for it —
+  distinct from the participant's own individual power. Every mode has its
+  own conatus in Spinoza's system; the azolla population's own vigor is a
+  different potentia than the participant's causal clarity, coupled to but
+  not reducible to it. Reward would then be the delta in this synthesized
+  read between `initial_state` and `final_state`, not a single hardcoded
+  metric — coverage stays one input to it, not the reward itself. Naming
+  not finalized.
+- **Power is strictly action-gated** (§5) — a closed experience is the
+  only thing that can produce a power change; plain observations
+  contribute to neither an experience nor a reward on their own.
 
 ## 6. Self-perpetuation / discovering the group's actual conatus
 
