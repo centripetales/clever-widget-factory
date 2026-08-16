@@ -220,8 +220,11 @@ async function main() {
           const actionTitle = h.title.slice(0, 250);
           const actionDescription = `${h.description}\n\n[action_type: ${h.action_type}] [azolla-sasr]`;
           await client.query(
-            `INSERT INTO actions (id, title, description, status, organization_id, created_by, completed_at, asset_id, created_at, updated_at)
-             VALUES ($1, $2, $3, 'completed', $4, $5, $6, $7, NOW(), NOW())`,
+            // assigned_to = the same person as created_by: the Actions UI defaults its
+            // assignee filter to "Me" (assigned_to === current user), so an unassigned
+            // action is invisible by default even to the person who did it.
+            `INSERT INTO actions (id, title, description, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
+             VALUES ($1, $2, $3, 'completed', $4, $5, $5, $6, $7, NOW(), NOW())`,
             [actionId, actionTitle, actionDescription, finalState.organization_id, finalState.captured_by, finalState.captured_at, TOOL_ID]
           );
           await client.query(
