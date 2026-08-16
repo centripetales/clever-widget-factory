@@ -28,9 +28,12 @@ const crypto = require('crypto');
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 const sqs = new SQSClient({ region: 'us-west-2' });
 
-// Matches lambda/shared/embedding-composition.js composeActionEmbeddingSource exactly.
+// Matches lambda/shared/embedding-composition.js composeActionEmbeddingSource.
+// evidence_description/observations from that function's JSDoc example aren't
+// real columns on `actions` (verified against the live schema) — the fields
+// that actually exist and get used are title/description/policy/expected_state.
 function composeActionEmbeddingSource(action) {
-  return [action.title, action.description].filter(Boolean).join('. ');
+  return [action.title, action.description, action.policy, action.expected_state].filter(Boolean).join('. ');
 }
 
 const envPath = path.join(__dirname, '..', '.env.local');
@@ -83,7 +86,9 @@ For each hypothesis, classify its action_type:
 - "transformative": physically changes the container's real condition — adding an input, harvesting, moving the container, changing the water, adjusting the setup. The container is different afterward, not just better understood.
 - "entropy_reduction": does NOT change the container's real condition, but reduces uncertainty about it or about how to act on it — taking a measurement or reading, using a test kit, consulting AI, looking up documented best practice or a stated method. The container's condition was already whatever it was; the action just made it (or the right response to it) more known. Consulting AI counts as entropy_reduction even though no instrument was used — it is not a "measurement," but it is still an uncertainty-reducing act, not a transformative one.
 
-For each hypothesis, also cite EVERY photo ID from EITHER observation that documents that action — not just the single best match. A photo counts as documenting the action either if it visually shows the action/input itself (e.g. a photo of a fertilizer bag), OR if the participant's own caption on that specific photo states they took the action (e.g. a caption saying "I removed duckweed to make space" is evidence for a duckweed-removal action, even if the image itself just shows the container afterward) — the caption is part of what that photo documents, not separate from it. If both observations have a photo independently describing the same ongoing or repeated action (e.g. the earlier observation says "I removed duckweed" and the later one says "as I remove duckweed only"), cite both — they corroborate each other, do not pick just one. A photo belonging to the EARLIER observation is not automatically "old news" — the earlier-vs-later distinction (see the tense/reference guidance above) is about whether text refers to an action from BEFORE the earlier observation's own timestamp, not about which of the two given observations a photo happens to belong to. A photo on the earlier observation whose caption describes an action taken as part of that same visit is valid, current evidence for this transition and must be cited, not treated as already-accounted-for background. Only cite a photo ID that was given to you, never invent one. Leave action_photo_ids empty only when truly no photo (image or caption) among those given documents the action.`;
+For each hypothesis, also cite EVERY photo ID from EITHER observation that documents that action — not just the single best match. A photo counts as documenting the action either if it visually shows the action/input itself (e.g. a photo of a fertilizer bag), OR if the participant's own caption on that specific photo states they took the action (e.g. a caption saying "I removed duckweed to make space" is evidence for a duckweed-removal action, even if the image itself just shows the container afterward) — the caption is part of what that photo documents, not separate from it. If both observations have a photo independently describing the same ongoing or repeated action (e.g. the earlier observation says "I removed duckweed" and the later one says "as I remove duckweed only"), cite both — they corroborate each other, do not pick just one. A photo belonging to the EARLIER observation is not automatically "old news" — the earlier-vs-later distinction (see the tense/reference guidance above) is about whether text refers to an action from BEFORE the earlier observation's own timestamp, not about which of the two given observations a photo happens to belong to. A photo on the earlier observation whose caption describes an action taken as part of that same visit is valid, current evidence for this transition and must be cited, not treated as already-accounted-for background. Only cite a photo ID that was given to you, never invent one. Leave action_photo_ids empty only when truly no photo (image or caption) among those given documents the action.
+
+Additionally, for each hypothesis, try to infer an "expected_state" — the goal or intent behind the action, addressing a specific observed condition. This is forward-looking ("where we want to get to"), distinct from the action's own description ("what was done"). Ground it in an actual observed value or condition when possible — e.g. if a phosphorus reading of 0.5 ppm/L is mentioned, and that's described or implied as low relative to what azolla needs, the expected_state might be "raise phosphorus from ~0.5 ppm/L toward an adequate range for azolla growth." Only produce an expected_state when there's a real basis for it in the text — do not invent a plausible-sounding generic goal ("improve container health") when nothing in the text actually supports a specific one. Give expected_state_confidence (0.0-1.0) reflecting how well-grounded this specific inference is — low if you're stretching, high if the text clearly implies this exact goal. Leave expected_state null (and confidence null) when there's no real basis to infer one — that is a normal, honest, valid result, not a failure.`;
 
 const ACTION_HYPOTHESIS_TOOL = {
   name: 'record_action_hypotheses',
@@ -102,6 +107,9 @@ const ACTION_HYPOTHESIS_TOOL = {
             action_type: { type: 'string', enum: ['transformative', 'entropy_reduction'] },
             confidence: { type: 'number', description: '0.0-1.0' },
             action_photo_ids: { type: 'array', items: { type: 'string' } },
+            expected_state: { type: 'string', description: 'The inferred goal/intent, addressing a specific observed condition. Omit if no real basis exists.' },
+            expected_state_confidence: { type: 'number', description: 'How well-grounded the expected_state inference is, 0.0-1.0. Omit if expected_state is omitted.' },
+            expected_state_basis: { type: 'string', description: 'What specific observed value/condition this goal responds to. Required alongside expected_state.' },
           },
           required: ['title', 'description', 'action_type', 'confidence', 'action_photo_ids'],
         },
@@ -166,6 +174,9 @@ async function main() {
       s.entropy = ent.rows[0]?.content || null;
     }
 
+    const photoIdToStateId = new Map();
+    for (const s of states) for (const p of s.photos) photoIdToStateId.set(p.id, s.id);
+
     // Extract actions on every consecutive pair.
     const pairResults = [];
     for (let i = 1; i < states.length; i++) {
@@ -177,7 +188,7 @@ async function main() {
       const priorActionContext = (priorPairResult && !priorPairResult.no_action_found && priorPairResult.hypotheses.length)
         ? `\n\nAction(s) already identified for the immediately preceding transition (do NOT re-report these as new if the later observation is merely recalling or describing their outcome):\n${priorPairResult.hypotheses.map(h => `  - ${h.title}: ${h.description}`).join('\n')}`
         : '';
-      const userPrompt = `Earlier observation [${prior.captured_at.toISOString().slice(0, 10)}], photos:\n${photoList(prior)}\n\nLater observation [${final.captured_at.toISOString().slice(0, 10)}], photos:\n${photoList(final)}${entropyContext}${priorActionContext}\n\nIdentify any human action(s) described as having happened between these two observations.`;
+      const userPrompt = `Earlier observation [${prior.captured_at.toISOString().slice(0, 10)}], photos:\n${photoList(prior)}\n\nLater observation [${final.captured_at.toISOString().slice(0, 10)}], photos:\n${photoList(final)}${entropyContext}${priorActionContext}\n\nIdentify any human action(s) described as having happened between these two observations, and infer expected_state where grounded.`;
       const result = await invokeBedrock(ACTION_HYPOTHESIS_SYSTEM_PROMPT, userPrompt, ACTION_HYPOTHESIS_TOOL);
       pairResults.push(result);
       console.log(`[${prior.captured_at.toISOString().slice(0, 10)} -> ${final.captured_at.toISOString().slice(0, 10)}] no_action_found=${result.no_action_found}, ${result.hypotheses.length} action(s)`);
@@ -218,14 +229,25 @@ async function main() {
         for (const h of pairResult.hypotheses) {
           const actionId = crypto.randomUUID();
           const actionTitle = h.title.slice(0, 250);
-          const actionDescription = `${h.description}\n\n[action_type: ${h.action_type}] [azolla-sasr]`;
+          // description = "Existing State" in the UI — the situation BEFORE the
+          // action (initial_state's CLAIM), not the action's own description.
+          // The action's own what/why (h.description) isn't duplicated into a
+          // text field at all — it lives in the linked observation (state_links
+          // below) and, for search, in the embedding source directly.
+          const actionDescription = initialState.claim || null;
+          const expectedState = h.expected_state || null;
+          const scoringData = h.expected_state
+            ? { expected_state_confidence: h.expected_state_confidence, expected_state_basis: h.expected_state_basis }
+            : null;
+
           await client.query(
             // assigned_to = the same person as created_by: the Actions UI defaults its
             // assignee filter to "Me" (assigned_to === current user), so an unassigned
             // action is invisible by default even to the person who did it.
-            `INSERT INTO actions (id, title, description, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
-             VALUES ($1, $2, $3, 'completed', $4, $5, $5, $6, $7, NOW(), NOW())`,
-            [actionId, actionTitle, actionDescription, finalState.organization_id, finalState.captured_by, finalState.captured_at, TOOL_ID]
+            // policy: intentionally left null — not used for this data.
+            `INSERT INTO actions (id, title, description, expected_state, scoring_data, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, 'completed', $6, $7, $7, $8, $9, NOW(), NOW())`,
+            [actionId, actionTitle, actionDescription, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, finalState.captured_at, TOOL_ID]
           );
           await client.query(
             `INSERT INTO experience_components (id, experience_id, component_type, state_id, action_id, organization_id, created_at)
@@ -233,11 +255,28 @@ async function main() {
             [crypto.randomUUID(), experienceId, actionId, finalState.organization_id]
           );
 
+          // Link the action to whichever state(s) its cited evidence photos
+          // actually belong to — the standard CWF mechanism (state_links,
+          // entity_type='action') for connecting an action to its documenting
+          // observation(s), same pattern used everywhere else in this app.
+          const citedStateIds = new Set();
+          for (const photoId of h.action_photo_ids || []) {
+            const owningState = photoIdToStateId.get(photoId);
+            if (owningState) citedStateIds.add(owningState);
+          }
+          if (citedStateIds.size === 0) citedStateIds.add(finalState.id); // fallback: always link at least the final state
+          for (const stateId of citedStateIds) {
+            await client.query(
+              `INSERT INTO state_links (id, state_id, entity_type, entity_id, created_at) VALUES ($1, $2, 'action', $3, NOW())`,
+              [crypto.randomUUID(), stateId, actionId]
+            );
+          }
+
           // Real API-created actions queue embedding generation (lambda/actions/index.js);
           // this bypasses that path (direct SQL insert), so queue it explicitly here too —
           // otherwise these actions silently never become searchable. Deferred until
           // after COMMIT (see below) — an SQS send can't be rolled back with the transaction.
-          const embeddingSource = composeActionEmbeddingSource({ title: actionTitle, description: actionDescription });
+          const embeddingSource = composeActionEmbeddingSource({ title: actionTitle, description: actionDescription, expected_state: expectedState });
           if (embeddingSource.trim()) {
             pendingEmbeddingMessages.push({
               entity_type: 'action',

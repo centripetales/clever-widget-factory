@@ -553,6 +553,25 @@ extensive prompt-testing against Stefan's real container history:
 - **Power is strictly action-gated** (§5) — a closed experience is the
   only thing that can produce a power change; plain observations
   contribute to neither an experience nor a reward on their own.
+- **Some extraction noise is a documentation-practice problem, not a
+  prompt-engineering problem — don't chase it indefinitely.** Two real
+  cases surfaced during Stefan-data testing, both resolved the same way:
+  (1) coverage/metric readings from physically distinct vessels (blue bin,
+  black liner, pond liner area) get conflated because they're all tracked
+  under one `tool_id` — the fix is Stefan tracking separate assets per
+  container going forward, not smarter location-inference in the prompt;
+  historical data is deliberately left unsplit (not worth fragile
+  retroactive reconstruction from loose text mentions). (2) An action
+  described across two different methods on the same day (e.g. chicken
+  manure placed two ways) can get its second method misattributed to a
+  *later* transition when the evidence for it only surfaces in a
+  retrospective recap in a subsequent observation — same root cause as the
+  tense/reference bug fixed earlier (§5a pairing logic), resurfacing on a
+  sub-action the first pass didn't split out. Decision: acceptable to leave
+  — the real fix is writing about an action closer to when it happened, and
+  the human-in-the-loop review step (§7's backfill review flow) is the
+  intended backstop for exactly this class of residual error, not a
+  reason to keep tuning the prompt indefinitely.
 
 ## 6. Self-perpetuation / discovering the group's actual conatus
 
