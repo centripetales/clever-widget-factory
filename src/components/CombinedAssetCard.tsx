@@ -3,8 +3,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, History, Triangle, Info, ExternalLink, Camera, MapPin, Handshake, Network } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { InventoryHistoryDialog } from "./InventoryHistoryDialog";
-import { AssetHistoryDialog } from "./AssetHistoryDialog";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { Link } from "react-router-dom";
 import { getThumbnailUrl } from '@/lib/imageUtils';
@@ -433,18 +431,18 @@ export const CombinedAssetCard = memo(({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <div>
-                      <AssetHistoryDialog assetId={asset.id} assetName={asset.name} disabled={asset.is_shared_inbound}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-12 px-2"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                          }}
-                        >
-                          <History className="h-4 w-4" />
-                        </Button>
-                      </AssetHistoryDialog>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-12 px-2"
+                        disabled={asset.is_shared_inbound}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onView(asset);
+                        }}
+                      >
+                        <History className="h-4 w-4" />
+                      </Button>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -566,18 +564,18 @@ export const CombinedAssetCard = memo(({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <div>
-                        <InventoryHistoryDialog partId={asset.id} partName={asset.name} disabled={asset.is_shared_inbound}>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-12 px-2"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <History className="h-4 w-4" />
-                          </Button>
-                        </InventoryHistoryDialog>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-12 px-2"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onView(asset);
+                          }}
+                        >
+                          <History className="h-4 w-4" />
+                        </Button>
                       </div>
                     </TooltipTrigger>
                     <TooltipContent>
