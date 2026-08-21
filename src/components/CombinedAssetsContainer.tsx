@@ -18,8 +18,6 @@ import { CombinedAssetDialog } from "./CombinedAssetDialog";
 import { ToolRemovalDialog } from "./tools/ToolRemovalDialog";
 import { EditToolForm } from "./tools/forms/EditToolForm";
 
-import { ToolDetails } from "./tools/ToolDetails";
-import { StockDetails } from "./StockDetails";
 import { OrderDialog } from "./OrderDialog";
 import { ReceivingDialog } from "./ReceivingDialog";
 import { useCombinedAssets, CombinedAsset } from "@/hooks/useCombinedAssets";
@@ -59,6 +57,19 @@ export const CombinedAssetsContainer = () => {
   const [showOnlyStock, setShowOnlyStock] = useState(viewParam === 'stock');
   const [showOnlyAreas, setShowOnlyAreas] = useState(false);
   
+  // Restore scroll position saved before navigating to an asset's details
+  // page (handleShowAssetDetails). Only meaningful once the list has actual
+  // content to scroll to, so this runs once on mount rather than depending
+  // on the (still-loading) list data.
+  useEffect(() => {
+    const saved = sessionStorage.getItem('combined-assets-scroll');
+    if (saved) {
+      sessionStorage.removeItem('combined-assets-scroll');
+      // Wait a tick for the list to render before scrolling.
+      requestAnimationFrame(() => window.scrollTo(0, parseInt(saved, 10)));
+    }
+  }, []);
+
   // Clear semantic results when area filter is toggled
   useEffect(() => {
     if (showOnlyAreas && semanticResults.length > 0) {
@@ -70,9 +81,7 @@ export const CombinedAssetsContainer = () => {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showRemovalDialog, setShowRemovalDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
-  const [showViewDialog, setShowViewDialog] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
-  const [selectedAssetForDetails, setSelectedAssetForDetails] = useState<CombinedAsset | null>(null);
   const [isMaxwellOpen, setIsMaxwellOpen] = useState(false);
   const [maxwellDialogAsset, setMaxwellDialogAsset] = useState<CombinedAsset | null>(null);
   
@@ -132,7 +141,7 @@ export const CombinedAssetsContainer = () => {
   }, []);
   
   // Tool history for view dialog / details view
-  const activeToolId = selectedAssetForDetails?.id || selectedAssetId || undefined;
+  const activeToolId = selectedAssetId || undefined;
   const { toolHistory, fetchToolHistory } = useToolHistory(activeToolId);
 
   // Fetch pending orders for stock items using TanStack Query for caching
@@ -341,15 +350,6 @@ export const CombinedAssetsContainer = () => {
     return result;
   };
 
-  const handleView = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setShowViewDialog(true);
-    // Fetch additional data for view dialog if it's an asset
-    if (asset.type === 'asset') {
-      fetchToolHistory(asset.id);
-    }
-  }, [fetchToolHistory]);
-
   const handleEdit = useCallback((asset: CombinedAsset) => {
     setSelectedAssetId(asset.id);
     // Initialize attachments with existing attachments array or image_url
@@ -423,15 +423,12 @@ export const CombinedAssetsContainer = () => {
   }, [navigate]);
 
   const handleShowAssetDetails = (asset: CombinedAsset) => {
-    // This should behave like clicking on the asset card - go to detail view
-    setSelectedAssetForDetails(asset);
-    if (asset.type === 'asset') {
-      fetchToolHistory(asset.id);
-    }
-  };
-
-  const handleBackToAssets = () => {
-    setSelectedAssetForDetails(null);
+    // Real route now (was local component-state swap with no URL — losing
+    // the view and active tab on any navigation away, e.g. to edit an
+    // observation). Save scroll position so returning to the list restores
+    // it, same reasoning as the tab-restoration fix on the details page.
+    sessionStorage.setItem('combined-assets-scroll', String(window.scrollY));
+    navigate(`/combined-assets/${asset.id}/details?tab=history`);
   };
 
   // Stock quantity handlers
@@ -633,34 +630,6 @@ export const CombinedAssetsContainer = () => {
   // Do not early-return on loading; keep previous results visible and show a small indicator
   if (loading) {
     performance.mark('loading_ui_shown');
-  }
-
-  // Show asset detail view if selectedAssetForDetails is set
-  if (selectedAssetForDetails) {
-    if (selectedAssetForDetails.type === 'asset') {
-      return (
-        <div className="container mx-auto p-6 space-y-6">
-          <ToolDetails
-            tool={selectedAssetForDetails as any}
-            toolHistory={toolHistory}
-            onBack={handleBackToAssets}
-            defaultTab="history"
-          />
-        </div>
-      );
-    } else if (selectedAssetForDetails.type === 'stock') {
-      return (
-        <div className="container mx-auto p-6 space-y-6">
-          <StockDetails
-            stock={selectedAssetForDetails as any}
-            onBack={handleBackToAssets}
-            onRefresh={() => {
-              // Refresh stock data
-            }}
-          />
-        </div>
-      );
-    }
   }
 
   return (
@@ -931,146 +900,6 @@ export const CombinedAssetsContainer = () => {
             </div>
           </DialogContent>
         </Dialog>
-      )}
-
-      {/* View Asset Dialog */}
-      {selectedAsset && selectedAsset.type === 'asset' && showViewDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg w-full max-w-6xl max-h-[90vh] overflow-y-auto m-4">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">{selectedAsset.name}</h2>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    onClick={() => setIsMaxwellOpen(v => !v)}
-                    disabled={selectedAsset.is_shared_inbound}
-                    className={`h-8 w-8 p-0 [&_svg]:size-auto ${isMaxwellOpen ? 'bg-primary/10 border-primary/50 text-primary' : ''}`}
-                    title={selectedAsset.is_shared_inbound ? "Maxwell is disabled for shared assets" : "Ask Maxwell"}
-                  >
-                    <PrismIcon size={28} />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowViewDialog(false);
-                      setSelectedAssetId(null);
-                      setIsMaxwellOpen(false);
-                    }}
-                  >
-                    Close
-                  </Button>
-                </div>
-              </div>
-
-              {/* Maxwell inline panel */}
-              <div
-                className={`grid transition-all duration-300 ease-in-out mb-4 ${isMaxwellOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
-              >
-                <div className="overflow-hidden">
-                  <div className="rounded-xl border overflow-hidden" style={{ height: '420px' }}>
-                    <MaxwellInlinePanel
-                      context={{
-                        entityId: selectedAsset.id,
-                        entityType: selectedAsset.type === 'asset' ? 'tool' : 'part',
-                        entityName: selectedAsset.name,
-                        policy: selectedAsset.description || '',
-                        implementation: '',
-                      } as EntityContext}
-                      onClose={() => setIsMaxwellOpen(false)}
-                      className="h-full rounded-none border-0"
-                      hideHeader
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <ToolDetails
-                tool={selectedAsset as any}
-                toolHistory={toolHistory}
-                onBack={() => {
-                  setShowViewDialog(false);
-                  setSelectedAssetId(null);
-                  setIsMaxwellOpen(false);
-                }}
-                defaultTab="history"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* View Stock Item Dialog */}
-      {selectedAsset && selectedAsset.type === 'stock' && showViewDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto m-4">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Stock Item Details</h2>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowViewDialog(false);
-                    setSelectedAssetId(null);
-                  }}
-                >
-                  Close
-                </Button>
-              </div>
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <h3 className="font-medium">Basic Information</h3>
-                    <div className="mt-2 space-y-2 text-sm">
-                      <div><span className="font-medium">Name:</span> {selectedAsset.name}</div>
-                      <div><span className="font-medium">Description:</span> {selectedAsset.description || 'N/A'}</div>
-                      <div><span className="font-medium">Category:</span> {selectedAsset.category || 'N/A'}</div>
-                      <div><span className="font-medium">Unit:</span> {selectedAsset.unit || 'pieces'}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="font-medium">Inventory Information</h3>
-                    <div className="mt-2 space-y-2 text-sm">
-                      <div><span className="font-medium">Current Quantity:</span> {selectedAsset.current_quantity || 0}</div>
-                      <div><span className="font-medium">Minimum Quantity:</span> {selectedAsset.minimum_quantity || 0}</div>
-                      <div><span className="font-medium">Cost per Unit:</span> {selectedAsset.cost_per_unit ? `$${selectedAsset.cost_per_unit}` : 'N/A'}</div>
-                      <div><span className="font-medium">Supplier:</span> {selectedAsset.supplier || 'N/A'}</div>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-medium">Storage Information</h3>
-                  <div className="mt-2 space-y-2 text-sm">
-                    <div><span className="font-medium">Storage Vicinity:</span> {selectedAsset.storage_vicinity || 'N/A'}</div>
-                    <div><span className="font-medium">Storage Location:</span> {selectedAsset.storage_location || 'N/A'}</div>
-                  </div>
-                </div>
-                {selectedAsset.image_url && (
-                  <div>
-                    <h3 className="font-medium">Image</h3>
-                    <img 
-                      src={getThumbnailUrl(selectedAsset.image_url) || ''}
-                      alt={selectedAsset.name}
-                      className="mt-2 max-w-xs rounded-lg cursor-pointer hover:opacity-80"
-                      onClick={() => window.open(getImageUrl(selectedAsset.image_url) || '', '_blank')}
-                      onError={(e) => {
-                        // Fallback to full image if thumbnail doesn't exist
-                        const target = e.target as HTMLImageElement;
-                        const fullUrl = getImageUrl(selectedAsset.image_url);
-                        if (fullUrl && target.src !== fullUrl) {
-                          target.src = fullUrl;
-                        }
-                      }}
-                      title="Click to view full size"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Quantity Dialog */}

@@ -17,14 +17,19 @@ interface ToolDetailsProps {
   tool: Tool;
   toolHistory: HistoryEntry[];
   onBack: () => void;
-  defaultTab?: string;
+  // Controlled tab: the caller owns which tab is active (typically synced to
+  // a URL search param) so that navigating away and back — e.g. to edit an
+  // observation — restores the same tab instead of resetting to "details".
+  activeTab: string;
+  onTabChange: (tab: string) => void;
 }
 
 export const ToolDetails = ({
   tool,
   toolHistory,
   onBack,
-  defaultTab = 'details',
+  activeTab,
+  onTabChange,
 }: ToolDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
   const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
@@ -107,7 +112,7 @@ export const ToolDetails = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <Tabs defaultValue={defaultTab} className="w-full">
+          <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>

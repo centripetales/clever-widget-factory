@@ -14,7 +14,7 @@ import { useOrganization } from '@/hooks/useOrganization';
 import type { CreateObservationData } from '@/types/observations';
 import { MetricsInput } from '@/components/observations/MetricsInput';
 import { useMetrics } from '@/hooks/metrics/useMetrics';
-import { useSnapshots } from '@/hooks/useSnapshots';
+import { useSnapshots, useSnapshotMutations } from '@/hooks/useSnapshots';
 import { snapshotService } from '@/services/snapshotService';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { apiService } from '@/lib/apiService';
@@ -110,6 +110,11 @@ export default function AddObservation() {
     serial_number?: string;
     type: 'tool' | 'part' | 'action';
   }>>([]);
+
+  const { createSnapshot, updateSnapshot, deleteSnapshot } = useSnapshotMutations(
+    observationId || '',
+    linkedAssets.filter((a) => a.type === 'tool' || a.type === 'part') as { type: 'tool' | 'part'; id: string }[]
+  );
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -411,24 +416,39 @@ export default function AddObservation() {
             (existingSnapshots || []).map(s => [s.metric_id, s])
           );
 
+          // Edit mode: route through the mutation hook (bound to observationId)
+          // so History invalidates immediately, per useSnapshots.ts. Create mode:
+          // stateId doesn't exist until createState just resolved above, so
+          // there's no stable id to bind a hook to ahead of time — and no prior
+          // cached History view for a state that didn't exist a moment ago, so
+          // there's nothing to invalidate here anyway.
           for (const [metricId, value] of Object.entries(metricValues)) {
             const existingSnapshot = existingSnapshotsMap.get(metricId);
-            
+
             if (value.trim()) {
               if (existingSnapshot) {
-                await snapshotService.updateSnapshot(existingSnapshot.snapshot_id, { value });
+                if (isEditMode) {
+                  await updateSnapshot({ snapshotId: existingSnapshot.snapshot_id, data: { value } });
+                } else {
+                  await snapshotService.updateSnapshot(existingSnapshot.snapshot_id, { value });
+                }
               } else {
-                await snapshotService.createSnapshot(stateId, {
-                  metric_id: metricId,
-                  value
-                });
+                if (isEditMode) {
+                  await createSnapshot({ metric_id: metricId, value });
+                } else {
+                  await snapshotService.createSnapshot(stateId, { metric_id: metricId, value });
+                }
               }
             }
           }
 
           for (const [metricId, snapshot] of existingSnapshotsMap.entries()) {
             if (!metricValues[metricId] || !metricValues[metricId].trim()) {
-              await snapshotService.deleteSnapshot(snapshot.snapshot_id);
+              if (isEditMode) {
+                await deleteSnapshot(snapshot.snapshot_id);
+              } else {
+                await snapshotService.deleteSnapshot(snapshot.snapshot_id);
+              }
             }
           }
         } catch (snapshotError) {
