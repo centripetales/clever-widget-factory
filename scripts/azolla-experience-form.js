@@ -236,9 +236,19 @@ async function main() {
           // below) and, for search, in the embedding source directly.
           const actionDescription = initialState.claim || null;
           const expectedState = h.expected_state || null;
-          const scoringData = h.expected_state
-            ? { expected_state_confidence: h.expected_state_confidence, expected_state_basis: h.expected_state_basis }
-            : null;
+          // scoring_data is the catch-all for everything extracted that doesn't
+          // have its own UI field: action_type and what_was_done (h.description,
+          // the tuned "what was done and why" text) were previously lost
+          // entirely — only implied via the linked evidence photos, never stored
+          // as retrievable text. Always populated, not conditional on
+          // expected_state existing.
+          const scoringData = {
+            action_type: h.action_type,
+            what_was_done: h.description,
+            extraction_confidence: h.confidence,
+            expected_state_confidence: h.expected_state_confidence || null,
+            expected_state_basis: h.expected_state_basis || null,
+          };
 
           await client.query(
             // assigned_to = the same person as created_by: the Actions UI defaults its

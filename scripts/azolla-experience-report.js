@@ -74,7 +74,7 @@ async function main() {
 
       const initialState = await client.query(`SELECT captured_at FROM states WHERE id = $1`, [initialComp.state_id]);
       const finalState = await client.query(`SELECT captured_at FROM states WHERE id = $1`, [finalComp.state_id]);
-      const actions = await client.query(`SELECT id, title, description FROM actions WHERE id = ANY($1::uuid[])`, [actionComps.map(c => c.action_id)]);
+      const actions = await client.query(`SELECT id, title, description, expected_state, scoring_data FROM actions WHERE id = ANY($1::uuid[])`, [actionComps.map(c => c.action_id)]);
 
       const initialCoverage = await coverageFor(client, initialComp.state_id);
       const finalCoverage = await coverageFor(client, finalComp.state_id);
@@ -101,48 +101,101 @@ async function main() {
         </div>
         <div class="actions-list">
           <span class="label">Action(s)</span>
-          ${actions.rows.map(a => `
+          ${actions.rows.map(a => {
+            const sd = a.scoring_data || {};
+            return `
             <div class="action-item">
-              <div class="action-title">${esc(a.title)}</div>
-              <div class="action-desc">${esc((a.description || '').split('\n\n[action_type:')[0])}</div>
-              <div class="action-type-tag">${esc((a.description || '').match(/\[action_type: (\w+)\]/)?.[1] || '')}</div>
-            </div>`).join('')}
+              <div class="action-title">${esc(a.title)} ${sd.action_type ? `<span class="action-type-tag">${esc(sd.action_type)}</span>` : ''}</div>
+              ${sd.what_was_done ? `<div class="action-desc">${esc(sd.what_was_done)}</div>` : ''}
+              ${a.expected_state ? `<div class="expected-state">&rarr; ${esc(a.expected_state)}${sd.expected_state_confidence != null ? ` <span class="conf">(confidence ${sd.expected_state_confidence})</span>` : ''}</div>` : ''}
+            </div>`;
+          }).join('')}
         </div>
       </div>`;
     }
 
-    const html = `<title>Azolla SASR Experiences — Reward Report</title>
+    const html = `<title>Stefan's SASR Log</title>
 <style>
-  :root { --bg:#fff; --ink:#1a2332; --ink-dim:#64748b; --border:#e2e8f0; --surface:#f8fafc; --accent:#2563eb; --pos:#16a34a; --neg:#dc2626; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0f172a; --ink:#e2e8f0; --ink-dim:#94a3b8; --border:#1e293b; --surface:#1e293b; } }
-  :root[data-theme="dark"] { --bg:#0f172a; --ink:#e2e8f0; --ink-dim:#94a3b8; --border:#1e293b; --surface:#1e293b; }
-  :root[data-theme="light"] { --bg:#fff; --ink:#1a2332; --ink-dim:#64748b; --border:#e2e8f0; --surface:#f8fafc; }
+  :root {
+    --paper: #F6F7F1; --ink: #1B2118; --ink-dim: #5B6355; --line: #DDE2D3;
+    --surface: #ECEEE4; --moss: #4A7C2E; --water: #2C6E76; --clay: #B5502E; --sun: #C98A1F;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #12160F; --ink: #E8ECE0; --ink-dim: #9AA48C; --line: #2A3122;
+      --surface: #1A1F15; --moss: #7FB55A; --water: #5FB0BA; --clay: #E08159; --sun: #E0AF52;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #12160F; --ink: #E8ECE0; --ink-dim: #9AA48C; --line: #2A3122;
+    --surface: #1A1F15; --moss: #7FB55A; --water: #5FB0BA; --clay: #E08159; --sun: #E0AF52;
+  }
+  :root[data-theme="light"] {
+    --paper: #F6F7F1; --ink: #1B2118; --ink-dim: #5B6355; --line: #DDE2D3;
+    --surface: #ECEEE4; --moss: #4A7C2E; --water: #2C6E76; --clay: #B5502E; --sun: #C98A1F;
+  }
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); margin:0; }
-  .wrap { max-width: 640px; margin: 0 auto; padding: 24px 20px 80px; }
-  h1 { font-size: 19px; margin: 0 0 4px; }
-  .subtitle { color: var(--ink-dim); font-size: 13px; margin: 0 0 24px; }
-  .experience { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; background: var(--surface); }
-  .exp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .exp-dates { font-weight: 700; font-size: 13px; }
-  .reward-badge { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: var(--border); }
-  .reward-badge.positive { background: var(--pos); color: #fff; }
-  .reward-badge.negative { background: var(--neg); color: #fff; }
-  .coverage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-  .coverage-cell { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
-  .coverage-arrow { font-size: 18px; color: var(--ink-dim); }
-  .coverage-value { display: block; font-size: 20px; font-weight: 700; margin-top: 4px; }
-  .label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-dim); font-weight: 650; display: block; }
-  .actions-list { border-top: 1px solid var(--border); padding-top: 10px; }
-  .action-item { margin-top: 8px; }
-  .action-title { font-weight: 700; font-size: 13px; }
-  .action-desc { font-size: 12.5px; margin-top: 2px; }
-  .action-type-tag { font-size: 10px; color: var(--accent); text-transform: uppercase; letter-spacing: .03em; margin-top: 3px; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--paper); margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 40px 24px 100px; }
+  h1 {
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", ui-serif, serif;
+    font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  .subtitle { color: var(--ink-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 36px; max-width: 60ch; }
+  .timeline { display: flex; flex-direction: column; gap: 16px; }
+  .experience {
+    border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px;
+    background: var(--surface);
+  }
+  .exp-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; gap: 12px; }
+  .exp-dates {
+    font-family: Georgia, "Iowan Old Style", ui-serif, serif;
+    font-weight: 600; font-size: 15px; letter-spacing: -0.005em;
+  }
+  .reward-badge {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    background: var(--line); color: var(--ink-dim); white-space: nowrap;
+  }
+  .reward-badge.positive { background: var(--moss); color: var(--paper); }
+  .reward-badge.negative { background: var(--clay); color: var(--paper); }
+  .coverage-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .coverage-cell {
+    flex: 1; background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; text-align: center;
+  }
+  .coverage-arrow { font-size: 16px; color: var(--ink-dim); flex-shrink: 0; }
+  .coverage-value {
+    display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 19px; font-weight: 600; margin-top: 3px;
+  }
+  .label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--ink-dim); font-weight: 650; display: block;
+  }
+  .actions-list { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .action-item { }
+  .action-title { font-weight: 650; font-size: 13.5px; }
+  .action-desc { font-size: 12.5px; color: var(--ink-dim); margin-top: 3px; line-height: 1.45; }
+  .action-type-tag {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 999px; background: var(--water); color: var(--paper);
+    margin-left: 6px; vertical-align: middle;
+  }
+  .expected-state { font-size: 12.5px; color: var(--water); margin-top: 5px; line-height: 1.4; }
+  .conf { color: var(--ink-dim); font-weight: 400; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; }
 </style>
 <div class="wrap">
-  <h1>Azolla SASR Experiences — Reward Report</h1>
-  <p class="subtitle">${experiences.rows.length} experiences. Reward = Coverage % (a metric) delta between initial and final state, computed on demand — not stored. Coverage is one of potentially several metrics that could feed a reward computation later.</p>
-  ${rowsHtml}
+  <h1>SASR Experience Log — Stefan's Container</h1>
+  <p class="subtitle">${experiences.rows.length} experiences, state &rarr; action &rarr; state &rarr; reward. Reward is the Coverage % metric's delta between initial and final state, computed on demand from <code>metric_snapshots</code> — never stored. Coverage is one metric among potentially several a future reward computation could draw on.</p>
+  <div class="timeline">
+    ${rowsHtml}
+  </div>
 </div>
 `;
 
