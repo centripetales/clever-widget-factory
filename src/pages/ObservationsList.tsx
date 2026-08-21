@@ -226,7 +226,7 @@ export default function ObservationsList() {
         serialNumber: undefined,
         type: 'financial_record' as any
       };
-    } else {
+    } else if (entityType === 'action') {
       const action = (actionsList as any).find((a: any) => a.id === entityId)
         || (completedActionsList as any[]).find((a: any) => a.id === entityId)
         || (sharedActionsList as any[]).find((a: any) => a.id === entityId);
@@ -235,6 +235,10 @@ export default function ObservationsList() {
         serialNumber: undefined,
         type: 'action' as const
       };
+    } else {
+      // state_photo, photo_analysis_param, organization, etc. are internal
+      // linkage records, not user-facing assets — no badge for these.
+      return null;
     }
   };
 
@@ -268,7 +272,8 @@ export default function ObservationsList() {
     let assetMatches = false;
     if (obs.links && obs.links.length > 0) {
       assetMatches = obs.links.some((link) => {
-        const asset = resolveAsset(link.entity_id, link.entity_type as 'tool' | 'part');
+        const asset = resolveAsset(link.entity_id, link.entity_type);
+        if (!asset) return false;
         return (
           asset.name.toLowerCase().includes(searchLower) ||
           asset.serialNumber?.toLowerCase().includes(searchLower)
