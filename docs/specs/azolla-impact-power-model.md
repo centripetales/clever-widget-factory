@@ -607,34 +607,54 @@ distinct outputs, not one:
 | `epistemic_links` (state-to-state) | schema only | Unused in any Lambda — reserved for replication/help credit (§3) |
 | `energeia_cache` | `lambda/energeia/` | **Not** a group-power metric — it's a PCA/k-means cluster map of actions in embedding space. Don't confuse with §5. |
 
-## 8. Explicitly not yet specified
+## 8. Status (updated 2026-08-16 — corrects a stale version of this section)
 
-- **Next concrete piece (highest priority): build the backfill review flow
-  (§7)** — pipeline shape is now designed (propose via two new
-  `state_perspectives` types → review HTML, container-by-container →
-  commit accepted pairs to `actions`/`experiences`). Not yet built. Needed
-  before any of the below can run against real data.
-- The actual `AZOLLA_STATE` / `ACTION_HYPOTHESIS` prompts
-  themselves — pipeline and storage shape are designed, prompt wording is
-  not written yet.
-- What the AI impact-report agent actually reads per experience (system
-  prompt, inputs, output schema) and how often it runs.
-- How authenticity gets checked concretely (what signals: internal
-  consistency of claim vs. photo evidence, causal specificity of the
-  "why," anything else) — the `AUTHENTICITY` `scoring_prompts` row (§4/§7
-  point 3), not yet written.
-- **Join flow — resolved, no new build needed.** "Joining" Azolla Growing
-  is just using the existing Share button + org selector
-  (`ShareConfigurationDialog`, §3) on a container, pointed at the Azolla
-  Growing org. Nothing new to design here.
-- **Metrics/impact-report viewing UI — deliberately deferred.** Don't
-  design this until there's real scored data from the backfill pipeline
-  (§7) to look at — designing a dashboard around hypothetical numbers
-  risks shaping the UI around the wrong things. Revisit once experiences
-  are being scored for real.
-- Payout mechanics — how a power score converts to PHP/GCash, and the
-  mechanics of that conversion (this is Philippines cash/GCash context, not
-  yet discussed).
-- Anti-gaming review once the above is concrete (self-asserted
-  `epistemic_links` in particular need a plausibility check to stop empty
-  credit-claiming).
+**Done:**
+- `ACTION_HYPOTHESIS` extraction — built, extensively tuned against real
+  data (tense/reference guidance, prior-action context, within-observation
+  photo-sequence evidence, action-vs-outcome-description separation,
+  `transformative`/`entropy_reduction` classification, `expected_state` +
+  confidence inference). Live in `scripts/azolla-experience-form.js`.
+- `AZOLLA_STATE` as a generated perspective — dropped, superseded by
+  reusing `CLAIM` directly (§5a).
+- SASR experience formation — action-gated boundaries, real
+  `experiences`/`experience_components`/`actions` rows, reward computed
+  on demand from `metric_snapshots`. **Run for real on Stefan's container
+  only** (7 experiences, 13 actions) — the other 9 containers haven't
+  been run yet.
+- Container-by-container review HTML tool
+  (`azolla-experience-review-gen.js`) — built, but **not what actually
+  validated Stefan's committed data** — that happened through live,
+  interactive tuning in conversation instead. Open question below.
+- Join flow — confirmed resolved, existing Share button, nothing to build.
+
+**Still open, and relevant to "finish the pilot, pay people" specifically:**
+- **Scale SASR formation to the other 9 containers.** Only Stefan's is
+  done. No tally is possible without this.
+- **Review-flow question, needs a decision before scaling**: for Stefan,
+  validation happened live, conversationally, pair by pair — that doesn't
+  scale to 9 more people's full histories. Does the batch review-HTML
+  tool (built, unused) get used instead, or does the now-heavily-tuned
+  prompt get trusted to run unattended with spot-checking, or something
+  else?
+- **Individual power score is not built.** Resolved *how* it should work
+  (§4: score the action via the existing `action_scores` mechanism, a
+  number + reasoning, criteria = authenticity gate + causal clarity +
+  innovativeness + entropy-reduction + impact-when-knowable) but the
+  actual `scoring_prompts` row and a run against real actions don't exist
+  yet. `action_scores.action_id` also still has a `UNIQUE` constraint that
+  needs relaxing first (§4) — agreed, not yet migrated.
+- **Group power is not computed.** Formula is specified (§5: sum not
+  mean, over a rolling window, diminishing returns weighting) but nothing
+  reads real data through it yet.
+- **New requirement (2026-08-16, not previously in this doc): anonymized
+  cross-participant visibility + a public/grant-facing view.**
+  Participants should see others' tracking once they've joined, but
+  anonymized; the same (or a related) view should be usable publicly, for
+  a grant proposal. Needs to be visible inside the existing app, not a
+  one-off exported artifact. Not designed yet — anonymization approach,
+  what's shown, and where it lives in the app are all open.
+- **Payout mechanics** — how a power score converts to PHP/GCash, and the
+  mechanics of that conversion. Not discussed. Needed today.
+- Anti-gaming review of `epistemic_links` self-asserted credit — lower
+  priority, not blocking today's tally.
