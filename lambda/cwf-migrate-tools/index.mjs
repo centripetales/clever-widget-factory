@@ -82,12 +82,14 @@ async function generateThumbnail(sourceKey, targetKey) {
   // Download original image
   const imageBuffer = await getImageFromS3(sourceKey);
   
-  // Generate thumbnail
+  // Generate thumbnail. NOTE: .withMetadata(false) does NOT strip metadata
+  // in this sharp version — it behaves like .withMetadata() with no args,
+  // which preserves it (see cwf-image-compressor/index.mjs for how this was
+  // found). Never calling .withMetadata() is what actually strips it.
   const thumbnail = await sharp(imageBuffer)
     .rotate() // Auto-rotate based on EXIF
     .resize(150, 150, { fit: 'cover', position: 'center' })
     .webp({ quality: 60 })
-    .withMetadata(false) // Strip all metadata
     .toBuffer();
   
   // Upload thumbnail

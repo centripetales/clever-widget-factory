@@ -488,6 +488,14 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
                   strokeWidth={2}
                   connectNulls
                   hide={hiddenToolIds.has(s.toolId)}
+                  // A toggled-back-on series fully remounts (hide returns
+                  // null, not just opacity:0), so this mount animation is
+                  // what makes the dots "fly in" from the 0% baseline every
+                  // time — same effect on the initial load, just less
+                  // noticeable there since everything appears together.
+                  isAnimationActive
+                  animationDuration={700}
+                  animationEasing="ease-out"
                   dot={(dotProps: any) => {
                     const { cx, cy, payload, index } = dotProps;
                     const obs = payload[`${s.toolId}__obs`];
@@ -535,10 +543,23 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
                 />
               ))}
               <Scatter
-                data={actionMarkers.filter((m: any) => !hiddenToolIds.has(m.toolId))}
+                // Always the full array, never filtered by hiddenToolIds —
+                // filtering shrinks/grows the array on toggle, which shifts
+                // every later marker's index. Recharts animates points by
+                // array position, so a shifted index reads as "jump to
+                // wherever the old occupant of that slot was" (the domain
+                // start, when the slot didn't exist a moment ago) instead of
+                // a clean appear/disappear. Hiding via an empty render (same
+                // pattern the Line's own dot already uses) keeps the array
+                // — and every marker's index — stable regardless of toggles.
+                data={actionMarkers}
                 dataKey="y"
+                isAnimationActive
+                animationDuration={700}
+                animationEasing="ease-out"
                 shape={(props: any) => {
                   const { cx, cy, payload } = props;
+                  if (hiddenToolIds.has(payload.toolId)) return <g />;
                   const onClick = () => setSelectedAction({ action: payload.action, toolName: payload.toolName, color: payload.color });
                   return (
                     <circle
