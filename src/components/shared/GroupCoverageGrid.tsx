@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Pencil, Check, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { ComposedChart, Line, Scatter, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { apiService } from '@/lib/apiService';
 import { PhotoThumb } from '@/components/shared/PhotoThumb';
@@ -593,6 +593,19 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
             boxShadow: selectedObservation ? `0 0 32px ${selectedObservation.color}33` : undefined,
           }}
         >
+          {/* The Dialog's own built-in close button inherits the light
+              theme's dark text color with no override here, so it renders
+              invisible against this black background — easy to miss on
+              desktop (tap-outside still closes it) but a real problem on
+              mobile, where there's no "outside" to tap. This one is sized
+              for a thumb, not a cursor. */}
+          <DialogClose
+            className="absolute right-3 top-3 rounded-full p-2 z-10"
+            style={{ background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </DialogClose>
           {selectedObservation && (
             <>
               <DialogHeader>
@@ -724,6 +737,14 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
 
       <Dialog open={!!selectedAction} onOpenChange={(open) => !open && setSelectedAction(null)}>
         <DialogContent className="max-w-md">
+          {/* Same reasoning as the observation dialog above — a bigger,
+              unambiguous touch target than the default close button. */}
+          <DialogClose
+            className="absolute right-3 top-3 rounded-full p-2 z-10 hover:bg-accent"
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </DialogClose>
           {selectedAction && (
             <>
               <DialogHeader>
