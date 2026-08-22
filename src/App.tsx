@@ -56,6 +56,7 @@ import FinancialRecordDetail from "./pages/FinancialRecordDetail";
 import Finances from "./pages/Finances";
 import QuizPage from "./pages/QuizPage";
 import UserProfile from "./pages/UserProfile";
+import GroupCoverage from "./pages/GroupCoverage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -397,6 +398,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <StateSpacePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/group-coverage"
+          element={
+            <ProtectedRoute>
+              <GroupCoverage />
             </ProtectedRoute>
           }
         />
