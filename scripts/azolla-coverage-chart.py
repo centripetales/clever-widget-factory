@@ -69,9 +69,29 @@ def data_uri_for(url):
     return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
 
 
+# Legend/tooltip label per container — for this static snapshot, the first
+# 6 chars of the person's cognito_user_id (or action id for Stefan/Mae, who
+# are scoped by action rather than raw captured_by — see WORKER_MAP /
+# ACTION_SCOPED in azolla-weekly-report.js). 6 chars because 4 collides:
+# Marvin (f8b123a0...) and Buboy (f8b13370...) both start "f8b1". Checked
+# all current participants at 6 chars — no collisions.
+ID_LABELS = {
+    "Wilfred's Azolla Container": "b801b3",
+    "Jusua's Azolla Container": "1871b3",
+    "Lesterluna's Azolla Container": "68a1c3",
+    "Buboy's Azolla Container": "f8b133",
+    "Marvin's Azolla Container": "f8b123",
+    "John Kenneth's Azolla Container": "68e143",
+    "Mae's Azolla Container": "a98acb",
+    "Stefan's Azolla Container": "7d5553",
+    "Chael's Azolla Container": "d8d123",
+    "Allan's Azolla Container": "68f153",
+}
+
 for p in points:
     p['dt'] = datetime.fromisoformat(p['date'])
-    p['name'] = p['container_name'].replace("'S", "'s")
+    container_name = p['container_name'].replace("'S", "'s")
+    p['name'] = ID_LABELS.get(container_name, container_name)
     images = []
     for img in p['images']:
         images.append({

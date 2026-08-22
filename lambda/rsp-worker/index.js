@@ -392,26 +392,13 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
         [derivedStateId, photo.id]
       );
 
-      const perspRes = await client.query(
-        `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status)
-         VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS') RETURNING id`,
-        [derivedStateId, configId]
-      );
+      // No dedicated child table — AZOLLA_DUCKWEED_OBSERVATION, like every
+      // perspective type from here on, stores its structured output directly
+      // in state_perspectives.content (jsonb). See migration 020.
       await client.query(
-        `INSERT INTO azolla_duckweed_observation_perspectives
-          (id, vessel_present, vessel_type, vessel_frame_occupancy_percent, plant_material_visible,
-           plant_coverage_percent_estimate, water_visible_percent_estimate, dominant_plant_color,
-           species_guess, species_guess_basis, lighting_condition, frame_contains_non_vessel_vegetation,
-           most_interesting_observation, plant_sample_points, uncertainty_flags, content)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-        [
-          perspRes.rows[0].id, result.vessel_present, result.vessel_type, result.vessel_frame_occupancy_percent,
-          result.plant_material_visible, result.plant_coverage_percent_estimate, result.water_visible_percent_estimate,
-          result.dominant_plant_color, result.species_guess, result.species_guess_basis, result.lighting_condition,
-          result.frame_contains_non_vessel_vegetation, result.most_interesting_observation,
-          JSON.stringify(result.plant_sample_points || []), JSON.stringify(result.uncertainty_flags || []),
-          JSON.stringify(result)
-        ]
+        `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
+         VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS', $3)`,
+        [derivedStateId, configId, JSON.stringify(result)]
       );
       await client.query('COMMIT');
 
@@ -749,37 +736,24 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
     await client.query('BEGIN');
 
-    // Idempotency: delete any existing perspectives for this state before re-inserting
-    const existingIds = (await client.query(
-      `SELECT sp.id FROM state_perspectives sp WHERE sp.state_id = $1`, [state.id]
-    )).rows.map(r => r.id);
-    if (existingIds.length > 0) {
-      await client.query(`DELETE FROM claim_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM significance_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM entropy_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM state_perspectives WHERE state_id = $1`, [state.id]);
-    }
+    // Idempotency: delete any existing perspectives for this state before re-inserting.
+    // No child tables — content lives directly in state_perspectives.content (see
+    // migration 021); this is now a single DELETE, not four.
+    await client.query(`DELETE FROM state_perspectives WHERE state_id = $1`, [state.id]);
 
-    // Insert CLAIM
+    // Insert CLAIM / SIGNIFICANCE / ENTROPY
     const claimRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'CLAIM', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'CLAIM', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.claim })]
     );
-    await client.query(`INSERT INTO claim_perspectives (id, content) VALUES ($1, $2)`, [claimRes.rows[0].id, toolInput.claim]);
-
-    // Insert SIGNIFICANCE
     const sigRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.significance })]
     );
-    await client.query(`INSERT INTO significance_perspectives (id, content) VALUES ($1, $2)`, [sigRes.rows[0].id, toolInput.significance]);
-
-    // Insert ENTROPY
     const entRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'ENTROPY', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'ENTROPY', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.entropy })]
     );
-    await client.query(`INSERT INTO entropy_perspectives (id, content) VALUES ($1, $2)`, [entRes.rows[0].id, toolInput.entropy]);
 
     await client.query('COMMIT');
     console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
@@ -837,6 +811,7 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
   console.log('[RSP] Broadcast complete for state', state.id);
 }
+
 
 exports.handler = async (event) => {
   const client = new Client(dbConfig);

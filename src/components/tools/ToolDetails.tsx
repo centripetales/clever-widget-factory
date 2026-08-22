@@ -41,8 +41,8 @@ export const ToolDetails = ({
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
   const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
-  const { user, isAdmin } = useAuth();
-  const { organization } = useOrganization();
+  const { user } = useAuth();
+  const { organization, isAdmin } = useOrganization();
   const { deleteState } = useStateMutations(organization?.id || '');
   const { toast } = useToast();
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Wires already-computed azolla_duckweed_observation_perspectives coverage
- * estimates into the real metrics/metric_snapshots system, one registered
- * tool asset per named container.
+ * Wires already-computed AZOLLA_DUCKWEED_OBSERVATION perspective coverage
+ * estimates (state_perspectives.content, see migration 020) into the real
+ * metrics/metric_snapshots system, one registered tool asset per named
+ * container.
  *
  * Scoping note: each field worker's azolla setup lives under its own
  * dedicated organization (org.name = 'Wilfred', 'Jusua', etc — confirmed by
@@ -123,15 +124,15 @@ async function getOrCreateMetric(client, toolId, orgId) {
 // can have multiple photos, e.g. same session from different angles).
 async function coverageByState(client, orgId) {
   const res = await client.query(`
-    SELECT s.id as state_id, s.captured_at, AVG(p.plant_coverage_percent_estimate) as avg_coverage,
-      array_agg(DISTINCT p.vessel_type) as vessel_types
+    SELECT s.id as state_id, s.captured_at,
+      AVG((sper.content->>'plant_coverage_percent_estimate')::numeric) as avg_coverage,
+      array_agg(DISTINCT sper.content->>'vessel_type') as vessel_types
     FROM states s
     JOIN state_photos sp ON sp.state_id = s.id
     JOIN state_links sl ON sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
     JOIN state_perspectives sper ON sper.state_id = sl.state_id AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-    JOIN azolla_duckweed_observation_perspectives p ON p.id = sper.id
     WHERE s.organization_id = $1
-      AND p.plant_coverage_percent_estimate IS NOT NULL
+      AND sper.content->>'plant_coverage_percent_estimate' IS NOT NULL
     GROUP BY s.id, s.captured_at
     ORDER BY s.captured_at
   `, [orgId]);
@@ -142,16 +143,16 @@ async function coverageByState(client, orgId) {
 // of organization_id — for Stefan/Mae, see ROSTER comment above.
 async function coverageByAction(client, actionId) {
   const res = await client.query(`
-    SELECT s.id as state_id, s.captured_at, AVG(p.plant_coverage_percent_estimate) as avg_coverage,
-      array_agg(DISTINCT p.vessel_type) as vessel_types
+    SELECT s.id as state_id, s.captured_at,
+      AVG((sper.content->>'plant_coverage_percent_estimate')::numeric) as avg_coverage,
+      array_agg(DISTINCT sper.content->>'vessel_type') as vessel_types
     FROM state_links act_link
     JOIN states s ON s.id = act_link.state_id
     JOIN state_photos sp ON sp.state_id = s.id
     JOIN state_links sl ON sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
     JOIN state_perspectives sper ON sper.state_id = sl.state_id AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-    JOIN azolla_duckweed_observation_perspectives p ON p.id = sper.id
     WHERE act_link.entity_type = 'action' AND act_link.entity_id = $1
-      AND p.plant_coverage_percent_estimate IS NOT NULL
+      AND sper.content->>'plant_coverage_percent_estimate' IS NOT NULL
     GROUP BY s.id, s.captured_at
     ORDER BY s.captured_at
   `, [actionId]);

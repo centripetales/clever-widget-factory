@@ -155,9 +155,9 @@ async function main() {
     const withPhotos = [];
     for (const s of stateRows) {
       const photos = await client.query(`SELECT id, photo_url, photo_description FROM state_photos WHERE state_id = $1 ORDER BY photo_order`, [s.id]);
-      const claim = await client.query(`SELECT cp.content FROM state_perspectives sp JOIN claim_perspectives cp ON cp.id = sp.id WHERE sp.state_id = $1`, [s.id]);
-      const sig = await client.query(`SELECT sig.content FROM state_perspectives sp JOIN significance_perspectives sig ON sig.id = sp.id WHERE sp.state_id = $1`, [s.id]);
-      const ent = await client.query(`SELECT ep.content FROM state_perspectives sp JOIN entropy_perspectives ep ON ep.id = sp.id WHERE sp.state_id = $1`, [s.id]);
+      const claim = await client.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'CLAIM'`, [s.id]);
+      const sig = await client.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'SIGNIFICANCE'`, [s.id]);
+      const ent = await client.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'ENTROPY'`, [s.id]);
       withPhotos.push({
         id: s.id,
         capturedAt: s.captured_at,

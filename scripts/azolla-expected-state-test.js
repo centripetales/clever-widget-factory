@@ -129,7 +129,7 @@ async function main() {
 
     for (const s of states) {
       const photos = await client.query(`SELECT id, photo_url, photo_description FROM state_photos WHERE state_id = $1 ORDER BY photo_order`, [s.id]);
-      const ent = await client.query(`SELECT ep.content FROM state_perspectives sp JOIN entropy_perspectives ep ON ep.id = sp.id WHERE sp.state_id = $1`, [s.id]);
+      const ent = await client.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'ENTROPY'`, [s.id]);
       s.photos = photos.rows;
       s.entropy = ent.rows[0]?.content || null;
     }

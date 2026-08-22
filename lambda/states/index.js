@@ -375,15 +375,12 @@ async function listStates(event, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content),
+              'content', sp.content->>'content',
               'created_at', sp.created_at,
               'model_id', lgc.model_id,
               'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
-            LEFT JOIN claim_perspectives c ON c.id = sp.id
-            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
-            LEFT JOIN entropy_perspectives e ON e.id = sp.id
             LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
@@ -516,15 +513,12 @@ async function getState(id, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content),
+              'content', sp.content->>'content',
               'created_at', sp.created_at,
               'model_id', lgc.model_id,
               'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
-            LEFT JOIN claim_perspectives c ON c.id = sp.id
-            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
-            LEFT JOIN entropy_perspectives e ON e.id = sp.id
             LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
@@ -824,7 +818,8 @@ async function updateState(event, id, authContext, headers) {
 
       // 3. Queue SQS perspective run
       try {
-        if (await stateQualifiesForPerspectives(client, id)) {
+        if (await stateQualifiesForPerspectives(client, id)
+          || await stateLinkedToProcessorEnabledOrg(client, id)) {
           const pClient = await getDbClient();
           await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
           pClient.release();

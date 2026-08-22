@@ -134,7 +134,7 @@ async function main() {
     entries = [];
     for (const s of states.rows) {
       const photos = await client.query(`SELECT photo_description FROM state_photos WHERE state_id = $1 ORDER BY photo_order`, [s.id]);
-      const claim = await client.query(`SELECT cp.content FROM state_perspectives sp JOIN claim_perspectives cp ON cp.id = sp.id WHERE sp.state_id = $1`, [s.id]);
+      const claim = await client.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'CLAIM'`, [s.id]);
       entries.push({
         date: s.captured_at.toISOString().slice(0, 10),
         raw: photos.rows.map(p => p.photo_description).filter(Boolean).join(' / ') || '(no text)',
