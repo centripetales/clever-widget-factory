@@ -50,20 +50,24 @@ export const handler = async (event) => {
       }
       
       // Compress with sharp - downsample long side to max 2400px, preserve aspect ratio
-      // Strip metadata (original in originals/ folder preserves EXIF)
+      // Strip metadata (original in originals/ folder preserves EXIF).
+      // IMPORTANT: sharp's .withMetadata(false) does NOT strip metadata — it
+      // behaves the same as .withMetadata() with no args, which sharp's own
+      // docs say PRESERVES metadata (confirmed by reproducing against a real
+      // uploaded photo: 26 EXIF tags incl. GPS survived with this call in
+      // place). Simply never calling .withMetadata() is what actually
+      // strips it — that's sharp's real default. Do not add it back.
       const compressed = await sharp(imageBuffer)
         .rotate() // Auto-rotate based on EXIF, then strip EXIF
         .resize(2400, 2400, { fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: 85, mozjpeg: true })
-        .withMetadata(false) // Explicitly strip all metadata
         .toBuffer();
-      
+
       // Generate thumbnail - 150x150 cover crop, no metadata needed, target 15-30KB
       const thumbnail = await sharp(imageBuffer)
         .rotate() // Auto-rotate based on EXIF, then strip EXIF
         .resize(150, 150, { fit: 'cover' })
         .webp({ quality: 60 })
-        .withMetadata(false) // Explicitly strip all metadata
         .toBuffer();
       
       console.log('Processed:', { 

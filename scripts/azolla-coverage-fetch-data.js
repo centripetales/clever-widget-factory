@@ -106,7 +106,7 @@ async function main() {
         s.id as state_id, s.captured_at as captured_at_from_state,
         s.state_text as observation_notes, sp.photo_description as photo_notes,
         sp.id as photo_id, sp.photo_url,
-        p.plant_coverage_percent_estimate as photo_coverage,
+        (sper.content->>'plant_coverage_percent_estimate')::numeric as photo_coverage,
         pme.captured_at, pme.captured_at_source
       FROM metric_snapshots ms
       JOIN metrics m ON m.metric_id = ms.metric_id AND m.name = 'Coverage %'
@@ -115,7 +115,6 @@ async function main() {
       JOIN state_photos sp ON sp.state_id = s.id
       LEFT JOIN state_links sl ON sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
       LEFT JOIN state_perspectives sper ON sper.state_id = sl.state_id AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-      LEFT JOIN azolla_duckweed_observation_perspectives p ON p.id = sper.id
       LEFT JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
       ORDER BY t.name, s.captured_at, sp.id
     `);

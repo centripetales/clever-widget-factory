@@ -1,4 +1,4 @@
-import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,25 +9,77 @@ import { Tool } from "@/hooks/tools/useToolsData";
 import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
-import { Link } from "react-router-dom";
+import { PhotoThumb } from "@/components/shared/PhotoThumb";
+import { GroupCoverageGrid } from "@/components/shared/GroupCoverageGrid";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useCognitoAuth";
+import { useOrganization } from "@/hooks/useOrganization";
+import { useStateMutations } from "@/hooks/useStates";
+import { useToast } from "@/hooks/use-toast";
+import { apiService } from "@/lib/apiService";
 
 interface ToolDetailsProps {
   tool: Tool;
   toolHistory: HistoryEntry[];
+  // Optional: while true, the History tab shows a spinner instead of the
+  // (indistinguishable-from-empty) list — toolHistory starts as [] before
+  // the fetch resolves, so without this a "no history" message flashed for
+  // several seconds on every open, even when history did exist.
+  toolHistoryLoading?: boolean;
   onBack: () => void;
-  defaultTab?: string;
+  // Controlled tab: the caller owns which tab is active (typically synced to
+  // a URL search param) so that navigating away and back — e.g. to edit an
+  // observation — restores the same tab instead of resetting to "details".
+  activeTab: string;
+  onTabChange: (tab: string) => void;
 }
 
 export const ToolDetails = ({
   tool,
   toolHistory,
+  toolHistoryLoading = false,
   onBack,
-  defaultTab = 'details',
+  activeTab,
+  onTabChange,
 }: ToolDetailsProps) => {
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
   const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { organization, isAdmin } = useOrganization();
+  const { deleteState } = useStateMutations(organization?.id || '');
+  const { toast } = useToast();
+
+  // This container's own tab appears only when it's actually share-granted
+  // somewhere (POST /shares) — the tab surfaces where that share leads, not a
+  // hardcoded program name, so it works for whichever org(s) this container
+  // happens to be shared into.
+  const [shares, setShares] = useState<{ target_org_id: string; target_org_name: string }[]>([]);
+  useEffect(() => {
+    apiService.get<{ shares: { target_org_id: string; target_org_name: string }[] }>(`/shares/tool/${tool.id}`)
+      .then((res) => setShares(res.shares || []))
+      .catch(() => setShares([]));
+  }, [tool.id]);
+
+  const canEditObservation = (record: ObservationHistoryEntry): boolean => {
+    if (!user) return false;
+    return user.userId === record.observed_by || isAdmin;
+  };
+
+  const handleDeleteObservation = async (observationId: string) => {
+    if (!confirm('Are you sure you want to delete this observation? This action cannot be undone.')) {
+      return;
+    }
+    try {
+      await deleteState(observationId);
+      toast({ title: 'Observation deleted', description: 'The observation has been deleted successfully.' });
+    } catch (error) {
+      console.error('Failed to delete observation:', error);
+      toast({ title: 'Error', description: 'Failed to delete observation. Please try again.', variant: 'destructive' });
+    }
+  };
 
   const toggleExpandedAi = (photoId: string) => {
     setExpandedAiPhotos(prev => {
@@ -105,12 +157,17 @@ export const ToolDetails = ({
         </TooltipProvider>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Tabs defaultValue={defaultTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
+      <div>
+        <div>
+          <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
+            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${2 + shares.length}, 1fr)` }}>
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
+              {shares.map((share) => (
+                <TabsTrigger key={share.target_org_id} value={`group-${share.target_org_id}`} className="w-full">
+                  {share.target_org_name}
+                </TabsTrigger>
+              ))}
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -203,6 +260,11 @@ export const ToolDetails = ({
 
             <TabsContent value="history" className="space-y-4">
               <div className="space-y-4">
+                {toolHistoryLoading && toolHistory.length === 0 && (
+                  <div className="flex items-center justify-center py-8 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading history...
+                  </div>
+                )}
                 {toolHistory.map((record) => (
                   <Card key={record.id} className={`hover:shadow-md transition-shadow overflow-hidden bg-background ${getToolCardStyle(record)}`}>
                     <CardContent className="p-4">
@@ -278,7 +340,31 @@ export const ToolDetails = ({
                                 </p>
                               </div>
                             </div>
-                            <Badge variant="outline">Observation</Badge>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">Observation</Badge>
+                              {canEditObservation(record) && (
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => navigate(`/observations/edit/${record.id}`)}
+                                    className="h-8 px-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100"
+                                    aria-label="Edit observation"
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteObservation(record.id)}
+                                    className="h-8 px-2 text-red-600 hover:text-red-800 hover:bg-red-100"
+                                    aria-label="Delete observation"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                           {record.observation_text && (
                             <p className="text-sm mb-2">{record.observation_text}</p>
@@ -296,30 +382,25 @@ export const ToolDetails = ({
                             </div>
                           )}
                           {record.photos && record.photos.length > 0 && (
-                            <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-4 gap-y-2 mt-2">
                               {record.photos.map((photo, photoIdx) => (
-                                <div key={photo.id} className="relative">
-                                  <a 
+                                <div key={photo.id} className="flex gap-3 items-start">
+                                  <PhotoThumb
                                     href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block"
-                                  >
-                                    <img 
-                                      src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
-                                      alt={photo.photo_description || 'Observation photo'}
-                                      className="w-full h-32 object-cover rounded border border-blue-200 hover:border-blue-400 transition-colors"
-                                      onError={(e) => {
-                                        const target = e.target as HTMLImageElement;
-                                        const fullUrl = getImageUrl(photo.photo_url);
-                                        if (fullUrl && target.src !== fullUrl) {
-                                          target.src = fullUrl;
-                                        }
-                                      }}
-                                    />
-                                  </a>
+                                    src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                    alt={photo.photo_description || 'Observation photo'}
+                                    className="w-28 h-28 flex-shrink-0 rounded border border-blue-200 hover:border-blue-400 transition-colors"
+                                    onError={(e) => {
+                                      const target = e.target as HTMLImageElement;
+                                      const fullUrl = getImageUrl(photo.photo_url);
+                                      if (fullUrl && target.src !== fullUrl) {
+                                        target.src = fullUrl;
+                                      }
+                                    }}
+                                  />
+                                  <div className="flex-1 min-w-0 pt-0.5">
                                   {photo.photo_description?.trim() && (
-                                    <div className="text-xs text-blue-700 mt-1">
+                                    <div className="text-xs text-blue-700">
                                       <span>{photo.photo_description}</span>
                                     </div>
                                   )}
@@ -364,6 +445,7 @@ export const ToolDetails = ({
                                       )}
                                     </div>
                                   )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -374,28 +456,20 @@ export const ToolDetails = ({
                   </Card>
                 ))}
 
-                {toolHistory.length === 0 && (
+                {!toolHistoryLoading && toolHistory.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">
                     No history available.
                   </p>
                 )}
               </div>
             </TabsContent>
-          </Tabs>
-        </div>
 
-        <div className="space-y-6">
-          {tool.image_url && (
-            <Card>
-              <CardContent className="p-4 flex flex-col gap-4">
-                <img
-                  src={getThumbnailUrl(tool.image_url) || ''}
-                  alt={tool.name}
-                  className="w-full h-64 object-cover rounded-md"
-                />
-              </CardContent>
-            </Card>
-          )}
+            {shares.map((share) => (
+              <TabsContent key={share.target_org_id} value={`group-${share.target_org_id}`} className="space-y-4">
+                <GroupCoverageGrid orgId={share.target_org_id} />
+              </TabsContent>
+            ))}
+          </Tabs>
         </div>
       </div>
 

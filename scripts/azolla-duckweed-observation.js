@@ -255,29 +255,14 @@ async function storeObservation(client, photo, result, configId) {
       [derivedStateId, photo.photo_id]
     );
 
+    // No dedicated child table — see migration 020. Structured output lives
+    // directly in state_perspectives.content.
     const perspRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status)
-       VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS') RETURNING id`,
-      [derivedStateId, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
+       VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS', $3) RETURNING id`,
+      [derivedStateId, configId, JSON.stringify(result)]
     );
     const perspectiveId = perspRes.rows[0].id;
-
-    await client.query(
-      `INSERT INTO azolla_duckweed_observation_perspectives
-        (id, vessel_present, vessel_type, vessel_frame_occupancy_percent, plant_material_visible,
-         plant_coverage_percent_estimate, water_visible_percent_estimate, dominant_plant_color,
-         species_guess, species_guess_basis, lighting_condition, frame_contains_non_vessel_vegetation,
-         most_interesting_observation, plant_sample_points, uncertainty_flags, content)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-      [
-        perspectiveId, result.vessel_present, result.vessel_type, result.vessel_frame_occupancy_percent,
-        result.plant_material_visible, result.plant_coverage_percent_estimate, result.water_visible_percent_estimate,
-        result.dominant_plant_color, result.species_guess, result.species_guess_basis, result.lighting_condition,
-        result.frame_contains_non_vessel_vegetation, result.most_interesting_observation,
-        JSON.stringify(result.plant_sample_points || []), JSON.stringify(result.uncertainty_flags || []),
-        JSON.stringify(result)
-      ]
-    );
 
     await client.query('COMMIT');
     return { derivedStateId, perspectiveId };

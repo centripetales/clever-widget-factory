@@ -205,7 +205,7 @@ async function handleIdentifyDroneMonitoringTargets(params, organizationId, buil
         sp.photo_description as last_observation,
         pme.gps_latitude as lat,
         pme.gps_longitude as lon,
-        (SELECT content FROM entropy_perspectives ep JOIN state_perspectives s_p ON ep.id = s_p.id WHERE s_p.state_id = s.id LIMIT 1) as entropy_context
+        (SELECT content->>'content' FROM state_perspectives s_p WHERE s_p.state_id = s.id AND s_p.perspective_type = 'ENTROPY' LIMIT 1) as entropy_context
       FROM states s
       JOIN state_photos sp ON s.id = sp.state_id
       LEFT JOIN photo_metadata_extractions pme 

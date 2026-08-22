@@ -30,6 +30,7 @@ import Dashboard from "./pages/Dashboard";
 import InventorySummary from "./pages/InventorySummary";
 import CombinedAssets from "./pages/CombinedAssets";
 import AssetPage from "./pages/AssetPage";
+import AssetDetailsPage from "./pages/AssetDetailsPage";
 import AddObservation from "./pages/AddObservation";
 import ObservationsList from "./pages/ObservationsList";
 import Missions from "./pages/Missions";
@@ -55,6 +56,7 @@ import FinancialRecordDetail from "./pages/FinancialRecordDetail";
 import Finances from "./pages/Finances";
 import QuizPage from "./pages/QuizPage";
 import UserProfile from "./pages/UserProfile";
+import GroupCoverage from "./pages/GroupCoverage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -155,6 +157,16 @@ function AppContent() {
             <ProtectedRoute>
               <FeatureGuardRoute featureKey="assets" featureName="Assets">
                 <AssetPage />
+              </FeatureGuardRoute>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/combined-assets/:id/details"
+          element={
+            <ProtectedRoute>
+              <FeatureGuardRoute featureKey="assets" featureName="Assets">
+                <AssetDetailsPage />
               </FeatureGuardRoute>
             </ProtectedRoute>
           }
@@ -386,6 +398,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <StateSpacePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/group-coverage"
+          element={
+            <ProtectedRoute>
+              <GroupCoverage />
             </ProtectedRoute>
           }
         />

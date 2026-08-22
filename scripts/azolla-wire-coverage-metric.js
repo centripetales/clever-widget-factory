@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Wires already-computed azolla_duckweed_observation_perspectives coverage
- * estimates into the real metrics/metric_snapshots system, one registered
- * tool asset per named container.
+ * Wires already-computed AZOLLA_DUCKWEED_OBSERVATION perspective coverage
+ * estimates (state_perspectives.content, see migration 020) into the real
+ * metrics/metric_snapshots system, one registered tool asset per named
+ * container.
  *
  * Scoping note: each field worker's azolla setup lives under its own
  * dedicated organization (org.name = 'Wilfred', 'Jusua', etc — confirmed by
@@ -119,19 +120,25 @@ async function getOrCreateMetric(client, toolId, orgId) {
   return inserted.rows[0].metric_id;
 }
 
-// One row per state, averaging coverage across that state's photos (a state
-// can have multiple photos, e.g. same session from different angles).
+// One row per state, using the MAX coverage across that state's photos —
+// not an average. A state's photos can be of entirely different vessels
+// (e.g. Stefan/Mae batch-photographing several participants' containers in
+// one submission — see the "vessel_type" values, which often disagree
+// within a single state), so averaging blends unrelated containers into one
+// number. Max is still an imperfect fix (it's still picking from a mixed
+// bag, just the highest of them) but matches azolla-coverage-chart.py's
+// existing day-level aggregation, which already made this same call.
 async function coverageByState(client, orgId) {
   const res = await client.query(`
-    SELECT s.id as state_id, s.captured_at, AVG(p.plant_coverage_percent_estimate) as avg_coverage,
-      array_agg(DISTINCT p.vessel_type) as vessel_types
+    SELECT s.id as state_id, s.captured_at,
+      MAX((sper.content->>'plant_coverage_percent_estimate')::numeric) as coverage,
+      array_agg(DISTINCT sper.content->>'vessel_type') as vessel_types
     FROM states s
     JOIN state_photos sp ON sp.state_id = s.id
     JOIN state_links sl ON sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
     JOIN state_perspectives sper ON sper.state_id = sl.state_id AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-    JOIN azolla_duckweed_observation_perspectives p ON p.id = sper.id
     WHERE s.organization_id = $1
-      AND p.plant_coverage_percent_estimate IS NOT NULL
+      AND sper.content->>'plant_coverage_percent_estimate' IS NOT NULL
     GROUP BY s.id, s.captured_at
     ORDER BY s.captured_at
   `, [orgId]);
@@ -142,16 +149,16 @@ async function coverageByState(client, orgId) {
 // of organization_id — for Stefan/Mae, see ROSTER comment above.
 async function coverageByAction(client, actionId) {
   const res = await client.query(`
-    SELECT s.id as state_id, s.captured_at, AVG(p.plant_coverage_percent_estimate) as avg_coverage,
-      array_agg(DISTINCT p.vessel_type) as vessel_types
+    SELECT s.id as state_id, s.captured_at,
+      MAX((sper.content->>'plant_coverage_percent_estimate')::numeric) as coverage,
+      array_agg(DISTINCT sper.content->>'vessel_type') as vessel_types
     FROM state_links act_link
     JOIN states s ON s.id = act_link.state_id
     JOIN state_photos sp ON sp.state_id = s.id
     JOIN state_links sl ON sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
     JOIN state_perspectives sper ON sper.state_id = sl.state_id AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-    JOIN azolla_duckweed_observation_perspectives p ON p.id = sper.id
     WHERE act_link.entity_type = 'action' AND act_link.entity_id = $1
-      AND p.plant_coverage_percent_estimate IS NOT NULL
+      AND sper.content->>'plant_coverage_percent_estimate' IS NOT NULL
     GROUP BY s.id, s.captured_at
     ORDER BY s.captured_at
   `, [actionId]);
@@ -176,7 +183,7 @@ async function main() {
       console.log(`  ${rows.length} states with a coverage estimate`);
 
       for (const row of rows) {
-        const value = Number(row.avg_coverage).toFixed(2);
+        const value = Number(row.coverage).toFixed(2);
         console.log(`  ${row.captured_at.toISOString().slice(0, 10)} | ${value}% | ${row.vessel_types.join(', ')}`);
 
         if (DRY_RUN) continue;
@@ -193,10 +200,15 @@ async function main() {
           );
         }
 
+        // Skip the overwrite if a person already hand-corrected this value
+        // (metric_snapshots.edited_by set — see migration 024) — otherwise
+        // every rerun silently clobbers their fix back to the AI estimate.
         await client.query(
           `INSERT INTO metric_snapshots (state_id, metric_id, value)
            VALUES ($1, $2, $3)
-           ON CONFLICT (state_id, metric_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+           ON CONFLICT (state_id, metric_id) DO UPDATE
+             SET value = EXCLUDED.value, updated_at = NOW()
+             WHERE metric_snapshots.edited_by IS NULL`,
           [row.state_id, metricId, value]
         );
       }

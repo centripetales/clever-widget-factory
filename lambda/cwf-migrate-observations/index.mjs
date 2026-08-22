@@ -56,14 +56,17 @@ async function migratePhoto(photo, orgId) {
     const imageBuffer = await streamToBuffer(response.Body);
     const originalSize = imageBuffer.length;
     
-    // Compress with metadata stripped
+    // Compress with metadata stripped. NOTE: .withMetadata(false) does NOT
+    // strip metadata in this sharp version — it behaves like .withMetadata()
+    // with no args, which preserves it (see cwf-image-compressor/index.mjs
+    // for how this was found). Never calling .withMetadata() is what
+    // actually strips it.
     const compressed = await sharp(imageBuffer)
       .rotate()
       .resize(2400, 2400, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 85, mozjpeg: true })
-      .withMetadata(false)
       .toBuffer();
-    
+
     // Upload compressed to new location
     await s3Client.send(new PutObjectCommand({
       Bucket: BUCKET,
@@ -72,13 +75,12 @@ async function migratePhoto(photo, orgId) {
       ContentType: 'image/jpeg',
       CacheControl: 'public, max-age=31536000',
     }));
-    
+
     // Generate and upload thumbnail
     const thumbnail = await sharp(imageBuffer)
       .rotate()
       .resize(150, 150, { fit: 'cover' })
       .webp({ quality: 60 })
-      .withMetadata(false)
       .toBuffer();
     
     await s3Client.send(new PutObjectCommand({

@@ -138,7 +138,7 @@ function create() {
               SELECT
                 1 as similarity,
                 s.id as state_id,
-                cp.content as claim_text,
+                sp.content->>'content' as claim_text,
                 s.captured_at,
                 COALESCE(om.full_name, s.captured_by::text) as captured_by_name,
                 EXISTS(SELECT 1 FROM state_photos sp2 WHERE sp2.state_id = s.id) as has_photos,
@@ -147,7 +147,6 @@ function create() {
                   FROM state_links sl WHERE sl.state_id = s.id
                 ) as links
               FROM state_perspectives sp
-              JOIN claim_perspectives cp ON cp.id = sp.id
               JOIN states s ON s.id = sp.state_id
               LEFT JOIN organization_members om
                 ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id
@@ -176,7 +175,7 @@ function create() {
             SELECT
               m.similarity,
               s.id as state_id,
-              cp.content as claim_text,
+              sp.content->>'content' as claim_text,
               s.captured_at,
               COALESCE(om.full_name, s.captured_by::text) as captured_by_name,
               EXISTS(SELECT 1 FROM state_photos sp2 WHERE sp2.state_id = s.id) as has_photos,
@@ -186,7 +185,6 @@ function create() {
               ) as links
             FROM matches m
             JOIN state_perspectives sp ON sp.id = m.entity_id
-            JOIN claim_perspectives cp ON cp.id = sp.id
             JOIN states s ON s.id = sp.state_id
             LEFT JOIN organization_members om
               ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id

@@ -214,6 +214,220 @@ async function getEstimatedSeconds(client, hasImages) {
   }
 }
 
+// ─── Org-scoped processors (state → shared-to-org auto-processing) ───────────
+// Entity types that can be share-granted to another org via POST /shares
+// (lambda/core/index.js). Must stay consistent with the equivalent check in
+// lambda/states/index.js (producer side) — same convention as qualifyingTypes
+// above being a manual duplicate of QUALIFYING_LINK_TYPES there.
+const SHAREABLE_LINK_TYPES = ['tool', 'part', 'action'];
+
+// Whether a state is linked to an entity (tool/part/action) that's been share-granted
+// to an org configured to run the given processor (organizations.ai_config.processors,
+// e.g. "azolla_coverage"). Mirrors the join GET /shares/{entityType}/{entityId} already
+// uses (lambda/core/index.js), filtered to a specific processor name.
+async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks, processorName) {
+  const relevant = knownLinks.filter(l => SHAREABLE_LINK_TYPES.includes(l.entity_type));
+  if (relevant.length === 0) return false;
+  const res = await client.query(
+    `SELECT 1
+     FROM state_links our_link
+     JOIN state_links share_entity_link
+       ON share_entity_link.entity_type = our_link.entity_type
+      AND share_entity_link.entity_id = our_link.entity_id
+     JOIN state_links share_org_link
+       ON share_org_link.state_id = share_entity_link.state_id
+      AND share_org_link.entity_type = 'organization'
+     JOIN organizations o ON o.id = share_org_link.entity_id::uuid
+     WHERE our_link.state_id = $1
+       AND our_link.entity_type = ANY($2)
+       AND o.ai_config -> 'processors' @> to_jsonb($3::text)
+     LIMIT 1`,
+    [stateId, SHAREABLE_LINK_TYPES, processorName]
+  );
+  return res.rows.length > 0;
+}
+
+// ─── "azolla_coverage" processor: vision-LLM coverage % estimate ─────────────
+// Ported from scripts/azolla-duckweed-observation.js (offline) + the metric-wiring
+// half of scripts/azolla-wire-coverage-metric.js — same prompt/schema/model, same
+// derived-state + state_perspectives shape, so historical and live data land in
+// identical tables with no read-side changes.
+const AZOLLA_COVERAGE_MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const AZOLLA_COVERAGE_PROMPT_VERSION = 'azolla-duckweed-v1';
+
+const AZOLLA_COVERAGE_SYSTEM_PROMPT = `You are a data extraction system supporting azolla/duckweed cultivation. Your only job is to report what is directly visible in the photo, as structured data. Do not assess health, growth quality, or compare against an ideal state. If something can't be determined from the image, say so explicitly in uncertainty_flags rather than guessing.
+
+This program cultivates azolla and duckweed as part of a research trial in the Philippines.
+
+When choosing plant_sample_points, only pick points that fall on visible plant material — never on open water, container walls, or background. These points seed an automated image segmentation step, and a point on the wrong thing will make that step segment the wrong object entirely. If you are not confident a point lands on plant material, mark its confidence as "low" rather than omitting it.`;
+
+const AZOLLA_COVERAGE_TOOL_CONFIG = {
+  tools: [{
+    toolSpec: {
+      name: 'record_growth_observation',
+      description: 'Record structured, purely observational data extracted from an azolla/duckweed cultivation photo.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            vessel_present: { type: 'boolean' },
+            vessel_type: { type: 'string' },
+            vessel_frame_occupancy_percent: { type: ['number', 'null'], description: 'Rough estimate of what percent of the frame the vessel occupies. Null if vessel_present is false or not determinable.' },
+            plant_material_visible: { type: 'boolean' },
+            plant_sample_points: {
+              type: 'array',
+              description: '1-3 points (fractions of frame width/height, 0.0-1.0) that fall on visible plant material.',
+              items: {
+                type: 'object',
+                properties: {
+                  x: { type: 'number' },
+                  y: { type: 'number' },
+                  confidence: { type: 'string', enum: ['high', 'medium', 'low'] }
+                },
+                required: ['x', 'y', 'confidence']
+              }
+            },
+            plant_coverage_percent_estimate: { type: ['number', 'null'], description: 'Estimate as a percentage of the visible water surface, not the whole photo frame.' },
+            water_visible_percent_estimate: { type: ['number', 'null'] },
+            dominant_plant_color: { type: 'string', enum: ['green', 'yellow-green', 'red-tinged', 'brown', 'mixed', 'not_visible'] },
+            species_guess: { type: 'string', enum: ['azolla', 'duckweed', 'mixed', 'indistinguishable', 'not_visible'] },
+            species_guess_basis: { type: 'string' },
+            lighting_condition: { type: 'string', enum: ['direct_sun', 'shade', 'overcast', 'indoor', 'backlit', 'unknown'] },
+            frame_contains_non_vessel_vegetation: { type: 'boolean', description: 'True if there is visible plant material in the frame that is clearly not inside/part of the vessel (e.g. background leaves, garden plants).' },
+            most_interesting_observation: { type: 'string', description: 'The single most noteworthy, specific thing visible in this photo that a quick glance might miss. State ONLY what is directly visible (position, count, shape, color, arrangement) — do not infer a cause, mechanism, or explanation for why it looks that way. If you cannot confidently identify what an object or feature specifically is, describe its visible properties (shape, color, size, position) rather than naming what it is — e.g. write "an elongated white streak" rather than "a pipette" unless you are certain. A hedged, generic description is more useful than a specific but unconfirmed one.' },
+            notable_organisms_visible: {
+              type: 'array',
+              description: 'Any animals, insects, or other organisms directly visible in the photo that are not the azolla/duckweed crop itself (e.g. a duck, a frog, tadpoles, insects). One short factual description per organism (what it is or looks like, roughly where in the frame). State only what is visible — do not infer whether it is beneficial, harmful, or why it is there. Empty array if none visible.',
+              items: { type: 'string' }
+            },
+            uncertainty_flags: { type: 'array', items: { type: 'string' } }
+          },
+          required: ['vessel_present', 'vessel_type', 'plant_material_visible', 'plant_sample_points', 'dominant_plant_color', 'species_guess', 'species_guess_basis', 'lighting_condition', 'frame_contains_non_vessel_vegetation', 'most_interesting_observation', 'notable_organisms_visible', 'uncertainty_flags']
+        }
+      }
+    }
+  }],
+  toolChoice: { tool: { name: 'record_growth_observation' } }
+};
+
+async function getOrCreateAzollaCoverageModelConfig(client) {
+  const existing = await client.query(
+    `SELECT id FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1`,
+    [AZOLLA_COVERAGE_MODEL_ID, AZOLLA_COVERAGE_PROMPT_VERSION]
+  );
+  if (existing.rows.length > 0) return existing.rows[0].id;
+  const inserted = await client.query(
+    `INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [AZOLLA_COVERAGE_MODEL_ID, AZOLLA_COVERAGE_PROMPT_VERSION, AZOLLA_COVERAGE_SYSTEM_PROMPT, JSON.stringify({ max_tokens: 1000, temperature: 0 })]
+  );
+  return inserted.rows[0].id;
+}
+
+async function getOrCreateCoverageMetric(client, toolId, orgId) {
+  const existing = await client.query(
+    "SELECT metric_id FROM metrics WHERE tool_id = $1 AND name = 'Coverage %'",
+    [toolId]
+  );
+  if (existing.rows.length > 0) return existing.rows[0].metric_id;
+  const inserted = await client.query(
+    `INSERT INTO metrics (tool_id, name, unit, details, organization_id)
+     VALUES ($1, 'Coverage %', '%', 'Vision-LLM-estimated azolla/duckweed coverage of the visible water surface.', $2)
+     RETURNING metric_id`,
+    [toolId, orgId]
+  );
+  return inserted.rows[0].metric_id;
+}
+
+// Runs the vision-LLM coverage estimate for every not-yet-analyzed photo on this
+// state, then writes the resulting average as this state's "Coverage %" metric
+// snapshot on its linked tool. Errors are logged, not thrown — a failure here
+// shouldn't fail an otherwise-successful CLAIM/SIGNIFICANCE/ENTROPY extraction
+// (or vice versa; these are independent processors on the same state).
+async function runAzollaCoverageProcessor(client, state, linkRows) {
+  const toolLink = linkRows.find(l => l.entity_type === 'tool');
+  if (!toolLink) {
+    console.log('[RSP] azolla_coverage: state', state.id, 'has no linked tool, nothing to attach a metric to — skipping');
+    return;
+  }
+
+  const photos = (state.photos || []).filter(p => p.photo_url);
+  if (photos.length === 0) return;
+
+  const configId = await getOrCreateAzollaCoverageModelConfig(client);
+  const coverageEstimates = [];
+
+  for (const photo of photos) {
+    const already = await client.query(
+      `SELECT 1 FROM state_links sl
+       JOIN state_perspectives sper ON sper.state_id = sl.state_id
+       WHERE sl.entity_type = 'state_photo' AND sl.entity_id = $1
+         AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
+       LIMIT 1`,
+      [photo.id]
+    );
+    if (already.rows.length > 0) continue; // already scored (e.g. a retry) — skip re-running the vision call
+
+    try {
+      const imgData = await downloadPhoto(photo.photo_url);
+      const result = await invokeBedrock(
+        AZOLLA_COVERAGE_MODEL_ID,
+        AZOLLA_COVERAGE_SYSTEM_PROMPT,
+        'Analyze this photo and record the structured observation.',
+        { max_tokens: 1000, temperature: 0 },
+        [imgData],
+        AZOLLA_COVERAGE_TOOL_CONFIG
+      );
+
+      await client.query('BEGIN');
+      const derivedStateRes = await client.query(
+        `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+         VALUES ($1, $2, $3, NOW()) RETURNING id`,
+        [state.organization_id, '[azolla_duckweed_observation] vision LLM structured extraction', state.captured_by]
+      );
+      const derivedStateId = derivedStateRes.rows[0].id;
+
+      await client.query(
+        `INSERT INTO state_links (state_id, entity_type, entity_id) VALUES ($1, 'state_photo', $2)`,
+        [derivedStateId, photo.id]
+      );
+
+      // No dedicated child table — AZOLLA_DUCKWEED_OBSERVATION, like every
+      // perspective type from here on, stores its structured output directly
+      // in state_perspectives.content (jsonb). See migration 020.
+      await client.query(
+        `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
+         VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS', $3)`,
+        [derivedStateId, configId, JSON.stringify(result)]
+      );
+      await client.query('COMMIT');
+
+      if (typeof result.plant_coverage_percent_estimate === 'number') {
+        coverageEstimates.push(result.plant_coverage_percent_estimate);
+      }
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error(`[RSP] azolla_coverage: failed for photo ${photo.id}:`, err.message);
+    }
+  }
+
+  if (coverageEstimates.length === 0) return;
+
+  // Max, not mean, across this observation's photos — matching
+  // scripts/azolla-coverage-chart.py's convention: someone who honestly
+  // photographs a sparse corner of their container alongside a fuller one
+  // shouldn't have that average away the fuller shot's real coverage.
+  const maxCoverage = Math.max(...coverageEstimates);
+  const metricId = await getOrCreateCoverageMetric(client, toolLink.entity_id, state.organization_id);
+  await client.query(
+    `INSERT INTO metric_snapshots (state_id, metric_id, value)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (state_id, metric_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [state.id, metricId, maxCoverage.toFixed(2)]
+  );
+  console.log(`[RSP] azolla_coverage: wrote Coverage % = ${maxCoverage.toFixed(2)} for state ${state.id}`);
+}
+
 // ─── Core processing logic for a single pending_perspectives record ───────────
 async function processPendingRecord(client, record) {
   // Mark as processing
@@ -266,12 +480,42 @@ async function processPendingRecord(client, record) {
   if (stateResult.rows.length === 0) throw new Error(`State not found: ${record.state_id}`);
   const state = stateResult.rows[0];
 
-  // Verify eligibility
+  // Verify eligibility. Two independent processors can apply to the same state —
+  // the original text-only epistemic extraction (CLAIM/SIGNIFICANCE/ENTROPY), and
+  // any org-scoped processor (e.g. azolla_coverage) the state's linked tool/part/
+  // action is share-granted into. Neither gates the other; only fail the whole job
+  // if nothing at all applies (nothing should have been queued in that case).
   const linksRes = await client.query('SELECT * FROM state_links WHERE state_id = $1', [state.id]);
-  const qualifyingTypes = ['observation', 'action'];
-  const isEligible = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
-  if (!isEligible) {
-    throw new Error(`State ${state.id} does not qualify for perspective processing. Linked entities: ${JSON.stringify(linksRes.rows.map(r => r.entity_type))}`);
+  const qualifyingTypes = ['observation', 'action']; // must match QUALIFYING_LINK_TYPES in lambda/states/index.js
+  const runsEpistemicPerspectives = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
+  const runsAzollaCoverage = await stateLinkedToProcessorEnabledOrg(client, state.id, linksRes.rows, 'azolla_coverage');
+  if (!runsEpistemicPerspectives && !runsAzollaCoverage) {
+    throw new Error(`State ${state.id} does not qualify for any perspective/processor. Linked entities: ${JSON.stringify(linksRes.rows.map(r => r.entity_type))}`);
+  }
+
+  if (runsAzollaCoverage) {
+    try {
+      await runAzollaCoverageProcessor(client, state, linksRes.rows);
+    } catch (err) {
+      console.error('[RSP] azolla_coverage processor failed for state', state.id, err);
+    }
+  }
+
+  if (!runsEpistemicPerspectives) {
+    // Mark pending_perspectives row as DONE — an azolla-only state (no action/observation
+    // link) has nothing further to do here.
+    await client.query(
+      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
+      [record.id]
+    );
+    await broadcastInvalidation({
+      entityType: 'state',
+      entityId: state.id,
+      mutationType: 'updated',
+      organizationId: state.organization_id
+    });
+    console.log('[RSP] Broadcast complete for state', state.id, '(azolla_coverage only, no epistemic perspectives)');
+    return;
   }
 
   // Build action context
@@ -492,37 +736,24 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
     await client.query('BEGIN');
 
-    // Idempotency: delete any existing perspectives for this state before re-inserting
-    const existingIds = (await client.query(
-      `SELECT sp.id FROM state_perspectives sp WHERE sp.state_id = $1`, [state.id]
-    )).rows.map(r => r.id);
-    if (existingIds.length > 0) {
-      await client.query(`DELETE FROM claim_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM significance_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM entropy_perspectives WHERE id = ANY($1::uuid[])`, [existingIds]);
-      await client.query(`DELETE FROM state_perspectives WHERE state_id = $1`, [state.id]);
-    }
+    // Idempotency: delete any existing perspectives for this state before re-inserting.
+    // No child tables — content lives directly in state_perspectives.content (see
+    // migration 021); this is now a single DELETE, not four.
+    await client.query(`DELETE FROM state_perspectives WHERE state_id = $1`, [state.id]);
 
-    // Insert CLAIM
+    // Insert CLAIM / SIGNIFICANCE / ENTROPY
     const claimRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'CLAIM', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'CLAIM', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.claim })]
     );
-    await client.query(`INSERT INTO claim_perspectives (id, content) VALUES ($1, $2)`, [claimRes.rows[0].id, toolInput.claim]);
-
-    // Insert SIGNIFICANCE
     const sigRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.significance })]
     );
-    await client.query(`INSERT INTO significance_perspectives (id, content) VALUES ($1, $2)`, [sigRes.rows[0].id, toolInput.significance]);
-
-    // Insert ENTROPY
     const entRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status) VALUES ($1, 'ENTROPY', $2, 'SUCCESS') RETURNING id`,
-      [state.id, configId]
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'ENTROPY', $2, 'SUCCESS', $3) RETURNING id`,
+      [state.id, configId, JSON.stringify({ content: toolInput.entropy })]
     );
-    await client.query(`INSERT INTO entropy_perspectives (id, content) VALUES ($1, $2)`, [entRes.rows[0].id, toolInput.entropy]);
 
     await client.query('COMMIT');
     console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
@@ -580,6 +811,7 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
   console.log('[RSP] Broadcast complete for state', state.id);
 }
+
 
 exports.handler = async (event) => {
   const client = new Client(dbConfig);

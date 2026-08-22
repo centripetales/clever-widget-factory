@@ -33,6 +33,46 @@ async function stateQualifiesForPerspectives(client, stateId, knownLinks) {
   return linksRes.rows.length > 0;
 }
 
+// Entity types that can be share-granted to another org via POST /shares
+// (lambda/core/index.js). Independent of QUALIFYING_LINK_TYPES above — a plain
+// tool-linked observation with no action attached doesn't qualify for that gate,
+// but should still queue for perspectives if its tool belongs to an org running
+// auto-processors (e.g. the Azolla vision-scoring pipeline).
+const SHAREABLE_LINK_TYPES = ['tool', 'part', 'action'];
+
+/**
+ * Whether a state is linked to an entity (tool/part/action) that's been share-granted
+ * (via POST /shares) to an org configured with at least one auto-processor
+ * (organizations.ai_config.processors, e.g. ["azolla_coverage"]). Mirrors the join
+ * GET /shares/{entityType}/{entityId} already uses (lambda/core/index.js), filtered to
+ * processor-enabled orgs instead of listing every share. Always queries — unlike
+ * stateQualifiesForPerspectives, there's no way to answer this from knownLinks alone,
+ * since it depends on a separate share-grant + org config lookup.
+ */
+async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks) {
+  if (knownLinks !== undefined && !knownLinks.some(l => SHAREABLE_LINK_TYPES.includes(l.entity_type))) {
+    return false;
+  }
+  const res = await client.query(
+    `SELECT 1
+     FROM state_links our_link
+     JOIN state_links share_entity_link
+       ON share_entity_link.entity_type = our_link.entity_type
+      AND share_entity_link.entity_id = our_link.entity_id
+     JOIN state_links share_org_link
+       ON share_org_link.state_id = share_entity_link.state_id
+      AND share_org_link.entity_type = 'organization'
+     JOIN organizations o ON o.id = share_org_link.entity_id::uuid
+     WHERE our_link.state_id = $1
+       AND our_link.entity_type = ANY($2)
+       AND o.ai_config -> 'processors' IS NOT NULL
+       AND jsonb_array_length(o.ai_config -> 'processors') > 0
+     LIMIT 1`,
+    [stateId, SHAREABLE_LINK_TYPES]
+  );
+  return res.rows.length > 0;
+}
+
 /**
  * Resolve state composition data and queue embedding generation via SQS.
  * Uses its own DB client from the pool since this runs after the main transaction's client is released.
@@ -335,15 +375,12 @@ async function listStates(event, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content),
+              'content', sp.content->>'content',
               'created_at', sp.created_at,
               'model_id', lgc.model_id,
               'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
-            LEFT JOIN claim_perspectives c ON c.id = sp.id
-            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
-            LEFT JOIN entropy_perspectives e ON e.id = sp.id
             LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
@@ -357,7 +394,9 @@ async function listStates(event, authContext, headers) {
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"maxwell_interaction"%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[summary:%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[stale][summary:%')
-        
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[photo_analysis]%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '[azolla_duckweed_observation]%')
+
       GROUP BY s.id, s.organization_id, s.state_text, s.captured_by, s.captured_at, s.created_at, s.updated_at, om.full_name
       ORDER BY s.captured_at DESC
       LIMIT ${limit}
@@ -474,15 +513,12 @@ async function getState(id, authContext, headers) {
           (SELECT json_agg(
             json_build_object(
               'perspective_type', sp.perspective_type,
-              'content', COALESCE(c.content, sig.content, e.content),
+              'content', sp.content->>'content',
               'created_at', sp.created_at,
               'model_id', lgc.model_id,
               'system_prompt', lgc.system_prompt
             )
           ) FROM state_perspectives sp
-            LEFT JOIN claim_perspectives c ON c.id = sp.id
-            LEFT JOIN significance_perspectives sig ON sig.id = sp.id
-            LEFT JOIN entropy_perspectives e ON e.id = sp.id
             LEFT JOIN llm_generation_configs lgc ON lgc.id = sp.llm_generation_config_id
           WHERE sp.state_id = s.id),
           '[]'
@@ -710,7 +746,8 @@ async function createState(event, authContext, headers) {
       console.error('Failed to broadcast cache invalidation:', err);
     }
 
-    if (await stateQualifiesForPerspectives(client, state.id, links)) {
+    if (await stateQualifiesForPerspectives(client, state.id, links)
+      || await stateLinkedToProcessorEnabledOrg(client, state.id, links)) {
       try {
         const pClient = await getDbClient();
         await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
@@ -781,7 +818,8 @@ async function updateState(event, id, authContext, headers) {
 
       // 3. Queue SQS perspective run
       try {
-        if (await stateQualifiesForPerspectives(client, id)) {
+        if (await stateQualifiesForPerspectives(client, id)
+          || await stateLinkedToProcessorEnabledOrg(client, id)) {
           const pClient = await getDbClient();
           await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
           pClient.release();
@@ -989,7 +1027,8 @@ async function updateState(event, id, authContext, headers) {
     }
 
     try {
-      if (await stateQualifiesForPerspectives(client, id, links)) {
+      if (await stateQualifiesForPerspectives(client, id, links)
+        || await stateLinkedToProcessorEnabledOrg(client, id, links)) {
         const pClient = await getDbClient();
         await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
         pClient.release();
