@@ -1,4 +1,4 @@
-import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -23,6 +23,11 @@ import { apiService } from "@/lib/apiService";
 interface ToolDetailsProps {
   tool: Tool;
   toolHistory: HistoryEntry[];
+  // Optional: while true, the History tab shows a spinner instead of the
+  // (indistinguishable-from-empty) list — toolHistory starts as [] before
+  // the fetch resolves, so without this a "no history" message flashed for
+  // several seconds on every open, even when history did exist.
+  toolHistoryLoading?: boolean;
   onBack: () => void;
   // Controlled tab: the caller owns which tab is active (typically synced to
   // a URL search param) so that navigating away and back — e.g. to edit an
@@ -34,6 +39,7 @@ interface ToolDetailsProps {
 export const ToolDetails = ({
   tool,
   toolHistory,
+  toolHistoryLoading = false,
   onBack,
   activeTab,
   onTabChange,
@@ -254,6 +260,11 @@ export const ToolDetails = ({
 
             <TabsContent value="history" className="space-y-4">
               <div className="space-y-4">
+                {toolHistoryLoading && toolHistory.length === 0 && (
+                  <div className="flex items-center justify-center py-8 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading history...
+                  </div>
+                )}
                 {toolHistory.map((record) => (
                   <Card key={record.id} className={`hover:shadow-md transition-shadow overflow-hidden bg-background ${getToolCardStyle(record)}`}>
                     <CardContent className="p-4">
@@ -445,7 +456,7 @@ export const ToolDetails = ({
                   </Card>
                 ))}
 
-                {toolHistory.length === 0 && (
+                {!toolHistoryLoading && toolHistory.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">
                     No history available.
                   </p>

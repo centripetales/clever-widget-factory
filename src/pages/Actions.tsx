@@ -38,7 +38,7 @@ export default function Actions() {
   const [completedTabVisited, setCompletedTabVisited] = useState(false);
   
   // Use organization members for consistent "Assigned to" dropdown
-  const { members: profiles } = useEnabledMembers();
+  const { members: profiles, loading: profilesLoading } = useEnabledMembers();
   const [scoringAction, setScoringAction] = useState<BaseAction | null>(null);
 
   // Helper function to get user color
@@ -164,8 +164,13 @@ export default function Actions() {
     setSemanticResults([]);
   };
 
-  // Reset assignee filter if the selected assignee is not in active profiles
+  // Reset assignee filter if the selected assignee is not in active profiles.
+  // Skipped while profiles are still loading — otherwise this runs against
+  // the empty initial array on every page load and wipes a persisted
+  // assignee filter (usePersistedFilter, above) back to 'all' before the
+  // real list has arrived, since an empty array can never contain anyone.
   useEffect(() => {
+    if (profilesLoading) return;
     if (assigneeFilter !== 'all' && assigneeFilter !== 'me' && assigneeFilter !== 'unassigned') {
       const isAssigneeActive = profiles.some(profile => profile.user_id === assigneeFilter);
       if (!isAssigneeActive) {
@@ -177,7 +182,7 @@ export default function Actions() {
         });
       }
     }
-  }, [profiles, assigneeFilter]);
+  }, [profiles, profilesLoading, assigneeFilter]);
 
   // Apply search and assignee filters to a list of actions
   const applyFilters = (actions: BaseAction[]) => {

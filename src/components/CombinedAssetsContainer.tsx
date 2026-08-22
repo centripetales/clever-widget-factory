@@ -44,6 +44,14 @@ export const CombinedAssetsContainer = () => {
   const showLowStockParam = urlParams.get('showLowStock') === 'true';
   const editParam = urlParams.get('edit');
   const searchParam = urlParams.get('search') || '';
+  // Rest of the "Filters" panel — previously local-state-only, so navigating
+  // to an asset's details page and back (a full unmount/remount of this
+  // component) silently reset every one of these to its default.
+  const showMyCheckedOutParam = urlParams.get('showMyCheckedOut') === 'true';
+  const showOnlyAssetsParam = viewParam === 'assets';
+  const showOnlyAreasParam = viewParam === 'areas';
+  const showRemovedItemsParam = urlParams.get('showRemoved') === 'true';
+  const searchDescriptionsParam = urlParams.get('searchDescriptions') === 'true';
   const { toast } = useToast();
   const { updatePart, updateTool, createPartsHistory, deletePart } = useAssetMutations();
   const organizationId = useOrganizationId();
@@ -51,11 +59,11 @@ export const CombinedAssetsContainer = () => {
   const [searchTerm, setSearchTerm] = useState(searchParam);
   const [semanticResults, setSemanticResults] = useState<CombinedAsset[]>([]);
   const [isSemanticSearching, setIsSemanticSearching] = useState(false);
-  const [showMyCheckedOut, setShowMyCheckedOut] = useState(false);
+  const [showMyCheckedOut, setShowMyCheckedOut] = useState(showMyCheckedOutParam);
   const [showLowStock, setShowLowStock] = useState(showLowStockParam);
-  const [showOnlyAssets, setShowOnlyAssets] = useState(false);
+  const [showOnlyAssets, setShowOnlyAssets] = useState(showOnlyAssetsParam);
   const [showOnlyStock, setShowOnlyStock] = useState(viewParam === 'stock');
-  const [showOnlyAreas, setShowOnlyAreas] = useState(false);
+  const [showOnlyAreas, setShowOnlyAreas] = useState(showOnlyAreasParam);
   
   // Restore scroll position saved before navigating to an asset's details
   // page (handleShowAssetDetails). Only meaningful once the list has actual
@@ -76,8 +84,8 @@ export const CombinedAssetsContainer = () => {
       setSemanticResults([]);
     }
   }, [showOnlyAreas]);
-  const [showRemovedItems, setShowRemovedItems] = useState(false);
-  const [searchDescriptions, setSearchDescriptions] = useState(false);
+  const [showRemovedItems, setShowRemovedItems] = useState(showRemovedItemsParam);
+  const [searchDescriptions, setSearchDescriptions] = useState(searchDescriptionsParam);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showRemovalDialog, setShowRemovalDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -236,14 +244,34 @@ export const CombinedAssetsContainer = () => {
         searchRef.current = term;
       }
       
-      // Update URL with search term to persist across app switches
+      // Update URL with the full filter state to persist across app
+      // switches — previously only "search" was written here, so every
+      // other filter in the panel (checked-out, low-stock, view type,
+      // removed items, search-descriptions) reset to default the moment
+      // this component unmounted, e.g. navigating into an asset's details
+      // page and back.
       const newUrl = new URL(window.location.href);
       if (term) {
         newUrl.searchParams.set('search', term);
       } else {
         newUrl.searchParams.delete('search');
       }
-      window.history.replaceState({}, '', newUrl.toString());
+      if (showLowStock) newUrl.searchParams.set('showLowStock', 'true'); else newUrl.searchParams.delete('showLowStock');
+      if (showMyCheckedOut) newUrl.searchParams.set('showMyCheckedOut', 'true'); else newUrl.searchParams.delete('showMyCheckedOut');
+      if (showRemovedItems) newUrl.searchParams.set('showRemoved', 'true'); else newUrl.searchParams.delete('showRemoved');
+      if (searchDescriptions) newUrl.searchParams.set('searchDescriptions', 'true'); else newUrl.searchParams.delete('searchDescriptions');
+      if (showOnlyStock) newUrl.searchParams.set('view', 'stock');
+      else if (showOnlyAssets) newUrl.searchParams.set('view', 'assets');
+      else if (showOnlyAreas) newUrl.searchParams.set('view', 'areas');
+      else newUrl.searchParams.delete('view');
+      // Preserve the existing history.state (React Router stashes its own
+      // idx/key there) instead of overwriting it with {} — AssetDetailsPage's
+      // handleBack checks history.state.idx to decide between navigate(-1)
+      // and a hardcoded fallback route with no query params; wiping idx here
+      // made it take that fallback on every "Back to Tools" and silently
+      // drop whatever filters were in the URL, even though the URL itself
+      // was already correctly updated below.
+      window.history.replaceState(window.history.state, '', newUrl.toString());
       
       // Reset to page 0 when filters change
       if (page !== 0) {
@@ -261,7 +289,7 @@ export const CombinedAssetsContainer = () => {
     return () => {
       if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
     };
-  }, [searchTerm, showRemovedItems, searchDescriptions, showLowStock, semanticResults.length]);
+  }, [searchTerm, showRemovedItems, searchDescriptions, showLowStock, showMyCheckedOut, showOnlyAssets, showOnlyStock, showOnlyAreas, semanticResults.length]);
 
   // Look up selected asset from cache (check semantic results first, then regular assets)
   const selectedAsset = selectedAssetId 
@@ -401,7 +429,14 @@ export const CombinedAssetsContainer = () => {
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.delete('edit');
       newUrl.searchParams.delete('view');
-      window.history.replaceState({}, '', newUrl.toString());
+      // Preserve the existing history.state (React Router stashes its own
+      // idx/key there) instead of overwriting it with {} — AssetDetailsPage's
+      // handleBack checks history.state.idx to decide between navigate(-1)
+      // and a hardcoded fallback route with no query params; wiping idx here
+      // made it take that fallback on every "Back to Tools" and silently
+      // drop whatever filters were in the URL, even though the URL itself
+      // was already correctly updated below.
+      window.history.replaceState(window.history.state, '', newUrl.toString());
     } else if (!loading && !editRefetchAttempted) {
       setEditRefetchAttempted(true);
       refetch();

@@ -33,7 +33,7 @@ export default function AssetDetailsPage() {
     }, { replace: true });
   }, [setSearchParams]);
 
-  const { toolHistory, fetchToolHistory } = useToolHistory(asset?.type === 'asset' ? id : undefined);
+  const { toolHistory, fetchToolHistory, loading: toolHistoryLoading } = useToolHistory(asset?.type === 'asset' ? id : undefined);
 
   useEffect(() => {
     if (!id) return;
@@ -122,6 +122,7 @@ export default function AssetDetailsPage() {
         <ToolDetails
           tool={asset as any}
           toolHistory={toolHistory}
+          toolHistoryLoading={toolHistoryLoading}
           onBack={handleBack}
           activeTab={activeTab}
           onTabChange={handleTabChange}
