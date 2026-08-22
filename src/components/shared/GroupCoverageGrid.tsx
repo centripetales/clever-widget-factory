@@ -230,7 +230,7 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
           <CardTitle className="text-lg">Azolla/Duckweed Container Coverage % Over Time</CardTitle>
           <CardDescription>
             Click a name below to show or hide that container. Click a point to see that day's observation.
-            {' '}▲ on a line = an action taken — click it for details.
+            {' '}A circled point = an action taken — click it for details.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -333,10 +333,12 @@ export function GroupCoverageGrid({ orgId }: { orgId: string }) {
                   const { cx, cy, payload } = props;
                   const onClick = () => setSelectedAction({ action: payload.action, toolName: payload.toolName, color: payload.color });
                   return (
-                    <polygon
-                      points={`${cx},${cy - 7} ${cx - 7},${cy + 6} ${cx + 7},${cy + 6}`}
-                      fill={payload.color}
-                      stroke="#fff"
+                    <circle
+                      cx={cx}
+                      cy={cy}
+                      r={10}
+                      fill="none"
+                      stroke={payload.color}
                       strokeWidth={2}
                       style={{ cursor: 'pointer' }}
                       onClick={onClick}

@@ -68,7 +68,7 @@ if (DRY_RUN) console.log('--dry-run: no DB writes, no SQS messages will be sent.
 
 const REGION = process.env.AWS_REGION || 'us-west-2';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
-const EXPERIENCE_PERSPECTIVE_PROMPT_VERSION = 'experience-perspective-v4-quote-values';
+const EXPERIENCE_PERSPECTIVE_PROMPT_VERSION = 'experience-perspective-v5-technical-density';
 
 // Backstop, not a substitute for the prompt's own "when in doubt, drop it"
 // instruction — a hard floor in code so a bad model call can't silently
@@ -88,7 +88,9 @@ const bedrock = new BedrockRuntimeClient({ region: REGION });
 // Tuned system prompt — see scripts/azolla-stefan-lastweek-sequence.js for
 // the iteration history (tense/reference guidance, prior-experience context,
 // caption-based photo citation, action-vs-outcome-description separation).
-const EXPERIENCE_PERSPECTIVE_SYSTEM_PROMPT = `You are an experience-extraction system for an azolla/duckweed cultivation pilot. Given two of the same participant's observations of the same container — an earlier one and a later one, each with its own free-text note and its own dated, individually-identified photos, plus the later observation's already-computed ENTROPY analysis for extra context — your only job is to extract what real human action(s), if any, the participant REPORTS having done between them. Each one you find is a candidate experience: a real action that transitioned the container from one state to another. This is extraction, not prediction: the participant is telling you what they did in their own words. An action must be something a person actually did — never "time passed" or "natural growth," and never something inferred purely from the change in appearance without the person describing having done it. If the text does not describe a human action between the two observations, say so explicitly (experience_found=false) rather than inventing one to explain an observed change. Absence of a described action is a normal, honest, valid result — not a failure.
+const EXPERIENCE_PERSPECTIVE_SYSTEM_PROMPT = `You are a precise technical field-log transcriber for an azolla/duckweed cultivation pilot — not a casual summarizer. Given two of the same participant's observations of the same container — an earlier one and a later one, each with its own free-text note and its own dated, individually-identified photos, plus the later observation's already-computed ENTROPY analysis for extra context — your only job is to extract what real human action(s), if any, the participant REPORTS having done between them. Each one you find is a candidate experience: a real action that transitioned the container from one state to another. This is extraction, not prediction: the participant is telling you what they did in their own words. An action must be something a person actually did — never "time passed" or "natural growth," and never something inferred purely from the change in appearance without the person describing having done it. If the text does not describe a human action between the two observations, say so explicitly (experience_found=false) rather than inventing one to explain an observed change. Absence of a described action is a normal, honest, valid result — not a failure.
+
+Whenever you write a description, prioritize technical density over readability. Every reading, quantity, material specific, and concrete detail present in the evidence belongs in the description — never trade a detail away for a shorter or smoother sentence. If two phrasings are both accurate but one keeps an exact figure, unit, or material name and the other generalizes it away, always choose the one that keeps it, even if it reads more awkwardly. A description that omits a number, amount, or specific the evidence actually gives you is a failure of this task, not a stylistic choice.
 
 **When in doubt, drop it.** Missing a real experience is a minor loss; fabricating one poisons the record. If you are genuinely unsure whether text reports a new action or is commentary about one already known, do not create an experience for it — experience_found=false, or omit that specific candidate, is the correct call. Never resolve ambiguity by guessing toward inclusion.
 
@@ -109,9 +111,7 @@ Photos within a single observation are numbered in capture sequence (e.g. "photo
 
 If more than one candidate experience is plausible from the text, list each separately with its own confidence rather than picking one and hiding the ambiguity. Confidence here reflects extraction clarity (how clearly the text supports this specific reading, and how strong the evidence anchoring is per the guidance above) — not likelihood of occurrence.
 
-Each experience's description must stay focused on what was done and why — never on describing the resulting or later state, appearance, growth, or outcome. Growing-condition narration (coverage, color, how things look now) belongs to a separate state-level perspective (CLAIM), not to an action description. You may draw on later-observation text to justify why you believe an action happened, but do not restate that state-descriptive content as part of the action's own description.
-
-If the report_span (or surrounding text in the same field) gives a specific reading, quantity, material, or other concrete detail about the action itself, the description MUST carry it over verbatim, not generalize it away. This applies broadly, not just to numbers: a measured value ("phosphate was closest to 10 ppm"), an amount ("a quarter cup," "about 3 cups"), or a material's specifics ("aged chicken manure, about a year old" rather than just "manure") are all details that make the action description useful later and are otherwise silently lost. "Tested phosphate levels" loses the finding; "Tested phosphate levels, reading closest to 10 ppm" keeps it. "Added chicken manure" loses what was actually used; "Added a quarter cup of aged (about a year old) chicken manure" keeps it. This matters most for entropy_reduction actions, where the measured value is usually the entire point of the action — but apply it to transformative actions too whenever the text gives a concrete quantity or material detail.
+Each experience's description must stay focused on what was done and why — never on describing the resulting or later state, appearance, growth, or outcome. Growing-condition narration (coverage, color, how things look now) belongs to a separate state-level perspective (CLAIM), not to an action description. You may draw on later-observation text to justify why you believe an action happened, but do not restate that state-descriptive content as part of the action's own description. Within that scope, apply the technical-density rule above at full strength: any reading, quantity, or material specific tied to the action itself belongs in the description verbatim. "Tested phosphate levels" is an unacceptable description if the evidence says the reading was closest to 10 ppm — the correct description is "Tested phosphate levels, reading closest to 10 ppm." This matters most for entropy_reduction actions, where the measured value is usually the entire point of the action, but it applies equally to transformative actions whenever the evidence gives a concrete quantity or material detail — "sprinkled a quarter cup of aged (about a year old) chicken manure," not "added manure."
 
 For each experience, classify its action_type:
 - "transformative": physically changes the container's real condition — adding an input, harvesting, moving the container, changing the water, adjusting the setup. The container is different afterward, not just better understood.
@@ -134,7 +134,7 @@ const EXPERIENCE_PERSPECTIVE_TOOL = {
           type: 'object',
           properties: {
             title: { type: 'string' },
-            description: { type: 'string', description: 'What was done and why. Do NOT describe the resulting or later state, appearance, or outcome.' },
+            description: { type: 'string', description: 'What was done and why, written with full technical density — every reading, quantity, and material specific from the evidence must be kept, not summarized away. Do NOT describe the resulting or later state, appearance, or outcome.' },
             report_span: { type: 'string', description: 'The exact, verbatim substring from a photo caption or the observation note that reports this action (passes the report-vs-speculation test). Required — if no such span exists, do not create this experience.' },
             action_type: { type: 'string', enum: ['transformative', 'entropy_reduction'] },
             confidence: { type: 'number', description: '0.0-1.0' },
@@ -247,6 +247,36 @@ async function saveExperiencePerspective(client, configId, priorStateId, finalSt
   return perspectiveId;
 }
 
+// The action's own CLAIM — same perspective_type as a state's CLAIM (see migration
+// 023: state_perspectives.action_id, exactly one of state_id/action_id set per row).
+// A CLAIM is "a technically-dense factual account of this entity," and that's
+// exactly what h.description already is for an action — it just wasn't living
+// anywhere queryable before, only inert text inside actions.scoring_data.
+// Same upsert-by-(entity, config) keying as saveExperiencePerspective, for the
+// same reason: a rerun under the same active prompt replaces this action's claim
+// in place, a rerun under a new prompt version inserts fresh alongside it.
+async function saveActionClaim(client, configId, actionId, description, reportSpan) {
+  const content = JSON.stringify({ content: description, report_span: reportSpan });
+  const existing = await client.query(
+    `SELECT id FROM state_perspectives WHERE action_id = $1 AND perspective_type = 'CLAIM' AND llm_generation_config_id = $2`,
+    [actionId, configId]
+  );
+  if (existing.rows.length) {
+    const perspectiveId = existing.rows[0].id;
+    await client.query(
+      `UPDATE state_perspectives SET status = 'SUCCESS', error_message = NULL, content = $1, created_at = NOW() WHERE id = $2`,
+      [content, perspectiveId]
+    );
+    return perspectiveId;
+  }
+  const perspectiveId = crypto.randomUUID();
+  await client.query(
+    `INSERT INTO state_perspectives (id, action_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, $2, 'CLAIM', $3, 'SUCCESS', $4)`,
+    [perspectiveId, actionId, configId, content]
+  );
+  return perspectiveId;
+}
+
 async function main() {
   const client = await pool.connect();
   try {
@@ -344,7 +374,7 @@ async function main() {
     if (!DRY_RUN && staleActionIds.length > 0) {
       await client.query(`DELETE FROM state_links WHERE entity_type = 'action' AND entity_id = ANY($1)`, [staleActionIds]);
       await client.query(`DELETE FROM unified_embeddings WHERE entity_type = 'action' AND entity_id = ANY($1)`, [staleActionIds]);
-      await client.query(`DELETE FROM actions WHERE id = ANY($1)`, [staleActionIds]); // cascades experience_components, action_scores, etc.
+      await client.query(`DELETE FROM actions WHERE id = ANY($1)`, [staleActionIds]); // cascades experience_components, action_scores, and (migration 023) the action's own CLAIM perspective row
       await client.query(
         `DELETE FROM experiences WHERE entity_type = 'tool' AND entity_id = $1 AND metadata->>'llm_generation_config_id' = $2`,
         [TOOL_ID, configId]
@@ -403,22 +433,14 @@ async function main() {
           // below) and, for search, in the embedding source directly.
           const actionDescription = initialState.claim || null;
           const expectedState = h.expected_state || null;
-          // scoring_data is the catch-all for everything extracted that doesn't
-          // have its own UI field: action_type and what_was_done (h.description,
-          // the tuned "what was done and why" text) were previously lost
-          // entirely — only implied via the linked evidence photos, never stored
-          // as retrievable text. Always populated, not conditional on
-          // expected_state existing.
+          // scoring_data is the catch-all for classification/scoring metadata that
+          // doesn't have its own UI field — NOT for the action's own technically-dense
+          // account of what happened, which is now a proper CLAIM perspective row
+          // (action_id-scoped, see migration 023 + saveActionClaim below) instead of
+          // inert text buried in this jsonb blob. Always populated, not conditional
+          // on expected_state existing.
           const scoringData = {
             action_type: h.action_type,
-            what_was_done: h.description,
-            // Verbatim ground truth, not a paraphrase — report_span is required by the
-            // extraction schema to be an exact substring of the source text (photo caption
-            // or observation note). Stored alongside what_was_done (the LLM's paraphrase)
-            // specifically so a reader never has to trust the paraphrase alone for a value
-            // — no prompt instruction can fully guarantee a number survives rewriting, but
-            // this can't drift, since it's copied, not generated.
-            report_span: h.report_span,
             extraction_confidence: h.confidence,
             expected_state_confidence: h.expected_state_confidence || null,
             expected_state_basis: h.expected_state_basis || null,
@@ -438,6 +460,7 @@ async function main() {
              VALUES ($1, $2, $3, $4, $5, 'completed', $6, $7, $7, $8, $9, NOW(), NOW())`,
             [actionId, actionTitle, actionDescription, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, finalState.captured_at, TOOL_ID]
           );
+          if (!DRY_RUN) await saveActionClaim(client, configId, actionId, h.description, h.report_span);
           await write(
             `INSERT INTO experience_components (id, experience_id, component_type, state_id, action_id, organization_id, created_at)
              VALUES ($1, $2, 'action', NULL, $3, $4, NOW())`,
