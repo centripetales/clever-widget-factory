@@ -91,10 +91,13 @@ export const handler = async (event) => {
       const containers = [];
       for (const tool of sharedTools.rows) {
         const actions = await executeQuery(
-          `SELECT id::text, title, description, status, created_at, completed_at, scoring_data
-           FROM actions
-           WHERE asset_id = $1
-           ORDER BY COALESCE(completed_at, created_at) ASC`,
+          `SELECT a.id::text, a.title, a.description, a.status, a.created_at, a.completed_at, a.scoring_data,
+             (SELECT sp.content->>'content' FROM state_perspectives sp
+              WHERE sp.action_id = a.id AND sp.perspective_type = 'CLAIM'
+              ORDER BY sp.created_at DESC LIMIT 1) as claim
+           FROM actions a
+           WHERE a.asset_id = $1
+           ORDER BY COALESCE(a.completed_at, a.created_at) ASC`,
           [tool.tool_id]
         );
         const obs = await executeQuery(
@@ -108,7 +111,12 @@ export const handler = async (event) => {
               (
                 SELECT json_agg(json_build_object(
                   'id', sp.id, 'photo_url', sp.photo_url, 'photo_description', sp.photo_description,
-                  'captured_at', pme.captured_at
+                  -- Fall back to the observation's own submission time when
+                  -- the photo has no EXIF/file timestamp (true for roughly
+                  -- half of them) — same fallback
+                  -- scripts/azolla-coverage-fetch-data.js already uses, so
+                  -- every photo shows a time instead of about half going blank.
+                  'captured_at', COALESCE(pme.captured_at, s.captured_at)
                 ) ORDER BY sp.photo_order)
                 FROM state_photos sp
                 LEFT JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
@@ -143,6 +151,57 @@ export const handler = async (event) => {
       }
 
       return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ containers }) };
+    }
+
+    // PUT /api/states/{id}/coverage — lets the observation's owner (or an
+    // org admin, same rule as ToolDetails.tsx's canEditObservation: creator
+    // OR admin in the currently-active org) hand-correct the Coverage %
+    // value shown for that observation. Sets edited_by/edited_at so
+    // scripts/azolla-wire-coverage-metric.js's automated rewrite skips this
+    // row on future reruns instead of silently overwriting the correction
+    // (see migration 024).
+    if (httpMethod === 'PUT' && path.includes('/states/') && path.includes('/coverage')) {
+      const stateId = pathParams.id;
+      const authorizer = event.requestContext?.authorizer || {};
+      const userId = authorizer.cognito_user_id || authorizer.context?.cognito_user_id;
+      const userRole = authorizer.user_role || authorizer.context?.user_role;
+
+      if (!stateId) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'State id is required' }) };
+      }
+      const body = JSON.parse(event.body || '{}');
+      const value = Number(body.value);
+      if (body.value === undefined || body.value === null || Number.isNaN(value) || value < 0 || value > 100) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'value must be a number between 0 and 100' }) };
+      }
+
+      const stateRes = await executeQuery(
+        `SELECT captured_by::text as captured_by, organization_id::text as organization_id FROM states WHERE id = $1`,
+        [stateId]
+      );
+      if (stateRes.rows.length === 0) {
+        return { statusCode: 404, headers: corsHeaders, body: JSON.stringify({ error: 'Observation not found' }) };
+      }
+      const state = stateRes.rows[0];
+      const isCreator = state.captured_by === userId;
+      const isAdmin = userRole === 'admin' && state.organization_id === organizationId;
+      if (!isCreator && !isAdmin) {
+        return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({ error: 'Only the observation owner or an org admin can edit this' }) };
+      }
+
+      const updated = await executeQuery(
+        `UPDATE metric_snapshots ms
+         SET value = $1, edited_by = $2, edited_at = NOW(), updated_at = NOW()
+         FROM metrics m
+         WHERE ms.metric_id = m.metric_id AND m.name = 'Coverage %' AND ms.state_id = $3
+         RETURNING ms.snapshot_id, ms.value`,
+        [value.toFixed(2), userId, stateId]
+      );
+      if (updated.rows.length === 0) {
+        return { statusCode: 404, headers: corsHeaders, body: JSON.stringify({ error: 'No Coverage % metric on this observation' }) };
+      }
+
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ value: updated.rows[0].value }) };
     }
 
     const toolId = pathParams.id; // API Gateway uses {id} not {tool_id}

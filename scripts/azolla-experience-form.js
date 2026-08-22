@@ -168,12 +168,23 @@ async function invokeBedrock(systemPrompt, userPrompt, tool) {
   return toolUse ? toolUse.input : null;
 }
 
+// experiences.created_by is NOT NULL, FK'd to organization_members.id — but the
+// state closing an experience isn't always captured by a real person (e.g. the
+// synthetic share-grant backfill state, captured_by = the all-zeros system user,
+// which has no organization_members row). Falls back to any real member of the
+// org rather than crash the whole materialization transaction over an
+// unattributable system-generated state.
 async function resolveOrgMemberId(client, organizationId, cognitoUserId) {
   const res = await client.query(
     `SELECT id FROM organization_members WHERE organization_id = $1 AND cognito_user_id = $2`,
     [organizationId, cognitoUserId]
   );
-  return res.rows[0]?.id || null;
+  if (res.rows[0]?.id) return res.rows[0].id;
+  const fallback = await client.query(
+    `SELECT id FROM organization_members WHERE organization_id = $1 ORDER BY id LIMIT 1`,
+    [organizationId]
+  );
+  return fallback.rows[0]?.id || null;
 }
 
 async function coverageFor(client, stateId, toolId) {
@@ -280,13 +291,35 @@ async function saveActionClaim(client, configId, actionId, description, reportSp
 async function main() {
   const client = await pool.connect();
   try {
+    // Excludes system-generated states (captured_by = the all-zeros placeholder —
+    // the established repo-wide convention for "no real user," see
+    // scripts/azolla-weekly-report.js's SYSTEM_CAPTURED_BY and lambda/core's
+    // POST /shares handler). Without this, a synthetic state like the
+    // org-processor backfill's "Shared tool ... with Azolla Kapwa (backfill)"
+    // share-grant record gets read as a real observation and its own text
+    // ("Shared tool...") correctly, but wrongly, extracts as a farmer action —
+    // confirmed reproducing on two independent containers (Stefan's, Wilfred's).
     const statesRes = await client.query(`
       SELECT s.id, s.organization_id, s.captured_by, s.captured_at, s.state_text
       FROM states s JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = 'tool' AND sl.entity_id = $1
+      WHERE s.captured_by != '00000000-0000-0000-0000-000000000000'
       ORDER BY s.captured_at
     `, [TOOL_ID]);
     const states = statesRes.rows;
     console.log(`${states.length} states for container ${TOOL_ID}`);
+
+    // actions.assigned_to FKs to profiles.user_id — not every observation's
+    // captured_by has a profiles row (participant accounts created outside the
+    // normal signup flow, e.g. via SMS-based intake, may never get one). Assigning
+    // to a captured_by with no profile row is a hard FK violation that rolls back
+    // the whole materialization transaction, so resolve valid ones up front and
+    // fall back to unassigned (NULL) rather than crash the batch over one farmer's
+    // missing profile.
+    const profilesRes = await client.query(
+      `SELECT DISTINCT p.user_id FROM profiles p WHERE p.user_id = ANY($1)`,
+      [[...new Set(states.map((s) => s.captured_by))]]
+    );
+    const validAssignees = new Set(profilesRes.rows.map((r) => r.user_id));
 
     // Attach photos, CLAIM, ENTROPY per state.
     for (const s of states) {
@@ -451,14 +484,18 @@ async function main() {
             llm_generation_config_id: configId || null,
           };
 
+          // assigned_to = the same person as created_by, when possible: the Actions
+          // UI defaults its assignee filter to "Me" (assigned_to === current user),
+          // so an unassigned action is invisible by default even to the person who
+          // did it. Only possible when that person has a profiles row (assigned_to's
+          // FK target) — falls back to unassigned (NULL) otherwise. created_by has
+          // no such constraint, so it's always set regardless.
+          const assignedTo = validAssignees.has(finalState.captured_by) ? finalState.captured_by : null;
           await write(
-            // assigned_to = the same person as created_by: the Actions UI defaults its
-            // assignee filter to "Me" (assigned_to === current user), so an unassigned
-            // action is invisible by default even to the person who did it.
             // policy: intentionally left null — not used for this data.
             `INSERT INTO actions (id, title, description, expected_state, scoring_data, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, 'completed', $6, $7, $7, $8, $9, NOW(), NOW())`,
-            [actionId, actionTitle, actionDescription, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, finalState.captured_at, TOOL_ID]
+             VALUES ($1, $2, $3, $4, $5, 'completed', $6, $7, $8, $9, $10, NOW(), NOW())`,
+            [actionId, actionTitle, actionDescription, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, assignedTo, finalState.captured_at, TOOL_ID]
           );
           if (!DRY_RUN) await saveActionClaim(client, configId, actionId, h.description, h.report_span);
           await write(
