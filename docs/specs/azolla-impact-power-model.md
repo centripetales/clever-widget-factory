@@ -353,6 +353,14 @@ state.
   between these two states"), so the naming/role concern that applied to
   the state synthesis doesn't apply here.
 
+  **Renamed, 2026-08-22 — `ACTION_HYPOTHESIS` → `EXPERIENCE_PERSPECTIVE`.**
+  The extracted candidates are S,A,S experience tuples, not bare action
+  hypotheses — "hypothesis" also undersold that each candidate carries real
+  evidence (`report_span`, verbatim-quoted), not a guess. Schema fields
+  renamed to match: `no_action_found` → `experience_found` (flipped
+  polarity), `hypotheses` → `experiences`. Still perspective-scoped to a
+  state per its final state of the pair, same as before.
+
 Consequences of this choice:
 - Preserves the existing, explicit codebase value — *"never AI-generated
   text, only what the person actually typed"* (`azolla-coverage-chart.py`)
@@ -374,7 +382,8 @@ Consequences of this choice:
    rule). Generate a `AZOLLA_STATE` perspective on each state that
    doesn't already have a current one (per-state, not per-pair — reused as
    whichever endpoint a given experience needs). For each consecutive pair,
-   generate an `ACTION_HYPOTHESIS` perspective (pair-specific). Either via
+   generate an `ACTION_HYPOTHESIS` (now `EXPERIENCE_PERSPECTIVE`, see rename
+   above) perspective (pair-specific). Either via
    the existing `rsp-worker`-style mechanism, or an offline script writing
    directly to `state_perspectives` + child tables for this one-time
    backfill — either way, same schema.
@@ -421,7 +430,7 @@ observation without action is closer to *being acted upon* than to
 exercising power.
 
 This does not exclude careful reasoning or measurement — `entropy_reduction`
-actions (§4-adjacent, see the AZOLLA_STATE/ACTION_HYPOTHESIS section below)
+actions (§4-adjacent, see the AZOLLA_STATE/EXPERIENCE_PERSPECTIVE section below)
 already count a measurement, a test-kit reading, or consulting AI as a real
 action. The bar is "something was done," not "the container was physically
 transformed" — but a plain status check with no action attached, transformative
@@ -467,11 +476,13 @@ extensive prompt-testing against Stefan's real container history:
   `AZOLLA_STATE`). No new generation step.
 - **Experience boundaries are action-gated, not adjacency-gated.** Walk a
   container's states chronologically. Run action extraction
-  (`ACTION_HYPOTHESIS`, still needed — this is the one piece `CLAIM` can't
-  replace, since it requires photo-level citation `CLAIM` doesn't carry)
-  on each **consecutive** pair, exactly as already built and tuned. But an
+  (`EXPERIENCE_PERSPECTIVE`, renamed 2026-08-22 from `ACTION_HYPOTHESIS` —
+  still needed, this is the one piece `CLAIM` can't replace, since it
+  requires photo-level citation `CLAIM` doesn't carry) on each
+  **consecutive** pair, exactly as already built and tuned. But an
   `experiences` row only gets created for a pair where a real action was
-  extracted (`no_action_found=false`) — a plain-observation pair (no
+  extracted (`experience_found=true`, renamed from `no_action_found=false`
+  — polarity flipped in the same rename) — a plain-observation pair (no
   action) does not close an experience. Maintain a `pending_initial_state`
   pointer per container: it starts at the first state, and only resets
   (to the current state) after an experience closes. A run of several
@@ -573,6 +584,101 @@ extensive prompt-testing against Stefan's real container history:
   intended backstop for exactly this class of residual error, not a
   reason to keep tuning the prompt indefinitely.
 
+## 5b. Extraction hardening and scale-out (2026-08-22)
+
+Ran `EXPERIENCE_PERSPECTIVE` extraction and SASR materialization for real
+across all 10 pilot containers (previously only Stefan's). Results: Stefan 8
+experiences/17 actions, Wilfred 5/7, Marvin 3/3, Lesterluna 2/3, Mae 1/2,
+John Kenneth 1/3, Jusua/Buboy/Chael/Allan 0 (either genuinely sparse
+action-reporting or too few real observations to pair — not yet
+distinguished; Jusua and Buboy in particular, at 31 and 10 observations
+respectively, are worth a closer look before concluding it's real).
+
+**Prompt fixes, in order (each versioned as a new `llm_generation_configs`
+row, not an overwrite — see below):**
+- **v3 → most-recent-experience lookback.** The prior design only passed
+  the *immediately preceding* pair's result as duplicate-reporting context;
+  if that pair absorbed (no action), a real action from further back
+  dropped out of context entirely. Fixed to walk backward through all prior
+  pairs to the last one that actually found an experience, regardless of
+  how many absorbed pairs sit in between, and to pass the resulting
+  *state* alongside the action (not just the action text) — closer to what
+  the "most recent experience" language in this doc's own §5a pairing
+  logic already implied.
+- **v4 → v5, technical-density fix.** Real, verified regression: a
+  phosphate reading ("closest to 10 ppm") was present in the verbatim
+  evidence but dropped from the LLM-generated action description under v3.
+  v5 reframes the model's role explicitly ("a precise technical field-log
+  transcriber... not a casual summarizer") rather than only listing a
+  content rule, and the fix was confirmed against the same real case
+  post-fix. `report_span` (the verbatim quote) is now also copied
+  unmodified into `actions.scoring_data` as a permanent audit trail
+  independent of the generated description, so a future paraphrase
+  regression is visible by direct comparison rather than trusted on faith.
+- **Excludes system-generated states.** A synthetic state (the org-processor
+  share-grant backfill record, `captured_by` = the all-zeros placeholder)
+  was being read as a real observation and its own "Shared tool ... with
+  Azolla Kapwa" text correctly, but wrongly, extracted as a farmer action —
+  confirmed reproducing independently on two containers (Stefan's,
+  Wilfred's) before being excluded at the query level.
+
+**Two FK bugs, unrelated to prompt quality, that only surfaced once run
+against farmers other than Stefan:** `actions.assigned_to` (→
+`profiles.user_id`) and `experiences.created_by` (→
+`organization_members.id`) both assumed every observation's author has a
+fully set-up account. Several participant accounts don't (created via a
+lighter intake flow than Stefan's). Both now degrade gracefully — unassigned,
+or fall back to any real member of the org — instead of crashing the whole
+per-container materialization batch on one missing row.
+
+**`state_perspectives` generalized to actions (migration 023) — concrete
+progress toward §7's proposed `AUTHENTICITY` perspective type.** Each
+action now gets its own `CLAIM` perspective (a technically-dense factual
+account of what was done, the same conceptual thing a state's `CLAIM`
+already is) via a new nullable `state_perspectives.action_id` column,
+exactly one of `state_id`/`action_id` set per row (`CHECK` constraint) — the
+same discriminated-nullable-FK shape `experience_components` already uses
+for `state_id`/`action_id`, not a new `entity_type`/`entity_id` polymorphic
+pattern or a separate `action_perspectives` table. This directly answers
+§7's "mirror the shape into a new table" framing for the authenticity gate:
+the mechanism for scoring an *action* via a real perspective row, with its
+own `llm_generation_config_id` provenance, already works end-to-end today
+for `CLAIM`; `AUTHENTICITY` is the same pattern with a different prompt,
+not new infrastructure.
+
+**Versioning/provenance, settled.** `EXPERIENCE_PERSPECTIVE` and the
+action-level `CLAIM` both upsert keyed on `(entity, llm_generation_config_id)`
+— not just `(entity, perspective_type)`. A rerun under the *same* active
+prompt (e.g. because the underlying observation text was corrected) replaces
+its own row in place; a rerun under a *new/tuned* prompt (a version bump)
+inserts fresh rather than clobbering the prior version's output, which
+stays queryable for contrast. The materialized `actions`/`experiences`
+rows carry the same `llm_generation_config_id` (in `scoring_data`/
+`metadata`) for the same reason — a full container re-run under an
+unchanged prompt replaces its own prior `actions`/`experiences` output
+(state_links, embeddings, and the action's own `CLAIM` row all cascade
+cleanly via FK), while a genuinely new prompt version's output sits
+alongside the old rather than overwriting it.
+
+**Review-flow question (§8) — answered, for now, by direct inspection, not
+either extreme originally proposed.** Not the batch review-HTML tool
+(`azolla-experience-review-gen.js`, built but still unused), not fully
+unattended either. In practice: run for real, render the resulting S,A,S
+chain as a shareable artifact, read it end to end. This is how the
+technical-density regression, the false-positive share-grant action, and a
+legacy state missing a `CLAIM` perspective (pre-dates the current pipeline,
+never backfilled) were all actually caught — by looking directly at real
+extracted output, not through the built-but-unused review UI. Whether this
+scales past 10 containers, or the review-HTML tool becomes worth reviving,
+is still open.
+
+**Operational friction, unresolved.** Direct local DB access has never
+worked in this environment — every run above required temporarily patching
+a live production Lambda (`cwf-rsp-worker`) with debug code, deploying,
+invoking, then reverting. Worth a small dedicated permanent Lambda for this
+specifically, so running extraction stops requiring surgery on production
+code each time.
+
 ## 6. Self-perpetuation / discovering the group's actual conatus
 
 Per §2's composite-individual point: don't presuppose the group's telos is
@@ -596,7 +702,7 @@ distinct outputs, not one:
 | Piece | Location | Status |
 |---|---|---|
 | Experience (S→A→S') data model | `.kiro/specs/experience-tracking/` | Spec'd (Phase 1: manual/UI only, no scoring) — **extend this, this design's scoring is the next layer on top** |
-| `state_perspectives` generalized perspective mechanism | `rsp-worker`, `pending_perspectives`, `cwf-perspectives-queue` | Live in production — add an `AUTHENTICITY` perspective type here (§4) |
+| `state_perspectives` generalized perspective mechanism | `rsp-worker`, `pending_perspectives`, `cwf-perspectives-queue` | Live in production. **Generalized to actions 2026-08-22** (migration 023, `state_perspectives.action_id`, see §5b) — actions now get their own `CLAIM` through the same mechanism. Add an `AUTHENTICITY` perspective type the same way (§4). |
 | `action_scores`/`scoring_prompts` shape | `lambda/core`, `lambda/analysis` | Live for actions only — mirror its shape into a new `experience_scores` table, don't extend the action-specific table directly |
 | Energy classification (dynamis/oikonomia/techne) | `.kiro/specs/energeia-membrane/` | Resolved: a computed report over action embeddings, not a table — coincidental conceptual resemblance only, **not an extension point, do not merge** |
 | Evidence-weighted scoring | `.kiro/specs/evidence-weighted-scoring/` | Resolved: a prompt-wording fix inside the unrelated Bloom's/capability scorer — **not a scoring mechanism, not an extension point** |
@@ -607,36 +713,45 @@ distinct outputs, not one:
 | `epistemic_links` (state-to-state) | schema only | Unused in any Lambda — reserved for replication/help credit (§3) |
 | `energeia_cache` | `lambda/energeia/` | **Not** a group-power metric — it's a PCA/k-means cluster map of actions in embedding space. Don't confuse with §5. |
 
-## 8. Status (updated 2026-08-16 — corrects a stale version of this section)
+## 8. Status (updated 2026-08-22 — corrects a stale version of this section)
 
 **Done:**
-- `ACTION_HYPOTHESIS` extraction — built, extensively tuned against real
-  data (tense/reference guidance, prior-action context, within-observation
-  photo-sequence evidence, action-vs-outcome-description separation,
-  `transformative`/`entropy_reduction` classification, `expected_state` +
-  confidence inference). Live in `scripts/azolla-experience-form.js`.
+- `EXPERIENCE_PERSPECTIVE` extraction (renamed 2026-08-22 from
+  `ACTION_HYPOTHESIS`, see §5a) — built, extensively tuned against real
+  data (tense/reference guidance, most-recent-experience context,
+  within-observation photo-sequence evidence, action-vs-outcome-description
+  separation, `transformative`/`entropy_reduction` classification,
+  `expected_state` + confidence inference, technical-density preservation).
+  Live in `scripts/azolla-experience-form.js`.
 - `AZOLLA_STATE` as a generated perspective — dropped, superseded by
   reusing `CLAIM` directly (§5a).
 - SASR experience formation — action-gated boundaries, real
   `experiences`/`experience_components`/`actions` rows, reward computed
-  on demand from `metric_snapshots`. **Run for real on Stefan's container
-  only** (7 experiences, 13 actions) — the other 9 containers haven't
-  been run yet.
+  on demand from `metric_snapshots`, versioned by prompt config (§5b).
+  **Run for real across all 10 pilot containers** (2026-08-22, see §5b for
+  the per-container tally) — previously only Stefan's had been run.
+- Actions have their own `CLAIM` perspective (§5b, migration 023) —
+  concrete progress toward the `AUTHENTICITY` perspective type below.
 - Container-by-container review HTML tool
-  (`azolla-experience-review-gen.js`) — built, but **not what actually
-  validated Stefan's committed data** — that happened through live,
-  interactive tuning in conversation instead. Open question below.
+  (`azolla-experience-review-gen.js`) — built, but still not what's
+  actually being used for validation; §5b records what replaced it in
+  practice (direct inspection of rendered per-container SASR chains).
 - Join flow — confirmed resolved, existing Share button, nothing to build.
 
 **Still open, and relevant to "finish the pilot, pay people" specifically:**
-- **Scale SASR formation to the other 9 containers.** Only Stefan's is
-  done. No tally is possible without this.
-- **Review-flow question, needs a decision before scaling**: for Stefan,
-  validation happened live, conversationally, pair by pair — that doesn't
-  scale to 9 more people's full histories. Does the batch review-HTML
-  tool (built, unused) get used instead, or does the now-heavily-tuned
-  prompt get trusted to run unattended with spot-checking, or something
-  else?
+- **Jusua and Buboy extracted zero experiences** (31 and 10 observations
+  respectively) — not yet determined whether that's genuinely sparse
+  action-reporting or an extraction gap specific to their writing style.
+  Worth a closer look before including them in any tally as "no
+  contribution."
+- **Low-friction extraction workflow** (§5b) — every run so far has
+  required temporarily patching a live production Lambda with debug code.
+  A small dedicated permanent Lambda for this is the proposed fix, not yet
+  built.
+- **Review-flow question — partially answered (§5b), not fully settled**:
+  direct inspection of a rendered artifact caught real issues at 10-container
+  scale, but whether that keeps working as the pilot grows, or the
+  review-HTML tool becomes worth reviving, is still open.
 - **Individual power score is not built.** Resolved *how* it should work
   (§4: score the action via the existing `action_scores` mechanism, a
   number + reasoning, criteria = authenticity gate + causal clarity +
