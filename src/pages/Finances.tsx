@@ -69,11 +69,13 @@ export default function Finances() {
     if (timeFrame === 'all') return { startDate: undefined, endDate: today };
     const d = new Date();
     d.setDate(d.getDate() - parseInt(timeFrame));
-    return { startDate: d.toISOString().split('T')[0], endDate: today };
+    // "7 Days" also surfaces future-dated transactions (e.g. accidental
+    // typos) instead of hiding them, so end_date is left uncapped.
+    return { startDate: d.toISOString().split('T')[0], endDate: timeFrame === '7' ? undefined : today };
   }, [timeFrame]);
 
   const filters = useMemo(() => (
-    { ...(startDate ? { start_date: startDate } : {}), end_date: endDate }
+    { ...(startDate ? { start_date: startDate } : {}), ...(endDate ? { end_date: endDate } : {}) }
   ), [startDate, endDate]);
 
   const { data: financialData, isLoading, dataUpdatedAt } = useFinancialRecords(filters);
