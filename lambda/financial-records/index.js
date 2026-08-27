@@ -38,6 +38,13 @@ async function recomputeCashBalances(dbClient, organizationId) {
     FROM ordered_cash oc
     WHERE fr.id = oc.id
   `, [organizationId]);
+
+  // Clear stale balance_after on records no longer using Cash
+  await dbClient.query(`
+    UPDATE financial_records
+    SET balance_after = NULL
+    WHERE organization_id = $1 AND payment_method != 'Cash' AND balance_after IS NOT NULL
+  `, [organizationId]);
 }
 
 exports.handler = async (event) => {
@@ -555,8 +562,8 @@ async function updateRecord(event, id, authContext) {
       }
     }
 
-    // Recompute Cash balances if amount or payment_method changed
-    const cashFieldChanged = changes.some(c => c.field === 'amount' || c.field === 'payment_method');
+    // Recompute Cash balances if amount, payment_method, or transaction_date changed
+    const cashFieldChanged = changes.some(c => c.field === 'amount' || c.field === 'payment_method' || c.field === 'transaction_date');
     if (cashFieldChanged) {
       await recomputeCashBalances(client, organizationId);
     }
