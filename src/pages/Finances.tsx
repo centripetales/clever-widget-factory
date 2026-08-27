@@ -69,9 +69,10 @@ export default function Finances() {
     if (timeFrame === 'all') return { startDate: undefined, endDate: today };
     const d = new Date();
     d.setDate(d.getDate() - parseInt(timeFrame));
-    // "7 Days" also surfaces future-dated transactions (e.g. accidental
-    // typos) instead of hiding them, so end_date is left uncapped.
-    return { startDate: d.toISOString().split('T')[0], endDate: timeFrame === '7' ? undefined : today };
+    // Numeric time frames are a lookback window only; leaving end_date uncapped
+    // surfaces future-dated transactions (e.g. accidental typos) instead of
+    // hiding them until their date arrives.
+    return { startDate: d.toISOString().split('T')[0], endDate: undefined };
   }, [timeFrame]);
 
   const filters = useMemo(() => (
