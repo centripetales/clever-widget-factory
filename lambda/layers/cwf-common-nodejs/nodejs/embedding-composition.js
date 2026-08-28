@@ -77,34 +77,46 @@ function composeToolEmbeddingSource(tool) {
  * Actions include description, evidence_description (what was done),
  * policy (lessons learned, best practices), and observations (field notes).
  * 
+ * Title and policy are what constitute the action — what was done, and the
+ * rule or method by which it is done. Everything else an action might carry
+ * (a free-text description of the situation it was taken in, an expected
+ * outcome) is state-shaped context, not part of the action's own identity —
+ * it belongs to a linked `states` row instead, embedded separately as a
+ * `state` (searched by content, not tied to being before/after any action).
+ * Mixing state-shaped text into this vector would make action search match
+ * on states rather than on what was actually done.
+ *
  * @param {Object} action - Action entity
- * @param {string} [action.description] - Action description
- * @param {string} [action.evidence_description] - Evidence of what was done
- * @param {string} [action.policy] - Lessons learned, best practices
- * @param {string} [action.observations] - Field observations
- * @param {string} [action.expected_state] - Expected outcome (S') for the action
+ * @param {string} [action.title] - What was done
+ * @param {string} [action.policy] - The rule or method by which it was done (HTML from a rich-text editor — stripped before embedding)
  * @returns {string} - Composed embedding source text
- * 
+ *
  * @example
- * composeActionEmbeddingSource({
- *   description: 'Applied compost to banana plants',
- *   evidence_description: 'Spread 2 inches of compost around base',
- *   policy: 'Organic matter improves soil structure',
- *   observations: 'Plants showed improved vigor after 2 weeks',
- *   expected_state: 'Healthy banana plants with improved soil nutrients'
+ * composeActionPolicySource({
+ *   title: 'Applied compost to banana plants',
+ *   policy: '<p>Organic matter improves soil structure</p>'
  * })
- * // Returns: "Applied compost to banana plants. Spread 2 inches of compost around base. Organic matter improves soil structure. Plants showed improved vigor after 2 weeks. Healthy banana plants with improved soil nutrients"
+ * // Returns: "Applied compost to banana plants. Organic matter improves soil structure"
  */
-function composeActionEmbeddingSource(action) {
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function composeActionPolicySource(action) {
   const parts = [
     action.title,
-    action.description,
-    action.evidence_description,
-    action.policy,
-    action.observations,
-    action.expected_state
+    stripHtml(action.policy)
   ].filter(Boolean);
-  
+
   return parts.join('. ');
 }
 
@@ -273,7 +285,7 @@ function composeFinancialRecordEmbeddingSource(record) {
 module.exports = {
   composePartEmbeddingSource,
   composeToolEmbeddingSource,
-  composeActionEmbeddingSource,
+  composeActionPolicySource,
   composeIssueEmbeddingSource,
   composePolicyEmbeddingSource,
   composeStateEmbeddingSource,

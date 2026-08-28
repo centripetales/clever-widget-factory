@@ -1,7 +1,7 @@
 const { Client } = require('pg');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { getAuthorizerContext, buildOrganizationFilter } = require('/opt/nodejs/authorizerContext');
-const { composeActionEmbeddingSource } = require('/opt/nodejs/embedding-composition');
+const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
@@ -437,61 +437,37 @@ exports.handler = async (event) => {
         result = await queryJSON(sql);
       }
       
-      // Queue embedding generation if embedding-relevant fields were updated
-      // Fire-and-forget pattern to avoid blocking the response
+      // Queue embedding generation if title or policy changed — those are the
+      // only two fields action_policy is composed from (see
+      // docs/specs/azolla-impact-power-model.md — "states as action context").
+      // Fire-and-forget pattern to avoid blocking the response.
       if (result && result.length > 0) {
         const updatedAction = result[0];
-        const embeddingRelevantFields = ['description', 'state_text', 'summary_policy_text', 'observations', 'expected_state'];
+        // policy_text/summary_policy_text are the exploration flow's logical
+        // aliases for the same `policy` column (src/types/actions.ts) — a
+        // policy edit can arrive under any of the three names depending on
+        // which UI sent it.
+        const embeddingRelevantFields = ['title', 'policy', 'policy_text', 'summary_policy_text'];
         const hasEmbeddingUpdate = embeddingRelevantFields.some(field => actionData[field] !== undefined);
-        
+
         if (hasEmbeddingUpdate) {
-          // Send embedding messages asynchronously without blocking response
-          const embeddingPromises = [];
-          
-          // Send first message: full context embedding (existing behavior)
-          const embeddingSource = composeActionEmbeddingSource(updatedAction);
+          const embeddingSource = composeActionPolicySource(updatedAction);
           if (embeddingSource && embeddingSource.trim()) {
-            embeddingPromises.push(
-              sqs.send(new SendMessageCommand({
-                QueueUrl: EMBEDDINGS_QUEUE_URL,
-                MessageBody: JSON.stringify({
-                  entity_type: 'action',
-                  entity_id: updatedAction.id,
-                  embedding_source: embeddingSource,
-                  organization_id: updatedAction.organization_id
-                })
-              }))
-              .then(() => console.log('Queued full context embedding for action', updatedAction.id))
-              .catch(error => console.error('Failed to queue full context embedding:', error))
-            );
+            sqs.send(new SendMessageCommand({
+              QueueUrl: EMBEDDINGS_QUEUE_URL,
+              MessageBody: JSON.stringify({
+                entity_type: 'action_policy',
+                entity_id: updatedAction.id,
+                embedding_source: embeddingSource,
+                organization_id: updatedAction.organization_id
+              })
+            }))
+            .then(() => console.log('Queued action_policy embedding for action', updatedAction.id))
+            .catch(error => console.error('Failed to queue action_policy embedding:', error));
           }
-          
-          // Send second message: action_existing_state embedding (description only)
-          if (updatedAction.description && updatedAction.description.trim()) {
-            embeddingPromises.push(
-              sqs.send(new SendMessageCommand({
-                QueueUrl: EMBEDDINGS_QUEUE_URL,
-                MessageBody: JSON.stringify({
-                  entity_type: 'action_existing_state',
-                  entity_id: updatedAction.id,
-                  embedding_source: updatedAction.description.trim(),
-                  organization_id: updatedAction.organization_id
-                })
-              }))
-              .then(() => console.log('Queued action_existing_state embedding for action', updatedAction.id))
-              .catch(error => console.error('Failed to queue action_existing_state embedding:', error))
-            );
-          }
-          
-          // Fire and forget - don't await, but log if all complete
-          Promise.allSettled(embeddingPromises).then(results => {
-            const succeeded = results.filter(r => r.status === 'fulfilled').length;
-            const failed = results.filter(r => r.status === 'rejected').length;
-            console.log(`Embedding queue results for action ${updatedAction.id}: ${succeeded} succeeded, ${failed} failed`);
-          });
         }
       }
-      
+
       // Handle exploration record if is_exploration is true
       // Note: Exploration records are created/updated via separate API endpoint
       // This prevents database constraint violations during action updates
@@ -797,12 +773,12 @@ exports.handler = async (event) => {
         }
         
         // Queue embedding generation for the new action (fire-and-forget)
-        const embeddingSource = composeActionEmbeddingSource(newAction);
+        const embeddingSource = composeActionPolicySource(newAction);
         if (embeddingSource && embeddingSource.trim()) {
           sqs.send(new SendMessageCommand({
             QueueUrl: EMBEDDINGS_QUEUE_URL,
             MessageBody: JSON.stringify({
-              entity_type: 'action',
+              entity_type: 'action_policy',
               entity_id: newAction.id,
               embedding_source: embeddingSource,
               organization_id: orgId

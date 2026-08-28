@@ -2,9 +2,14 @@ const { getDbClient } = require('/opt/nodejs/db');
 const { escapeLiteral } = require('/opt/nodejs/sqlUtils');
 const { generateEmbeddingV1 } = require('./shared/embeddings');
 
+// 'action_existing_state' retired (docs/specs/azolla-impact-power-model.md —
+// "states as action context"): the context it searched now lives in real
+// `state` rows, reachable from an action via state_links(entity_type='action').
+// This lambda doesn't do that traversal yet — searching 'state' still finds
+// the same underlying text, just not pre-joined back to its action here.
 const VALID_ENTITY_TYPES = [
-  'part', 'tool', 'action', 'issue', 'policy',
-  'financial_record', 'state', 'action_existing_state', 'state_space_model'
+  'part', 'tool', 'action_policy', 'issue', 'policy',
+  'financial_record', 'state', 'state_space_model'
 ];
 
 /**
@@ -45,14 +50,13 @@ function buildActionGroupResponse(actionGroup, apiPath, httpMethod, statusCode, 
  */
 function getDateColumn(entityType) {
   switch (entityType) {
-    case 'action': return 'a.created_at';
+    case 'action_policy': return 'a.created_at';
     case 'financial_record': return 'fr.transaction_date';
     case 'part': return 'p.created_at';
     case 'tool': return 't.created_at';
     case 'issue': return 'i.created_at';
     case 'policy': return 'po.created_at';
     case 'state':
-    case 'action_existing_state':
     case 'state_space_model':
       return 'ue.created_at';
     default: return null;
@@ -117,11 +121,14 @@ JOIN tools t ON ue.entity_id = t.id AND t.organization_id = '${safeOrgId}'::uuid
 WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
-    case 'action':
+    case 'action_policy':
+      // title/policy are what the action_policy embedding is composed from
+      // (see docs/specs/azolla-impact-power-model.md); description is legacy
+      // and no longer written to for new actions.
       return `(SELECT ${baseSelect},
   json_build_object(
     'title', a.title,
-    'description', a.description,
+    'policy', a.policy,
     'status', a.status,
     'created_at', a.created_at,
     'completed_at', a.completed_at
@@ -174,7 +181,7 @@ LEFT JOIN organization_members om ON fr.created_by::text = om.cognito_user_id::t
 WHERE ${baseWhere}${dateFilter}
 ${orderLimit})`;
 
-    // state, action_existing_state, state_space_model — embedding-only types
+    // state, state_space_model — embedding-only types
     default:
       return `(SELECT ${baseSelect},
   json_build_object('description', ue.embedding_source) AS details

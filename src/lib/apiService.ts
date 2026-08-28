@@ -346,16 +346,32 @@ function updateCacheFromResponse(endpoint: string, method: string, responseData:
     }
   } else if (endpoint.includes('/actions')) {
     if (method === 'POST') {
-      // New actions are unresolved by default — add to ['actions'] cache
-      if (optimisticId) {
-        globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) => 
+      // A newly created action can already be completed (e.g. confirming an
+      // AI-proposed action reports something that already happened) — route
+      // it the same way the PUT branch below does, instead of assuming
+      // every new action is unresolved.
+      const isCompleted = data.status === 'completed';
+      if (isCompleted) {
+        if (optimisticId) {
+          // Remove the unresolved-cache placeholder — this action belongs in completed.
+          globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) =>
+            old.filter(item => item.id !== optimisticId)
+          );
+        }
+        globalQueryClient.setQueryData(completedActionsQueryKey(), (old: any[] | undefined) => {
+          if (!old) return undefined; // Don't create cache if not yet loaded
+          const exists = old.some(item => item.id === data.id);
+          return exists ? old.map(item => item.id === data.id ? data : item) : [data, ...old];
+        });
+      } else if (optimisticId) {
+        globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) =>
           old.map(item => item.id === optimisticId ? data : item)
         );
       } else {
         globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) => [...old, data]);
       }
       // Also update ['actions_all'] if it exists
-      globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) => 
+      globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) =>
         old ? [...old, data] : undefined
       );
     } else if (method === 'PUT') {
@@ -567,6 +583,18 @@ export async function createExperience(
 }
 
 /**
+ * Edit an existing experience: repoint initial_state, and/or replace the
+ * full set of attached actions. final_state's own text/photos are edited
+ * directly via updateState, not through this call.
+ */
+export async function updateExperience(
+  experienceId: string,
+  updates: { initial_state_id?: string; final_state_id?: string; action_ids?: string[] }
+): Promise<{ id: string; updated: boolean }> {
+  return apiService.put(`/experiences/${experienceId}`, updates);
+}
+
+/**
  * List experiences with optional filters
  */
 export async function listExperiences(
@@ -600,5 +628,72 @@ export async function getExperience(
   experienceId: string
 ): Promise<{ data: Experience }> {
   return apiService.get<{ data: Experience }>(`/experiences/${experienceId}`);
+}
+
+/**
+ * Run AI extraction over a container's observation history, proposing
+ * candidate actions as EXPERIENCE_PERSPECTIVE rows. Never creates a real
+ * action on its own — a person reviews and confirms via useExperienceSuggestion.
+ * POSTs to the same path listExperienceSuggestions GETs from — POST generates
+ * suggestions, GET lists them.
+ */
+export async function generateExperienceSuggestions(
+  entity_type: 'tool' | 'part',
+  entity_id: string
+): Promise<{ pairs_processed: number; experiences_found: number; message?: string }> {
+  return apiService.post('/experiences/suggestions', { entity_type, entity_id });
+}
+
+export interface ExperienceSuggestion {
+  perspective_id: string;
+  hypothesis_index: number;
+  final_state_id: string;
+  prior_state_id: string;
+  final_captured_at: string;
+  title: string;
+  description: string;
+  action_type: 'transformative' | 'entropy_reduction';
+  confidence: number;
+  expected_state: string | null;
+  expected_state_confidence: number | null;
+  expected_state_basis: string | null;
+  photos: { id: string; state_id: string; photo_url: string; photo_description: string | null }[];
+  created_at: string;
+}
+
+/**
+ * List un-dismissed, unconfirmed AI-proposed action hypotheses for a container.
+ */
+export async function listExperienceSuggestions(
+  entity_type: 'tool' | 'part',
+  entity_id: string
+): Promise<{ data: ExperienceSuggestion[] }> {
+  return apiService.get(`/experiences/suggestions?entity_type=${entity_type}&entity_id=${entity_id}`);
+}
+
+/**
+ * Confirm ("use") one AI-proposed hypothesis, creating the real action.
+ * Fields are editable by the person before submitting.
+ */
+export async function useExperienceSuggestion(params: {
+  perspective_id: string;
+  hypothesis_index: number;
+  title: string;
+  description?: string;
+  action_type?: 'transformative' | 'entropy_reduction';
+  expected_state?: string;
+}): Promise<any> {
+  return apiService.post('/experiences/use', params);
+}
+
+/**
+ * Dismiss one AI-proposed hypothesis — marked in place on its own perspective,
+ * no new table. It will not be re-surfaced by a later suggestions run.
+ */
+export async function dismissExperienceSuggestion(
+  perspective_id: string,
+  hypothesis_index: number
+): Promise<{ perspective_id: string; hypothesis_index: number; dismissed: boolean }> {
+  return apiService.post('/experiences/dismiss', { perspective_id, hypothesis_index });
 }
 

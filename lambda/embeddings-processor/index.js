@@ -4,7 +4,7 @@ const { summarizeAction, summarizeIssue, shouldSummarize } = require('/opt/nodej
 const {
   composePartEmbeddingSource,
   composeToolEmbeddingSource,
-  composeActionEmbeddingSource,
+  composeActionPolicySource,
   composeIssueEmbeddingSource,
   composePolicyEmbeddingSource,
   composeStateEmbeddingSource,
@@ -122,7 +122,7 @@ async function getEmbeddingSource(entityType, fields, assets = []) {
   if (USE_AI_SUMMARIZATION && shouldSummarize(entityType, fields)) {
     console.log(`Using AI summarization for ${entityType}`);
     
-    if (entityType === 'action') {
+    if (entityType === 'action_policy') {
       return await summarizeAction({ ...fields, assets });
     } else if (entityType === 'issue') {
       return await summarizeIssue(fields);
@@ -137,8 +137,8 @@ async function getEmbeddingSource(entityType, fields, assets = []) {
       return composePartEmbeddingSource(fields);
     case 'tool':
       return composeToolEmbeddingSource(fields);
-    case 'action':
-      return composeActionEmbeddingSource(fields);
+    case 'action_policy':
+      return composeActionPolicySource(fields);
     case 'issue':
       return composeIssueEmbeddingSource(fields);
     case 'policy':
@@ -167,8 +167,11 @@ exports.handler = async (event) => {
       
       console.log(`Processing ${entity_type} ${entity_id || '(no entity_id — skill_axis)'}`);
       
-      // Validate entity type (includes action variants like action_existing_state)
-      const validTypes = ['part', 'tool', 'action', 'issue', 'policy', 'action_existing_state', 'state', 'state_space_model', 'financial_record', 'action_skill_profile', 'skill_axis', 'claim_perspective', 'significance_perspective', 'entropy_perspective'];
+      // 'action' and 'action_existing_state' retired — action_policy replaces
+      // both (see docs/specs/azolla-impact-power-model.md — "states as
+      // action context"). Migration ran for real, all 706 actions have an
+      // action_policy embedding, and the old rows are deleted (see §3b).
+      const validTypes = ['part', 'tool', 'action_policy', 'issue', 'policy', 'state', 'state_space_model', 'financial_record', 'action_skill_profile', 'skill_axis', 'claim_perspective', 'significance_perspective', 'entropy_perspective'];
       if (!validTypes.includes(entity_type)) {
         console.log(`Skipping ${entity_type} - not a valid entity type`);
         continue;

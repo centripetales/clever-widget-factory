@@ -53,6 +53,8 @@ export const stateQueryKey = (orgId: string, stateId: string) => ['state', orgId
 export const experiencesQueryKey = (filters?: { entity_type?: string; entity_id?: string }) => 
   filters ? ['experiences', filters.entity_type ?? 'all', filters.entity_id ?? 'all'] : ['experiences'];
 export const experienceQueryKey = (experienceId: string) => ['experience', experienceId];
+export const experienceSuggestionsQueryKey = (entityType: string, entityId: string) =>
+  ['experience_suggestions', entityType, entityId];
 
 // Capability query keys
 export const capabilityProfileQueryKey = (actionId: string) => ['capability', actionId];

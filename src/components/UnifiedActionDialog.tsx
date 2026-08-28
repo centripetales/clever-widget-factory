@@ -47,10 +47,13 @@ import {
   Handshake
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
+import { useFileUpload } from "@/hooks/useFileUpload";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import TiptapEditor from './TiptapEditor';
 import { StatesInline } from './StatesInline';
+import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
+import { stateService } from '@/services/stateService';
 import { AssetSelector } from './AssetSelector';
 import { StockSelector } from './StockSelector';
 import { MultiParticipantSelector } from './MultiParticipantSelector';
@@ -260,6 +263,20 @@ export function ActionForm({
   const [formData, setFormData] = useState<Partial<BaseAction>>({});
   const [missionData, setMissionData] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Existing state (S): a person can describe the situation and attach
+  // photos while creating a new action, same as StatesInline offers once an
+  // action exists — created as a real, linked state right after the action
+  // itself is saved, rather than requiring a separate save-then-add-observation
+  // round trip. See docs/specs/azolla-impact-power-model.md — "states as
+  // action context."
+  const [newActionObservationText, setNewActionObservationText] = useState('');
+  const [newActionObservationPhotos, setNewActionObservationPhotos] = useState<PhotoItem[]>([]);
+  const { uploadFiles: uploadObservationFile } = useFileUpload();
+  const handleObservationEagerUpload = async (file: File) => {
+    const result = await uploadObservationFile(file, { bucket: 'mission-attachments' });
+    const r = Array.isArray(result) ? result[0] : result;
+    return { url: r.url };
+  };
   const [isCompleting, setIsCompleting] = useState(false);
   // NOTE: estimatedDate removed - estimated_completion_date field removed in migration 005
   const [isFormInitialized, setIsFormInitialized] = useState(false);
@@ -483,6 +500,8 @@ export function ActionForm({
       setStoredActionId(null);
       setCurrentContextType(null);
       setIsTitleEditing(false);
+      setNewActionObservationText('');
+      setNewActionObservationPhotos([]);
     }
   }, [open, actionId, context?.type, isCreating, action]);
 
@@ -1052,6 +1071,43 @@ export function ActionForm({
       };
 
       const savedAction = await saveActionMutation.mutateAsync(isCreating || !action?.id ? actionData : { ...actionData, id: action.id });
+
+      // Existing state (S): create it now that the action has a real id.
+      // Same mechanism StatesInline uses post-creation — this just removes
+      // the save-then-add-observation round trip for a brand new action.
+      const hasNewObservation = newActionObservationText.trim() || newActionObservationPhotos.some((p) => p.photo_url);
+      if ((isCreating || !action?.id) && savedAction?.id && hasNewObservation) {
+        try {
+          await stateService.createState({
+            state_text: newActionObservationText.trim() || undefined,
+            photos: newActionObservationPhotos
+              .filter((p) => p.photo_url)
+              .map((p, idx) => ({
+                photo_url: p.photo_url!,
+                photo_description: p.photo_description,
+                photo_order: idx,
+                client_captured_at: p.client_captured_at,
+                capture_method: p.capture_method,
+              })),
+            links: [
+              { entity_type: 'action', entity_id: savedAction.id },
+              // Assumes tool when an asset is set — actions.asset_id matches
+              // either tools or parts with nothing on this form to
+              // distinguish them, and tools account for the overwhelming
+              // majority (175 of 182 actions with an asset_id) — same
+              // simplification already made throughout the azolla pipeline.
+              ...(formData.asset_id ? [{ entity_type: 'tool', entity_id: formData.asset_id }] : []),
+            ],
+          });
+        } catch (obsError) {
+          console.error('Failed to save this action\'s existing state:', obsError);
+          toast({
+            title: 'Action saved, but the observation failed to attach',
+            description: 'You can add it from the Observations tab after reopening this action.',
+            variant: 'destructive',
+          });
+        }
+      }
     } catch (error) {
       // Error handled by mutation onError
     } finally {
@@ -1448,8 +1504,23 @@ export function ActionForm({
                 source_organization_id={(action as any).organization_id}
               />
             ) : (
-              <div className="text-center text-muted-foreground py-8">
-                <p>Save the action first to add observations</p>
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Describe the situation this action responds to. Saved as this action's
+                  existing state once you save the action below.
+                </p>
+                <PhotoUploadPanel
+                  photos={newActionObservationPhotos}
+                  onPhotosChange={setNewActionObservationPhotos}
+                  onEagerUpload={handleObservationEagerUpload}
+                  showDescriptions
+                />
+                <Textarea
+                  placeholder="What's the current situation?"
+                  value={newActionObservationText}
+                  onChange={(e) => setNewActionObservationText(e.target.value)}
+                  rows={4}
+                />
               </div>
             )}
           </TabsContent>

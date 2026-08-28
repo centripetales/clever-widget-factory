@@ -679,6 +679,98 @@ invoking, then reverting. Worth a small dedicated permanent Lambda for this
 specifically, so running extraction stops requiring surgery on production
 code each time.
 
+## 5c. States as action context (2026-08-28)
+
+**The operative definition of a state is the reinforcement-learning one: a
+state is whatever context the agent conditions its next action on** — not
+narrowly a physical observation of a container. This had been implicit
+throughout §5a/§5b but wasn't made explicit, which let `actions.description`
+and `actions.attachments` (a bare `text[]` of URLs) accumulate as an
+unstructured, parallel place to put exactly this kind of context, instead of
+it living as a real `states` row like everything else does.
+
+Concretely: *"It's inefficient to access equipment. Tools that require
+repairs are not separated"* is a state — it's what justifies reorganizing a
+storage area, exactly the way "duckweed are small" justifies adding
+manure. *"carabao manure is considered the gold standard for azolla
+growth"* is a state (sourced from AI, not direct observation). *"I'd like
+to collect data on power outages"* is a high-uncertainty state — which is
+exactly why its action is `entropy_reduction`; that action_type only makes
+sense if non-physical, low-confidence states count as states too. Weakness
+of an observation (no number, no measurement) is what `ENTROPY` already
+scores — it isn't a gate on whether something counts as a state at all.
+
+**Why this matters beyond tidiness:** a `states` row gets embeddings,
+CLAIM/SIGNIFICANCE/ENTROPY, vision extraction on its photos, and metric
+processors (`POST /states` fans out to both the embeddings and perspectives
+queues). An action's `description`/`attachments` got none of that — the
+richest context in the system was sitting in the two fields with the least
+infrastructure behind them. Manual and AI-extracted actions also converge on
+one shape this way: `state_links(entity_type='action')` is already how the
+azolla extraction connects an action to its documenting observation
+(§5a); action creation now uses the exact same mechanism instead of a text
+column.
+
+**Target model** — no new columns, no new link-role/type:
+
+| concept | home |
+|---|---|
+| authored context (text + photos) | a `states` row |
+| "this observation reports/documents this action" | `state_links(entity_type='action')` — one undifferentiated meaning, written by both the manual and extraction paths |
+| the action itself | `actions`: title, policy, action_type, timing, status, `expected_state`, links |
+| dense account of what was done | action-scoped `CLAIM` perspective (`state_perspectives.action_id`, migration 023) |
+| the deliberate S / A(s) / S' selection | `experience_components` — unchanged |
+
+`expected_state` stays text, deliberately — it's a goal that may never be
+observed, and the asymmetry against a real observed state is meaningful: the
+evaluative step of the whole loop is comparing `expected_state` against what
+the final state actually turned out to be.
+
+**Open, deliberately not resolved yet:** an action can end up with more than
+one `state_links(entity_type='action')` row playing different roles — the
+existing state that justified it, versus evidence photos documenting that it
+happened. Nothing on the link distinguishes these, by design-in-progress —
+adding a role/type distinction, or resolving it via a new perspective, was
+considered and explicitly deferred rather than decided under time pressure.
+Consumers should not assume "the" single existing state is always resolvable
+today.
+
+**Action embeddings: `action_policy` replaces `action` /
+`action_existing_state`.** Composed from `title` + `policy` only (HTML
+stripped) — title and policy are what constitute the action; a free-text
+description of the situation or an expected outcome is state-shaped context
+that belongs to a linked state, embedded separately, not duplicated into the
+action's own vector. Retrieval is **state-first and position-agnostic**: the
+primary query ("how do I grow bigger azolla?") searches states for "small
+azolla" and traverses `state_links` to the actions attached — it does not
+matter whether the matched state was an experience's initial or final state,
+both directions inform equally (shaded → got small; moved to sun → got
+large). Action search ("where did I apply FPJ") is a separate, narrower
+lookup that state text would only pollute.
+
+`action_existing_state` (391 rows) was an earlier, narrower attempt at this
+same separation — a second embedding from `description` alone, keyed to the
+action rather than to a real state. Superseded outright: a `state` embedding
+carries photos, `captured_at`, metrics, and perspectives, and one state can
+serve several actions. Hard cutover, not a parallel rollout — current action
+search wasn't returning meaningful results, so there's nothing worth
+preserving through a transition window.
+
+**Migration: text only, images untouched.** `actions.description` (587
+non-empty) splits into 65 exact copies of a state's `CLAIM` — these get
+*linked* to that real source state, never duplicated — and 522 genuine
+candidates, each migrated to one new text-only state
+(`scripts/migrate-action-descriptions-to-states.js --dry-run` to preview).
+`actions.attachments` (241, all human-authored) is not touched by this
+migration at all — deliberately: a photo's relationship to a specific moment
+in an action's history is a judgment call a script shouldn't make
+unsupervised. Images get structured the same way `StatesInline` already lets
+any entity (tool/part/issue/policy/action) accumulate linked states over
+time — a person adding a photo to an action creates or appends to that
+action's own linked state, the same mechanism, no separate code path.
+`description` and `attachments` remain as read-only legacy fallbacks after
+migration — not dropped, not written to going forward.
+
 ## 6. Self-perpetuation / discovering the group's actual conatus
 
 Per §2's composite-individual point: don't presuppose the group's telos is

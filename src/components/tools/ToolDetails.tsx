@@ -1,14 +1,14 @@
-import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2 } from "lucide-react";
+import { ArrowLeft, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Tool } from "@/hooks/tools/useToolsData";
 import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
-import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
+import { ExperiencesTab } from "./ExperiencesTab";
+import { useExperienceSuggestions } from "@/hooks/useExperiences";
 import { useEffect, useState } from "react";
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { PhotoThumb } from "@/components/shared/PhotoThumb";
@@ -44,13 +44,25 @@ export const ToolDetails = ({
   activeTab,
   onTabChange,
 }: ToolDetailsProps) => {
-  const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
   const [expandedAiPhotos, setExpandedAiPhotos] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
   const { user } = useAuth();
   const { organization, isAdmin } = useOrganization();
   const { deleteState } = useStateMutations(organization?.id || '');
   const { toast } = useToast();
+
+  // AI-guessed action citations, purely for the purple observation marker
+  // (§3 of the experience-tracking design) — a real actions/state_links row
+  // existing is separately checkable from the Experiences tab; this is only
+  // ever a guess signal, gone once a suggestion is used or dismissed.
+  const { data: suggestionsRes } = useExperienceSuggestions('tool', tool.id);
+  const aiGuessedStateIds = new Set(
+    (suggestionsRes?.data || []).flatMap((s) => [
+      s.final_state_id,
+      s.prior_state_id,
+      ...s.photos.map((p) => p.state_id),
+    ].filter(Boolean))
+  );
 
   // This container's own tab appears only when it's actually share-granted
   // somewhere (POST /shares) — the tab surfaces where that share leads, not a
@@ -103,6 +115,9 @@ export const ToolDetails = ({
 
   const getToolCardStyle = (record: HistoryEntry) => {
     if (isObservation(record)) {
+      if (aiGuessedStateIds.has(record.id)) {
+        return 'border-2 border-purple-500 shadow-purple-200/50 shadow-lg';
+      }
       return 'border-2 border-blue-500 shadow-blue-200/50 shadow-lg';
     }
     if (isAssetHistory(record)) {
@@ -135,34 +150,15 @@ export const ToolDetails = ({
             <ToolStatusBadge status={tool.status} />
           </div>
         </div>
-         <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="inline-block">
-                <Button
-                  variant="default"
-                  size="sm"
-                  disabled={tool.is_shared_inbound}
-                  onClick={() => setIsExperienceDialogOpen(true)}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create Experience
-                </Button>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{tool.is_shared_inbound ? "Experiences are disabled for shared assets" : "Create Experience"}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
       </div>
 
       <div>
         <div>
           <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
-            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${2 + shares.length}, 1fr)` }}>
+            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${3 + shares.length}, 1fr)` }}>
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
+              <TabsTrigger value="experiences" className="w-full">Experiences</TabsTrigger>
               {shares.map((share) => (
                 <TabsTrigger key={share.target_org_id} value={`group-${share.target_org_id}`} className="w-full">
                   {share.target_org_name}
@@ -464,6 +460,16 @@ export const ToolDetails = ({
               </div>
             </TabsContent>
 
+            <TabsContent value="experiences" className="space-y-4">
+              <ExperiencesTab
+                entityType="tool"
+                entityId={tool.id}
+                entityName={tool.name}
+                organizationId={organization?.id || ''}
+                disabled={tool.is_shared_inbound}
+              />
+            </TabsContent>
+
             {shares.map((share) => (
               <TabsContent key={share.target_org_id} value={`group-${share.target_org_id}`} className="space-y-4">
                 <GroupCoverageGrid orgId={share.target_org_id} />
@@ -472,14 +478,6 @@ export const ToolDetails = ({
           </Tabs>
         </div>
       </div>
-
-      <ExperienceCreationDialog
-        open={isExperienceDialogOpen}
-        onOpenChange={setIsExperienceDialogOpen}
-        entityType="tool"
-        entityId={tool.id}
-        entityName={tool.name}
-      />
     </div>
   );
 };

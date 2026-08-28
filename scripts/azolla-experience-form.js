@@ -36,12 +36,11 @@ const crypto = require('crypto');
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 const sqs = new SQSClient({ region: 'us-west-2' });
 
-// Matches lambda/shared/embedding-composition.js composeActionEmbeddingSource.
-// evidence_description/observations from that function's JSDoc example aren't
-// real columns on `actions` (verified against the live schema) — the fields
-// that actually exist and get used are title/description/policy/expected_state.
-function composeActionEmbeddingSource(action) {
-  return [action.title, action.description, action.policy, action.expected_state].filter(Boolean).join('. ');
+// Matches lambda/shared/embedding-composition.js composeActionPolicySource.
+// Title + policy only — description/expected_state are state-shaped context,
+// not part of the action's own identity (see docs/specs/azolla-impact-power-model.md).
+function composeActionPolicySource(action) {
+  return [action.title, action.policy].filter(Boolean).join('. ');
 }
 
 const envPath = path.join(__dirname, '..', '.env.local');
@@ -459,12 +458,12 @@ async function main() {
         for (const h of pairResult.experiences) {
           const actionId = crypto.randomUUID();
           const actionTitle = h.title.slice(0, 250);
-          // description = "Existing State" in the UI — the situation BEFORE the
-          // action (initial_state's CLAIM), not the action's own description.
-          // The action's own what/why (h.description) isn't duplicated into a
-          // text field at all — it lives in the linked observation (state_links
-          // below) and, for search, in the embedding source directly.
-          const actionDescription = initialState.claim || null;
+          // No text copy of the existing state — description stays NULL.
+          // initialState is linked below via state_links(entity_type='action')
+          // instead, the same live pointer used everywhere else in this app
+          // (see docs/specs/azolla-impact-power-model.md — "states as action
+          // context"). The action's own what/why (h.description) lives in its
+          // CLAIM perspective, not in a text field on the action.
           const expectedState = h.expected_state || null;
           // scoring_data is the catch-all for classification/scoring metadata that
           // doesn't have its own UI field — NOT for the action's own technically-dense
@@ -493,9 +492,11 @@ async function main() {
           const assignedTo = validAssignees.has(finalState.captured_by) ? finalState.captured_by : null;
           await write(
             // policy: intentionally left null — not used for this data.
-            `INSERT INTO actions (id, title, description, expected_state, scoring_data, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, 'completed', $6, $7, $8, $9, $10, NOW(), NOW())`,
-            [actionId, actionTitle, actionDescription, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, assignedTo, finalState.captured_at, TOOL_ID]
+            // description: intentionally left null — the existing state is a
+            // real state_links pointer (below), not a text copy.
+            `INSERT INTO actions (id, title, expected_state, scoring_data, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, $8, $9, NOW(), NOW())`,
+            [actionId, actionTitle, expectedState, scoringData ? JSON.stringify(scoringData) : null, finalState.organization_id, finalState.captured_by, assignedTo, finalState.captured_at, TOOL_ID]
           );
           if (!DRY_RUN) await saveActionClaim(client, configId, actionId, h.description, h.report_span);
           await write(
@@ -504,10 +505,14 @@ async function main() {
             [crypto.randomUUID(), experienceId, actionId, finalState.organization_id]
           );
 
-          // Link the action to whichever state(s) its cited evidence photos
-          // actually belong to — the standard CWF mechanism (state_links,
-          // entity_type='action') for connecting an action to its documenting
-          // observation(s), same pattern used everywhere else in this app.
+          // Link the action to its prior state (context/existing state), same
+          // mechanism and same entity_type='action' as the evidence links below —
+          // one undifferentiated kind of "state connected to this action."
+          await write(
+            `INSERT INTO state_links (id, state_id, entity_type, entity_id, created_at) VALUES ($1, $2, 'action', $3, NOW())`,
+            [crypto.randomUUID(), initialState.id, actionId]
+          );
+
           const citedStateIds = new Set();
           for (const photoId of h.action_photo_ids || []) {
             const owningState = photoIdToStateId.get(photoId);
@@ -515,6 +520,7 @@ async function main() {
           }
           if (citedStateIds.size === 0) citedStateIds.add(finalState.id); // fallback: always link at least the final state
           for (const stateId of citedStateIds) {
+            if (stateId === initialState.id) continue; // already linked above, don't duplicate
             await write(
               `INSERT INTO state_links (id, state_id, entity_type, entity_id, created_at) VALUES ($1, $2, 'action', $3, NOW())`,
               [crypto.randomUUID(), stateId, actionId]
@@ -525,10 +531,12 @@ async function main() {
           // this bypasses that path (direct SQL insert), so queue it explicitly here too —
           // otherwise these actions silently never become searchable. Deferred until
           // after COMMIT (see below) — an SQS send can't be rolled back with the transaction.
-          const embeddingSource = composeActionEmbeddingSource({ title: actionTitle, description: actionDescription, expected_state: expectedState });
+          // policy is intentionally null for azolla-extracted actions, so this is
+          // title-only today — still non-empty, since every action has a title.
+          const embeddingSource = composeActionPolicySource({ title: actionTitle, policy: null });
           if (embeddingSource.trim()) {
             pendingEmbeddingMessages.push({
-              entity_type: 'action',
+              entity_type: 'action_policy',
               entity_id: actionId,
               embedding_source: embeddingSource,
               organization_id: finalState.organization_id,

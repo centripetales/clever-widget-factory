@@ -1,5 +1,5 @@
-import { Observation } from './observations';
 import { BaseAction } from './actions';
+import { ObservationPhoto } from './observations';
 
 /**
  * Experience - Represents a state transition (S → A → S') for learning and analysis
@@ -17,7 +17,7 @@ export interface Experience {
   entity?: Tool | Part;
   components?: {
     initial_state?: ExperienceComponent;
-    action?: ExperienceComponent;
+    actions?: ExperienceComponent[];
     final_state?: ExperienceComponent;
   };
 }
@@ -35,8 +35,15 @@ export interface ExperienceComponent {
   organization_id: string;
   created_at: string;
   
-  // Populated from joins
-  state?: Observation;
+  // Populated from joins — a lighter shape than the full Observation type,
+  // matching exactly what lambda/experiences/index.js's component queries
+  // select (s.id/state_text/captured_at/photos), not a full observation.
+  state?: {
+    id: string;
+    state_text: string | null;
+    captured_at: string;
+    photos?: ObservationPhoto[];
+  };
   action?: BaseAction;
 }
 
@@ -69,7 +76,8 @@ export interface CreateExperienceRequest {
   entity_type: 'tool' | 'part';
   entity_id: string;
   initial_state_id: string;
-  action_id?: string; // Optional - experience can exist without documented action
+  action_id?: string; // Optional - deprecated, kept for backward compat; prefer action_ids
+  action_ids?: string[]; // Optional - experience can exist without documented action
   final_state_id: string;
 }
 

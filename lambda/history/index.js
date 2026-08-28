@@ -216,6 +216,14 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE sl.entity_type = 'tool' AND sl.entity_id::text = '${escapeLiteral(toolId)}'
+          -- A state also linked to an action (its existing state / evidence) is
+          -- represented by that action's own history card — don't show it again
+          -- as a standalone observation. See docs/specs/azolla-impact-power-model.md
+          -- — "states as action context".
+          AND NOT EXISTS (
+            SELECT 1 FROM state_links sl_action
+            WHERE sl_action.state_id = s.id AND sl_action.entity_type = 'action'
+          )
         ORDER BY s.captured_at DESC
       ) t;`;
       const observationsResult = await queryJSON(observationsSql);
@@ -421,6 +429,11 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE sl.entity_type = 'part' AND sl.entity_id::text = '${escapeLiteral(partId)}'
+          -- See the matching comment in the tool observationsSql above.
+          AND NOT EXISTS (
+            SELECT 1 FROM state_links sl_action
+            WHERE sl_action.state_id = s.id AND sl_action.entity_type = 'action'
+          )
         ORDER BY s.captured_at DESC
       ) t;`;
       const observationsResult = await queryJSON(observationsSql);
