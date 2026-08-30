@@ -1,7 +1,7 @@
 import { useOrganization } from './useOrganization';
 
 export function useFeatureFlag() {
-  const { organization } = useOrganization();
+  const { organization, loading } = useOrganization();
 
   const enabledFeatures = organization?.settings?.enabled_features as string[] | undefined;
 
@@ -24,5 +24,6 @@ export function useFeatureFlag() {
   return {
     isFeatureEnabled,
     enabledFeatures: enabledFeatures ?? null,
+    isLoading: loading,
   };
 }
