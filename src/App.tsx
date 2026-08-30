@@ -37,6 +37,7 @@ import Missions from "./pages/Missions";
 import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
 import ActionPage from "./pages/ActionPage";
+import ExperiencePage from "./pages/ExperiencePage";
 import Explorations from "./pages/Explorations";
 import Audit from "./pages/Audit";
 import AuditTool from "./pages/AuditTool";
@@ -280,6 +281,24 @@ function AppContent() {
               <FeatureGuardRoute featureKey="actions" featureName="Actions">
                 <ActionPage />
               </FeatureGuardRoute>
+            </ProtectedRoute>
+          }
+        />
+        {/* Experiences: one page for both new and existing, matching the
+            /actions/new + /actions/:actionId pattern above. */}
+        <Route
+          path="/experiences/new"
+          element={
+            <ProtectedRoute>
+              <ExperiencePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/experiences/:experienceId"
+          element={
+            <ProtectedRoute>
+              <ExperiencePage />
             </ProtectedRoute>
           }
         />

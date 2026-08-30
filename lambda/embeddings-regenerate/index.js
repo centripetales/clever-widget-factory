@@ -5,7 +5,7 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const {
   composePartEmbeddingSource,
   composeToolEmbeddingSource,
-  composeActionEmbeddingSource,
+  composeActionPolicySource,
   composeIssueEmbeddingSource,
   composePolicyEmbeddingSource,
   composeStateEmbeddingSource
@@ -35,9 +35,9 @@ const ENTITY_CONFIG = {
     table: 'tools',
     composeFn: composeToolEmbeddingSource
   },
-  action: {
+  action_policy: {
     table: 'actions',
-    composeFn: composeActionEmbeddingSource
+    composeFn: composeActionPolicySource
   },
   issue: {
     table: 'issues',
@@ -115,7 +115,7 @@ exports.handler = async (event) => {
               CASE sl.entity_type
                 WHEN 'part' THEN p.name
                 WHEN 'tool' THEN t.name
-                WHEN 'action' THEN a.description
+                WHEN 'action' THEN a.title
               END
             ) FILTER (WHERE sl.id IS NOT NULL),
             ARRAY[]::text[]

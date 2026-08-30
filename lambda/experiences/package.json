@@ -4,6 +4,8 @@
   "description": "Lambda function for experience tracking CRUD operations",
   "main": "index.js",
   "dependencies": {
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "@aws-sdk/client-bedrock-runtime": "^3.0.0",
+    "@aws-sdk/client-sqs": "^3.0.0"
   }
 }

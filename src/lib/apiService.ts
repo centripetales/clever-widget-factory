@@ -346,16 +346,32 @@ function updateCacheFromResponse(endpoint: string, method: string, responseData:
     }
   } else if (endpoint.includes('/actions')) {
     if (method === 'POST') {
-      // New actions are unresolved by default — add to ['actions'] cache
-      if (optimisticId) {
-        globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) => 
+      // A newly created action can already be completed (e.g. confirming an
+      // AI-proposed action reports something that already happened) — route
+      // it the same way the PUT branch below does, instead of assuming
+      // every new action is unresolved.
+      const isCompleted = data.status === 'completed';
+      if (isCompleted) {
+        if (optimisticId) {
+          // Remove the unresolved-cache placeholder — this action belongs in completed.
+          globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) =>
+            old.filter(item => item.id !== optimisticId)
+          );
+        }
+        globalQueryClient.setQueryData(completedActionsQueryKey(), (old: any[] | undefined) => {
+          if (!old) return undefined; // Don't create cache if not yet loaded
+          const exists = old.some(item => item.id === data.id);
+          return exists ? old.map(item => item.id === data.id ? data : item) : [data, ...old];
+        });
+      } else if (optimisticId) {
+        globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) =>
           old.map(item => item.id === optimisticId ? data : item)
         );
       } else {
         globalQueryClient.setQueryData(actionsQueryKey(), (old: any[] = []) => [...old, data]);
       }
       // Also update ['actions_all'] if it exists
-      globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) => 
+      globalQueryClient.setQueryData(allActionsQueryKey(), (old: any[] | undefined) =>
         old ? [...old, data] : undefined
       );
     } else if (method === 'PUT') {
@@ -550,11 +566,12 @@ export function hasApiData(response: any): boolean {
 /**
  * Experience API Methods
  */
-import type { 
-  Experience, 
-  CreateExperienceRequest, 
-  ExperienceListParams, 
-  ExperienceListResponse 
+import type {
+  Experience,
+  CreateExperienceRequest,
+  UpdateExperienceRequest,
+  ExperienceListParams,
+  ExperienceListResponse
 } from '@/types/experiences';
 
 /**
@@ -564,6 +581,21 @@ export async function createExperience(
   request: CreateExperienceRequest
 ): Promise<{ data: Experience }> {
   return apiService.post<{ data: Experience }>('/experiences', request);
+}
+
+/**
+ * Edit an existing experience: replace the set of states/actions attached to
+ * any leg, and/or record a person's edits to attached actions' CLAIMs.
+ *
+ * Omitting a leg leaves it untouched; passing [] clears it. A component
+ * state's own text/photos are edited directly via updateState, not here —
+ * this call only manages which components belong to the experience.
+ */
+export async function updateExperience(
+  experienceId: string,
+  updates: UpdateExperienceRequest
+): Promise<{ id: string; updated: boolean }> {
+  return apiService.put(`/experiences/${experienceId}`, updates);
 }
 
 /**
@@ -594,11 +626,61 @@ export async function listExperiences(
 }
 
 /**
- * Get a single experience by ID
+ * Get a single experience by ID. Unlike list/create/update, this endpoint's
+ * lambda handler returns the experience object directly — no {data: ...}
+ * envelope (see lambda/experiences/index.js's GET /:id handler).
  */
 export async function getExperience(
   experienceId: string
-): Promise<{ data: Experience }> {
-  return apiService.get<{ data: Experience }>(`/experiences/${experienceId}`);
+): Promise<Experience> {
+  return apiService.get<Experience>(`/experiences/${experienceId}`);
+}
+
+/**
+ * Delete an experience and its component links. The underlying
+ * states/actions are untouched — this only removes the write-up grouping
+ * them together.
+ */
+export async function deleteExperience(
+  experienceId: string
+): Promise<{ id: string; deleted: boolean }> {
+  return apiService.delete(`/experiences/${experienceId}`);
+}
+
+export interface DraftExperienceProposal {
+  title?: string;
+  description?: string;
+  action_type?: 'transformative' | 'entropy_reduction';
+  confidence?: number;
+  action_photo_ids?: string[];
+  expected_state?: string;
+  expected_state_confidence?: number;
+  expected_state_basis?: string;
+  initial_state_text?: string;
+  final_state_text?: string;
+}
+
+export interface DraftExperienceResponse {
+  perspective_id: string;
+  llm_generation_config_id: string;
+  anchor_type: 'state' | 'action';
+  anchor_id: string;
+  proposal: DraftExperienceProposal;
+}
+
+/**
+ * Ask the AI to draft an experience anchored on one observation or action a
+ * person has already picked, steered by their note. Writes nothing real —
+ * only a fresh, permanent state_perspectives row holding the proposal, kept
+ * for future contrast against whatever the person actually saves.
+ */
+export async function draftExperience(params: {
+  entity_type: 'tool' | 'part';
+  entity_id: string;
+  anchor_type: 'state' | 'action';
+  anchor_id: string;
+  note: string;
+}): Promise<DraftExperienceResponse> {
+  return apiService.post('/experiences/draft', params);
 }
 

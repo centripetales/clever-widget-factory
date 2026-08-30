@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const {
   composePartEmbeddingSource,
   composeToolEmbeddingSource,
-  composeActionEmbeddingSource,
+  composeActionPolicySource,
   composeIssueEmbeddingSource,
   composePolicyEmbeddingSource,
   composeStateEmbeddingSource,
@@ -112,79 +112,89 @@ describe('composeToolEmbeddingSource', () => {
   });
 });
 
-describe('composeActionEmbeddingSource', () => {
-  test('should compose with all fields populated', () => {
+describe('composeActionPolicySource', () => {
+  test('should compose title and policy', () => {
     const action = {
-      description: 'Applied compost to banana plants',
-      evidence_description: 'Spread 2 inches of compost around base',
-      policy: 'Organic matter improves soil structure',
-      observations: 'Plants showed improved vigor after 2 weeks',
-      expected_state: 'Healthy banana plants with improved soil nutrients'
+      title: 'Applied compost to banana plants',
+      policy: 'Organic matter improves soil structure'
     };
 
-    const result = composeActionEmbeddingSource(action);
+    const result = composeActionPolicySource(action);
 
     assert.strictEqual(
       result,
-      'Applied compost to banana plants. Spread 2 inches of compost around base. Organic matter improves soil structure. Plants showed improved vigor after 2 weeks. Healthy banana plants with improved soil nutrients'
+      'Applied compost to banana plants. Organic matter improves soil structure'
     );
   });
 
-  test('should handle missing optional fields', () => {
+  test('should handle only title', () => {
     const action = {
-      description: 'Applied compost to banana plants',
-      evidence_description: 'Completed'
-      // policy, observations, and expected_state are missing
+      title: 'Applied compost to banana plants'
     };
 
-    const result = composeActionEmbeddingSource(action);
-
-    assert.strictEqual(result, 'Applied compost to banana plants. Completed');
-  });
-
-  test('should handle only description', () => {
-    const action = {
-      description: 'Applied compost to banana plants'
-    };
-
-    const result = composeActionEmbeddingSource(action);
+    const result = composeActionPolicySource(action);
 
     assert.strictEqual(result, 'Applied compost to banana plants');
   });
 
-  test('should filter out null and undefined values', () => {
+  test('should filter out null and undefined policy', () => {
     const action = {
-      description: 'Applied compost',
-      evidence_description: null,
-      policy: undefined,
-      observations: 'Good results',
-      expected_state: null
+      title: 'Applied compost',
+      policy: null
     };
 
-    const result = composeActionEmbeddingSource(action);
+    const result = composeActionPolicySource(action);
 
-    assert.strictEqual(result, 'Applied compost. Good results');
+    assert.strictEqual(result, 'Applied compost');
+
+    const action2 = { title: 'Applied compost', policy: undefined };
+    assert.strictEqual(composeActionPolicySource(action2), 'Applied compost');
   });
 
-  test('should include expected_state in embedding source', () => {
+  test('should strip HTML tags from policy', () => {
     const action = {
-      description: 'Pour concrete foundation',
-      expected_state: 'Level, crack-free foundation cured for 7 days'
+      title: 'Pour concrete foundation',
+      policy: '<p>Level, crack-free foundation cured for 7 days</p>'
     };
 
-    const result = composeActionEmbeddingSource(action);
+    const result = composeActionPolicySource(action);
 
     assert.strictEqual(result, 'Pour concrete foundation. Level, crack-free foundation cured for 7 days');
   });
 
-  test('should handle only expected_state', () => {
+  test('should strip structured HTML (headings, rules) and decode entities', () => {
     const action = {
-      expected_state: 'Healthy banana plants with improved soil nutrients'
+      title: 'Create a plant starter soil',
+      policy: '<p></p><hr><h2>Protocol: The Fungal Fortress (Chili &amp; Wing Bea)</h2>'
     };
 
-    const result = composeActionEmbeddingSource(action);
+    const result = composeActionPolicySource(action);
 
-    assert.strictEqual(result, 'Healthy banana plants with improved soil nutrients');
+    assert.strictEqual(result, 'Create a plant starter soil. Protocol: The Fungal Fortress (Chili & Wing Bea)');
+  });
+
+  test('should not include description, expected_state, or evidence_description', () => {
+    const action = {
+      title: 'Pour concrete foundation',
+      description: 'This is state-shaped context, not the action itself',
+      evidence_description: 'Should not appear',
+      observations: 'Should not appear',
+      expected_state: 'Should not appear — state-shaped, belongs to a state, not this vector'
+    };
+
+    const result = composeActionPolicySource(action);
+
+    assert.strictEqual(result, 'Pour concrete foundation');
+  });
+
+  test('should return empty string when policy is empty/whitespace-only HTML and title is absent', () => {
+    const action = {
+      policy: '<p></p>'
+    };
+
+    const result = composeActionPolicySource(action);
+
+    assert.strictEqual(result, '');
   });
 });
 

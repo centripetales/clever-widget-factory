@@ -116,7 +116,78 @@ exports.handler = async (event) => {
           a.updated_at,
           a.completed_at,
           COALESCE(om.full_name, 'System') as created_by_name,
-          COALESCE(assignee.full_name, '') as assigned_to_name
+          COALESCE(assignee.full_name, '') as assigned_to_name,
+          EXISTS (
+            SELECT 1 FROM state_links sl_photo
+            JOIN state_photos sp ON sp.state_id = sl_photo.state_id
+            WHERE sl_photo.entity_type = 'action' AND sl_photo.entity_id = a.id
+          ) as has_photos,
+          -- Either field is only ever written by the batch extraction
+          -- script — no UI form sets either one, so their presence at all
+          -- (regardless of value) reliably marks a machine-generated
+          -- action. Kept in the DB either way (used elsewhere, e.g. a
+          -- coverage-over-time chart) — this only controls History display.
+          ((a.scoring_data ? 'llm_generation_config_id') OR (a.scoring_data ? 'extraction_confidence')) as is_auto_generated,
+          -- Earliest EXIF/file date among this action's linked evidence
+          -- photos — an action can be logged into the system well after the
+          -- event it documents, so its own created_at is not a reliable
+          -- display date when better evidence exists.
+          (
+            SELECT MIN(pme.captured_at)
+            FROM state_links sl_photo
+            JOIN state_photos sp ON sp.state_id = sl_photo.state_id
+            JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
+            WHERE sl_photo.entity_type = 'action' AND sl_photo.entity_id = a.id
+          ) as earliest_photo_captured_at,
+          -- Most recent EXIF/file date among this action's linked evidence
+          -- photos — used to position/date the action in the History feed
+          -- by the most recent image added to it, when one exists.
+          (
+            SELECT MAX(pme.captured_at)
+            FROM state_links sl_photo
+            JOIN state_photos sp ON sp.state_id = sl_photo.state_id
+            JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
+            WHERE sl_photo.entity_type = 'action' AND sl_photo.entity_id = a.id
+          ) as latest_photo_captured_at,
+          -- Observations linked to this action are deliberately excluded
+          -- from the standalone Observations list above (they're meant to
+          -- be read as this action's own evidence, not duplicated) — so
+          -- without surfacing them here, that content is invisible
+          -- everywhere: not shown standalone, and the action card itself
+          -- previously showed only the title/status.
+          (
+            SELECT json_agg(json_build_object(
+              'id', s_linked.id,
+              'state_text', s_linked.state_text,
+              'captured_at', s_linked.captured_at,
+              'photos', (
+                SELECT json_agg(json_build_object(
+                  'photo_url', sp_linked.photo_url,
+                  'photo_description', sp_linked.photo_description
+                ) ORDER BY sp_linked.photo_order)
+                FROM state_photos sp_linked
+                WHERE sp_linked.state_id = s_linked.id
+              ),
+              -- A measurement-shaped observation (e.g. Coverage %) often has
+              -- no state_text at all — the reading itself IS the content.
+              -- Without this, that observation looked empty here even
+              -- though it's exactly the data a coverage-over-time chart
+              -- elsewhere in the app is built from.
+              'metrics', (
+                SELECT json_agg(json_build_object(
+                  'name', m_linked.name,
+                  'value', ms_linked.value,
+                  'unit', m_linked.unit
+                ))
+                FROM metric_snapshots ms_linked
+                JOIN metrics m_linked ON m_linked.metric_id = ms_linked.metric_id
+                WHERE ms_linked.state_id = s_linked.id
+              )
+            ) ORDER BY s_linked.captured_at)
+            FROM state_links sl_linked
+            JOIN states s_linked ON s_linked.id = sl_linked.state_id
+            WHERE sl_linked.entity_type = 'action' AND sl_linked.entity_id = a.id
+          ) as linked_observations
         FROM actions a
         LEFT JOIN LATERAL (
           SELECT full_name FROM organization_members
@@ -158,6 +229,10 @@ exports.handler = async (event) => {
               'id', sp.id,
               'photo_url', sp.photo_url,
               'photo_description', sp.photo_description,
+              -- The photo's own EXIF/file date — a synthesized state's own
+              -- captured_at is just when the observation was logged, which
+              -- can be well after the photo was actually taken.
+              'captured_at', pme.captured_at,
               'transcription', (
                 SELECT s_trans.state_text 
                 FROM state_links sl_trans
@@ -193,6 +268,7 @@ exports.handler = async (event) => {
               )
             ) ORDER BY sp.photo_order)
             FROM state_photos sp
+            LEFT JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
             WHERE sp.state_id = s.id
           ) as photos,
           (
@@ -216,6 +292,16 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE sl.entity_type = 'tool' AND sl.entity_id::text = '${escapeLiteral(toolId)}'
+          -- Previously excluded when also linked to an action, on the theory
+          -- that the action's own card would represent it. In practice the
+          -- action_id -> state_id links here have no attribution of their
+          -- own (no created_by), and some were found to be added by a
+          -- backfill process weeks after the observation was actually
+          -- captured — a person's own real observation shouldn't be hidden
+          -- from the standalone feed based on a link they may never have
+          -- made. It still also shows inside the action's card, if that
+          -- action itself is visible — some duplication is preferable to
+          -- silently hiding real content.
         ORDER BY s.captured_at DESC
       ) t;`;
       const observationsResult = await queryJSON(observationsSql);
@@ -272,8 +358,13 @@ exports.handler = async (event) => {
       
       actions.forEach(a => {
         timeline.push({
+          // Most recent evidence photo wins when one exists — that's the
+          // most meaningful "when did this actually happen" signal.
+          // completed_at is the next best guess; created_at (just when the
+          // row was logged, which can be weeks after the fact for a
+          // batch-generated action) is the last resort.
           type: 'action_created',
-          timestamp: a.created_at,
+          timestamp: a.latest_photo_captured_at || a.completed_at || a.created_at,
           description: `Action: ${a.title}`,
           data: a
         });
@@ -363,6 +454,10 @@ exports.handler = async (event) => {
               'id', sp.id,
               'photo_url', sp.photo_url,
               'photo_description', sp.photo_description,
+              -- The photo's own EXIF/file date — a synthesized state's own
+              -- captured_at is just when the observation was logged, which
+              -- can be well after the photo was actually taken.
+              'captured_at', pme.captured_at,
               'transcription', (
                 SELECT s_trans.state_text 
                 FROM state_links sl_trans
@@ -398,6 +493,7 @@ exports.handler = async (event) => {
               )
             ) ORDER BY sp.photo_order)
             FROM state_photos sp
+            LEFT JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
             WHERE sp.state_id = s.id
           ) as photos,
           (
@@ -421,6 +517,8 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE sl.entity_type = 'part' AND sl.entity_id::text = '${escapeLiteral(partId)}'
+          -- See the matching comment in the tool observationsSql above —
+          -- no longer excluded just for having an action link.
         ORDER BY s.captured_at DESC
       ) t;`;
       const observationsResult = await queryJSON(observationsSql);

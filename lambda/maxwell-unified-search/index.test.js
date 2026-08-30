@@ -35,7 +35,7 @@ import { buildSubquery, VALID_ENTITY_TYPES } from './index.js';
  * These are the types that trigger the bug — each has a JOIN like:
  *   JOIN <table> t ON ue.entity_id::uuid = t.id
  */
-const JOIN_ENTITY_TYPES = ['part', 'tool', 'action', 'issue', 'policy', 'financial_record'];
+const JOIN_ENTITY_TYPES = ['part', 'tool', 'action_policy', 'issue', 'policy', 'financial_record'];
 
 /**
  * A representative embedding vector string (matches the format the handler

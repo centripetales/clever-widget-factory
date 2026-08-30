@@ -1,4 +1,4 @@
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useEnabledMembers } from '@/hooks/useOrganizationMembers';
 import { ActionForm } from '@/components/UnifiedActionDialog';
 import { ArrowLeft } from 'lucide-react';
@@ -10,6 +10,7 @@ export default function ActionPage() {
   const { actionId } = useParams<{ actionId?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { members: profiles } = useEnabledMembers();
 
   const isNew = actionId === 'new' || !actionId;
@@ -30,7 +31,13 @@ export default function ActionPage() {
     : undefined;
 
   const handleBack = () => {
-    if (missionId) {
+    // Prefer returning to wherever the person actually came from (e.g. a
+    // container's History tab) over the generic list — set by callers via
+    // Link `state={{ from: ... }}`.
+    const from = (location.state as { from?: string } | null)?.from;
+    if (from) {
+      navigate(from);
+    } else if (missionId) {
       navigate(`/missions`);
     } else {
       navigate('/actions');

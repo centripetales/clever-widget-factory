@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Backfills embedding generation for actions created via direct SQL insert
- * (scripts/azolla-experience-form.js), which bypassed the normal
- * lambda/actions/index.js API path and therefore never queued an embedding
- * job. Reuses the exact same SQS contract the real API uses
- * (entity_type/entity_id/embedding_source/organization_id on
- * cwf-embeddings-queue) so these actions become searchable the same way
- * any other action is.
+ * Backfills action_policy embeddings for every action missing one (or, with
+ * --force, replaces all of them). Originally scoped to azolla-sasr-tagged
+ * actions created via direct SQL insert (which bypass lambda/actions/index.js's
+ * own embedding queueing); broadened to a general re-embed tool for the
+ * action -> action_policy cutover (see docs/specs/azolla-impact-power-model.md
+ * — "states as action context"), since every existing action's embedding
+ * needs replacing under the new title+policy composition regardless of how
+ * it was created.
  *
- * Usage: node scripts/azolla-backfill-action-embeddings.js
+ * Usage:
+ *   node scripts/azolla-backfill-action-embeddings.js           # only actions with no action_policy row yet
+ *   node scripts/azolla-backfill-action-embeddings.js --force   # re-embed every action, replacing existing rows
  */
 
 const { Pool } = require('pg');
@@ -31,6 +34,8 @@ if (fs.existsSync(envPath)) {
   }
 }
 
+const FORCE = process.argv.includes('--force');
+
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
 const pool = new Pool({
@@ -43,39 +48,52 @@ const pool = new Pool({
 });
 const sqs = new SQSClient({ region: 'us-west-2' });
 
-// Matches lambda/shared/embedding-composition.js composeActionEmbeddingSource exactly.
-function composeActionEmbeddingSource(action) {
-  const parts = [action.title, action.description].filter(Boolean);
-  return parts.join('. ');
+// Matches lambda/shared/embedding-composition.js composeActionPolicySource exactly —
+// title + policy only, HTML-stripped. See that file for why.
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function composeActionPolicySource(action) {
+  return [action.title, stripHtml(action.policy)].filter(Boolean).join('. ');
 }
 
 async function main() {
   const client = await pool.connect();
   try {
     const actions = await client.query(`
-      SELECT id, title, description, organization_id
+      SELECT id, title, policy, organization_id
       FROM actions
-      WHERE description LIKE '%azolla-sasr%'
-      AND NOT EXISTS (
-        SELECT 1 FROM unified_embeddings ue WHERE ue.entity_type = 'action' AND ue.entity_id = actions.id
-      )
+      ${FORCE ? '' : `WHERE NOT EXISTS (
+        SELECT 1 FROM unified_embeddings ue WHERE ue.entity_type = 'action_policy' AND ue.entity_id = actions.id
+      )`}
     `);
-    console.log(`${actions.rows.length} azolla-sasr actions missing embeddings`);
+    console.log(`${actions.rows.length} actions ${FORCE ? '(--force: all actions)' : 'missing an action_policy embedding'}`);
 
+    let queued = 0, skipped = 0;
     for (const action of actions.rows) {
-      const embeddingSource = composeActionEmbeddingSource(action);
-      if (!embeddingSource.trim()) { console.log(`Skipping ${action.id.slice(0, 8)} — empty embedding source`); continue; }
+      const embeddingSource = composeActionPolicySource(action);
+      if (!embeddingSource.trim()) { console.log(`Skipping ${action.id.slice(0, 8)} — empty embedding source`); skipped++; continue; }
       await sqs.send(new SendMessageCommand({
         QueueUrl: EMBEDDINGS_QUEUE_URL,
         MessageBody: JSON.stringify({
-          entity_type: 'action',
+          entity_type: 'action_policy',
           entity_id: action.id,
           embedding_source: embeddingSource,
           organization_id: action.organization_id,
         }),
       }));
-      console.log(`Queued embedding for "${action.title}" (${action.id.slice(0, 8)})`);
+      queued++;
     }
+    console.log(`Queued ${queued} embedding(s), skipped ${skipped} (empty source).`);
   } finally {
     client.release();
     await pool.end();
