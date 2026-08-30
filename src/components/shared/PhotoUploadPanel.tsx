@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -11,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { X, GripVertical, Loader2, AlertCircle, Camera, ImagePlus, Sparkles } from 'lucide-react';
+import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { apiService } from '@/lib/apiService';
@@ -29,6 +31,12 @@ export interface PhotoItem {
   /** Captured client-side at selection time — see writeup below. Write-once,
    *  never re-derived for existing photos (no live File to read it from). */
   client_captured_at?: string;
+  /** The photo's own EXIF/file date for an already-existing photo, as
+   *  extracted server-side (photo_metadata_extractions) — distinct from
+   *  client_captured_at, which only ever exists for a photo picked in this
+   *  session. Shown when showCapturedDate is set, since when a photo was
+   *  actually taken matters for building an accurate S -> A -> S' timeline. */
+  captured_at?: string | null;
   capture_method?: 'camera' | 'gallery';
   original_filename?: string;
   original_file_size_bytes?: number;
@@ -48,6 +56,11 @@ export interface PhotoUploadPanelProps {
   showDescriptions?: boolean;
   disabled?: boolean;
   className?: string;
+  /** Show each photo's own date (captured_at, falling back to
+   *  client_captured_at) above its thumbnail. Opt-in — most callers don't
+   *  need this, but when building an experience's timeline, when a photo
+   *  was actually taken is itself meaningful information. */
+  showCapturedDate?: boolean;
   /** When provided, uploads files immediately on selection. Return the public URL. */
   onEagerUpload?: (file: File) => Promise<{ url: string }>;
   onPhotoAnalyzed?: (index: number, description: string, extractedGuids: string[]) => void;
@@ -164,6 +177,7 @@ export function PhotoUploadPanel({
   showDescriptions = true,
   disabled = false,
   className,
+  showCapturedDate = false,
   onEagerUpload,
   onPhotoAnalyzed,
 }: PhotoUploadPanelProps) {
@@ -175,6 +189,11 @@ export function PhotoUploadPanel({
 
 
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  // Full-res preview as an in-page dialog, not a new-tab/window.open — some
+  // embedded/webview browser contexts treat window.open as same-tab
+  // navigation, which unmounts the page (and any unsaved edits) entirely
+  // when the person hits Back.
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   const photosRef = useRef(photos);
   photosRef.current = photos;
@@ -433,7 +452,7 @@ export function PhotoUploadPanel({
     if (photo.isUploading) return;
     const url = getViewUrl(photo);
     if (url) {
-      window.open(url, '_blank');
+      setLightboxUrl(url);
     }
   };
 
@@ -529,7 +548,15 @@ export function PhotoUploadPanel({
                 <GripVertical className="h-4 w-4 text-muted-foreground" />
               </div>
 
-              <div className="flex-shrink-0 w-24 relative">
+              <div className="flex-shrink-0 w-24">
+                {showCapturedDate && (
+                  <p className="text-[10px] text-muted-foreground text-center mb-1 truncate">
+                    {photo.captured_at || photo.client_captured_at
+                      ? format(new Date(photo.captured_at || photo.client_captured_at!), 'MMM d, yyyy')
+                      : 'No date'}
+                  </p>
+                )}
+                <div className="relative">
                 {getPreviewSrc(photo) ? (
                   <img
                     src={getPreviewSrc(photo)}
@@ -565,6 +592,7 @@ export function PhotoUploadPanel({
                     <AlertCircle className="h-5 w-5 text-destructive" />
                   </div>
                 )}
+                </div>
               </div>
 
               <div className="flex-1 flex flex-col gap-1.5 min-w-0">
@@ -618,6 +646,18 @@ export function PhotoUploadPanel({
             ` · ${photos.filter((p) => p.isUploading).length} uploading`}
         </p>
       )}
+
+      <Dialog open={!!lightboxUrl} onOpenChange={(open) => !open && setLightboxUrl(null)}>
+        <DialogContent className="max-w-[90vw] w-fit h-[90vh] p-2 border-none bg-transparent shadow-none flex items-center justify-center">
+          {lightboxUrl && (
+            <img
+              src={lightboxUrl}
+              alt="Full resolution"
+              className="max-w-full max-h-full object-contain rounded"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

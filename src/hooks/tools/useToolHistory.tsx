@@ -11,11 +11,18 @@ export interface ObservationHistoryEntry {
   observed_by: string;
   observed_by_name: string;
   observed_at: string;
+  // When this observation row was actually created — an immutable
+  // timestamp, unlike captured_at/observed_at which is editable and can end
+  // up reflecting a later edit rather than when the observation happened.
+  created_at?: string;
   photos?: Array<{
     id: string;
     photo_url: string;
     photo_description?: string;
     photo_order: number;
+    // The photo's own EXIF/file date, when extracted — distinct from the
+    // observation's observed_at, which is just when it was logged.
+    captured_at?: string | null;
   }>;
   metrics?: Array<{
     snapshot_id: string;
@@ -43,6 +50,29 @@ export interface AssetHistoryEntry {
   action_id?: string;
   action_title?: string;
   action_status?: string;
+  // True if any observation linked to this action has a photo — used to
+  // gate the quick-delete button in the history feed to evidence-free
+  // (typically auto-generated) actions only.
+  action_has_photos?: boolean;
+  // Earliest EXIF/file date among this action's linked evidence photos, when
+  // any were extracted — an action can be logged well after the event it
+  // documents, so its own changed_at is not a reliable display date.
+  action_earliest_photo_captured_at?: string | null;
+  // Observations linked to this action — deliberately excluded from the
+  // standalone Observations list (they're this action's own evidence, not
+  // a separate entry), so this is the only place their content surfaces.
+  action_linked_observations?: Array<{
+    id: string;
+    state_text: string | null;
+    captured_at: string;
+    photos?: Array<{ photo_url: string; photo_description: string | null }>;
+    metrics?: Array<{ name: string; value: string; unit?: string | null }>;
+  }>;
+  // Set only by the batch extraction script (scoring_data carries fields no
+  // UI form ever writes) — used to keep auto-generated actions out of the
+  // standalone History feed while leaving the underlying rows alone (they
+  // still feed things like the coverage-over-time chart).
+  action_is_auto_generated?: boolean;
 }
 
 export interface ShareHistoryEntry {
@@ -87,6 +117,7 @@ export const useToolHistory = (toolId?: string) => {
           observed_by: entry.data.observed_by,
           observed_by_name: entry.data.observed_by_name,
           observed_at: entry.data.observed_at,
+          created_at: entry.data.created_at,
           photos: entry.data.photos,
           metrics: entry.data.metrics
         } as ObservationHistoryEntry;
@@ -131,7 +162,11 @@ export const useToolHistory = (toolId?: string) => {
           notes: entry.data.description,
           action_id: entry.data.id,
           action_title: entry.data.title,
-          action_status: entry.data.status
+          action_status: entry.data.status,
+          action_has_photos: entry.data.has_photos,
+          action_earliest_photo_captured_at: entry.data.earliest_photo_captured_at,
+          action_linked_observations: entry.data.linked_observations,
+          action_is_auto_generated: entry.data.is_auto_generated
         } as AssetHistoryEntry;
 
       default:

@@ -566,11 +566,12 @@ export function hasApiData(response: any): boolean {
 /**
  * Experience API Methods
  */
-import type { 
-  Experience, 
-  CreateExperienceRequest, 
-  ExperienceListParams, 
-  ExperienceListResponse 
+import type {
+  Experience,
+  CreateExperienceRequest,
+  UpdateExperienceRequest,
+  ExperienceListParams,
+  ExperienceListResponse
 } from '@/types/experiences';
 
 /**
@@ -583,13 +584,16 @@ export async function createExperience(
 }
 
 /**
- * Edit an existing experience: repoint initial_state, and/or replace the
- * full set of attached actions. final_state's own text/photos are edited
- * directly via updateState, not through this call.
+ * Edit an existing experience: replace the set of states/actions attached to
+ * any leg, and/or record a person's edits to attached actions' CLAIMs.
+ *
+ * Omitting a leg leaves it untouched; passing [] clears it. A component
+ * state's own text/photos are edited directly via updateState, not here —
+ * this call only manages which components belong to the experience.
  */
 export async function updateExperience(
   experienceId: string,
-  updates: { initial_state_id?: string; final_state_id?: string; action_ids?: string[] }
+  updates: UpdateExperienceRequest
 ): Promise<{ id: string; updated: boolean }> {
   return apiService.put(`/experiences/${experienceId}`, updates);
 }
@@ -622,78 +626,61 @@ export async function listExperiences(
 }
 
 /**
- * Get a single experience by ID
+ * Get a single experience by ID. Unlike list/create/update, this endpoint's
+ * lambda handler returns the experience object directly — no {data: ...}
+ * envelope (see lambda/experiences/index.js's GET /:id handler).
  */
 export async function getExperience(
   experienceId: string
-): Promise<{ data: Experience }> {
-  return apiService.get<{ data: Experience }>(`/experiences/${experienceId}`);
+): Promise<Experience> {
+  return apiService.get<Experience>(`/experiences/${experienceId}`);
 }
 
 /**
- * Run AI extraction over a container's observation history, proposing
- * candidate actions as EXPERIENCE_PERSPECTIVE rows. Never creates a real
- * action on its own — a person reviews and confirms via useExperienceSuggestion.
- * POSTs to the same path listExperienceSuggestions GETs from — POST generates
- * suggestions, GET lists them.
+ * Delete an experience and its component links. The underlying
+ * states/actions are untouched — this only removes the write-up grouping
+ * them together.
  */
-export async function generateExperienceSuggestions(
-  entity_type: 'tool' | 'part',
-  entity_id: string
-): Promise<{ pairs_processed: number; experiences_found: number; message?: string }> {
-  return apiService.post('/experiences/suggestions', { entity_type, entity_id });
+export async function deleteExperience(
+  experienceId: string
+): Promise<{ id: string; deleted: boolean }> {
+  return apiService.delete(`/experiences/${experienceId}`);
 }
 
-export interface ExperienceSuggestion {
-  perspective_id: string;
-  hypothesis_index: number;
-  final_state_id: string;
-  prior_state_id: string;
-  final_captured_at: string;
-  title: string;
-  description: string;
-  action_type: 'transformative' | 'entropy_reduction';
-  confidence: number;
-  expected_state: string | null;
-  expected_state_confidence: number | null;
-  expected_state_basis: string | null;
-  photos: { id: string; state_id: string; photo_url: string; photo_description: string | null }[];
-  created_at: string;
-}
-
-/**
- * List un-dismissed, unconfirmed AI-proposed action hypotheses for a container.
- */
-export async function listExperienceSuggestions(
-  entity_type: 'tool' | 'part',
-  entity_id: string
-): Promise<{ data: ExperienceSuggestion[] }> {
-  return apiService.get(`/experiences/suggestions?entity_type=${entity_type}&entity_id=${entity_id}`);
-}
-
-/**
- * Confirm ("use") one AI-proposed hypothesis, creating the real action.
- * Fields are editable by the person before submitting.
- */
-export async function useExperienceSuggestion(params: {
-  perspective_id: string;
-  hypothesis_index: number;
-  title: string;
+export interface DraftExperienceProposal {
+  title?: string;
   description?: string;
   action_type?: 'transformative' | 'entropy_reduction';
+  confidence?: number;
+  action_photo_ids?: string[];
   expected_state?: string;
-}): Promise<any> {
-  return apiService.post('/experiences/use', params);
+  expected_state_confidence?: number;
+  expected_state_basis?: string;
+  initial_state_text?: string;
+  final_state_text?: string;
+}
+
+export interface DraftExperienceResponse {
+  perspective_id: string;
+  llm_generation_config_id: string;
+  anchor_type: 'state' | 'action';
+  anchor_id: string;
+  proposal: DraftExperienceProposal;
 }
 
 /**
- * Dismiss one AI-proposed hypothesis — marked in place on its own perspective,
- * no new table. It will not be re-surfaced by a later suggestions run.
+ * Ask the AI to draft an experience anchored on one observation or action a
+ * person has already picked, steered by their note. Writes nothing real —
+ * only a fresh, permanent state_perspectives row holding the proposal, kept
+ * for future contrast against whatever the person actually saves.
  */
-export async function dismissExperienceSuggestion(
-  perspective_id: string,
-  hypothesis_index: number
-): Promise<{ perspective_id: string; hypothesis_index: number; dismissed: boolean }> {
-  return apiService.post('/experiences/dismiss', { perspective_id, hypothesis_index });
+export async function draftExperience(params: {
+  entity_type: 'tool' | 'part';
+  entity_id: string;
+  anchor_type: 'state' | 'action';
+  anchor_id: string;
+  note: string;
+}): Promise<DraftExperienceResponse> {
+  return apiService.post('/experiences/draft', params);
 }
 

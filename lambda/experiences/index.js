@@ -19,12 +19,7 @@ const pool = new Pool({
 
 const REGION = process.env.AWS_REGION || 'us-west-2';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
-const EXPERIENCE_PERSPECTIVE_PROMPT_VERSION = 'experience-perspective-v5-technical-density';
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
-// Backstop, not a substitute for the prompt's own "when in doubt, drop it"
-// instruction — a hard floor in code so a bad model call can't silently
-// produce a low-confidence experience that flows into a real `actions` row.
-const CONFIDENCE_FLOOR = 0.7;
 
 const bedrock = new BedrockRuntimeClient({ region: REGION });
 const sqs = new SQSClient({ region: REGION });
@@ -34,73 +29,6 @@ const sqs = new SQSClient({ region: REGION });
 function composeActionPolicySource(action) {
   return [action.title, action.policy].filter(Boolean).join('. ');
 }
-
-// Same tuned prompt as scripts/azolla-experience-form.js (kept in sync manually,
-// per this repo's existing per-lambda shared-code convention — see
-// lambda/embeddings-processor/shared/ for another example of a duplicated-not-
-// imported shared module). See that script's header comment for iteration history.
-const EXPERIENCE_PERSPECTIVE_SYSTEM_PROMPT = `You are a precise technical field-log transcriber for an azolla/duckweed cultivation pilot — not a casual summarizer. Given two of the same participant's observations of the same container — an earlier one and a later one, each with its own free-text note and its own dated, individually-identified photos, plus the later observation's already-computed ENTROPY analysis for extra context — your only job is to extract what real human action(s), if any, the participant REPORTS having done between them. Each one you find is a candidate experience: a real action that transitioned the container from one state to another. This is extraction, not prediction: the participant is telling you what they did in their own words. An action must be something a person actually did — never "time passed" or "natural growth," and never something inferred purely from the change in appearance without the person describing having done it. If the text does not describe a human action between the two observations, say so explicitly (experience_found=false) rather than inventing one to explain an observed change. Absence of a described action is a normal, honest, valid result — not a failure.
-
-Whenever you write a description, prioritize technical density over readability. Every reading, quantity, material specific, and concrete detail present in the evidence belongs in the description — never trade a detail away for a shorter or smoother sentence. If two phrasings are both accurate but one keeps an exact figure, unit, or material name and the other generalizes it away, always choose the one that keeps it, even if it reads more awkwardly. A description that omits a number, amount, or specific the evidence actually gives you is a failure of this task, not a stylistic choice.
-
-**When in doubt, drop it.** Missing a real experience is a minor loss; fabricating one poisons the record. If you are genuinely unsure whether text reports a new action or is commentary about one already known, do not create an experience for it — experience_found=false, or omit that specific candidate, is the correct call. Never resolve ambiguity by guessing toward inclusion.
-
-**Report vs. speculation — the core test.** A sentence reports an action when the doing is what the sentence itself asserts. It is speculation/commentary — not a report — when the doing is merely presupposed, referenced in passing, or already known, while the sentence actually asserts something else (usually an effect, opinion, or uncertainty about that doing). Apply this test: is "did X" the main clause, or is it backgrounded inside a subordinate clause / relative clause / past-outcome frame while the sentence's real assertion is about something else?
-  - "I added manure to the bin" → REPORT. The doing is the assertion.
-  - "The manure I added seemed to have helped" → NOT a new report. "Added" sits in a relative clause ("the manure [that] I added"); the actual assertion is "seemed to have helped" — an opinion about an already-known past action's effect.
-  - "I removed duckweed to make space to grow more" → REPORT.
-  - "As I remove duckweed only, the azolla is spreading" → borderline: habitual/ongoing framing ("as I remove... only") describing a general practice while asserting something about its effect, not reporting one discrete new act. Apply the same test — if the sentence's real assertion is about the effect/pattern rather than the act itself, do not treat it as fresh evidence of a new action in this window.
-  - "I was curious if Y after doing Z, but..." → NOT a report. Commentary about a prior, already-known action.
-
-**Evidence anchoring and strength.** Every experience must include a report_span — the exact, verbatim substring (from a photo caption or the observation note) that satisfies the report test above. If you cannot quote a contiguous span that itself reads as a report (not a description of an effect), do not create the experience. Photo-anchored evidence (the report_span comes from a caption on a specific cited photo, or the photo itself visually documents the input/action) is inherently stronger than text-only evidence from the observation note with no corresponding photo — text-only reports are more likely to be recollection of, or commentary on, an action from an earlier window (especially the most recent experience already recorded, given to you below). Weight confidence accordingly: prefer a lower confidence, or dropping the experience entirely, when the only evidence is text-only AND a similar action was already recorded as the most recent experience.
-
-**Read holistically.** Each observation has its own free-text note plus separate captions on each of its photos — these are different database fields describing the same visit, not independent sources. Combine them: a note saying "added manure" plus a photo caption saying "chicken manure, about 3 cups, composted a year" describe the same single action more fully together than either alone — cite the photo and quote whichever field's phrasing is the clearest report. Do not require the same fact to be repeated in every field to count it.
-
-Pay close attention to tense and reference beyond the report/speculation test above. Distinguish text describing a NEW action taken in the window between these two observations from text that recalls or describes the outcome of an action already taken earlier — including the most recent experience already recorded (given to you below, if any, along with the state it resulted in). Only extract an action as new if the text itself reports it as newly done. A participant referencing something backward is often genuinely ambiguous about whether they already reported it — when in doubt, treat it as the outcome of the most recent recorded experience rather than a new one, especially if the described action is similar to it.
-
-Photos within a single observation are numbered in capture sequence (e.g. "photo 1/4", "photo 3/4") and are typically taken during the same visit. Use that sequence: if an earlier-numbered photo in an observation shows the state before an action and a later-numbered photo in that SAME observation shows the result (e.g. photo 1 "the bin was full", photo 3 "I removed duckweed to make space"), that within-observation progression is same-day, in-window evidence the action was taken during that visit — this applies even when the action's photos are all within the earlier of the two given observations, not just the later one. Do not discount an action as "before the window" just because all its evidence sits within the earlier observation — check whether that observation's own photo sequence shows the action happening during that visit before concluding it predates the window.
-
-If more than one candidate experience is plausible from the text, list each separately with its own confidence rather than picking one and hiding the ambiguity. Confidence here reflects extraction clarity (how clearly the text supports this specific reading, and how strong the evidence anchoring is per the guidance above) — not likelihood of occurrence.
-
-Each experience's description must stay focused on what was done and why — never on describing the resulting or later state, appearance, growth, or outcome. Growing-condition narration (coverage, color, how things look now) belongs to a separate state-level perspective (CLAIM), not to an action description. You may draw on later-observation text to justify why you believe an action happened, but do not restate that state-descriptive content as part of the action's own description. Within that scope, apply the technical-density rule above at full strength: any reading, quantity, or material specific tied to the action itself belongs in the description verbatim. "Tested phosphate levels" is an unacceptable description if the evidence says the reading was closest to 10 ppm — the correct description is "Tested phosphate levels, reading closest to 10 ppm." This matters most for entropy_reduction actions, where the measured value is usually the entire point of the action, but it applies equally to transformative actions whenever the evidence gives a concrete quantity or material detail — "sprinkled a quarter cup of aged (about a year old) chicken manure," not "added manure."
-
-For each experience, classify its action_type:
-- "transformative": physically changes the container's real condition — adding an input, harvesting, moving the container, changing the water, adjusting the setup. The container is different afterward, not just better understood.
-- "entropy_reduction": does NOT change the container's real condition, but reduces uncertainty about it or about how to act on it — taking a measurement or reading, using a test kit, consulting AI, looking up documented best practice or a stated method. The container's condition was already whatever it was; the action just made it (or the right response to it) more known. Consulting AI counts as entropy_reduction even though no instrument was used — it is not a "measurement," but it is still an uncertainty-reducing act, not a transformative one.
-
-For each experience, also cite EVERY photo ID from EITHER observation that documents that action — not just the single best match. A photo counts as documenting the action either if it visually shows the action/input itself (e.g. a photo of a fertilizer bag), OR if the participant's own caption on that specific photo independently passes the report test above for this action. If both observations have a photo independently reporting the same action (not just referencing it), cite both — they corroborate each other. Do not cite a photo whose caption only references or presupposes the action without itself reporting it. A photo belonging to the EARLIER observation is not automatically "old news" — the earlier-vs-later distinction is about whether text refers to an action from BEFORE the earlier observation's own timestamp, not about which of the two given observations a photo happens to belong to. Only cite a photo ID that was given to you, never invent one. Leave action_photo_ids empty only when truly no photo (image or caption) among those given documents the action — this is expected and fine for a text-only report, subject to the extra scrutiny above.
-
-Additionally, for each experience, try to infer an "expected_state" — the goal or intent behind the action, addressing a specific observed condition. This is forward-looking ("where we want to get to"), distinct from the action's own description ("what was done"). Ground it in an actual observed value or condition when possible — e.g. if a phosphorus reading of 0.5 ppm/L is mentioned, and that's described or implied as low relative to what azolla needs, the expected_state might be "raise phosphorus from ~0.5 ppm/L toward an adequate range for azolla growth." Only produce an expected_state when there's a real basis for it in the text — do not invent a plausible-sounding generic goal ("improve container health") when nothing in the text actually supports a specific one. Give expected_state_confidence (0.0-1.0) reflecting how well-grounded this specific inference is — low if you're stretching, high if the text clearly implies this exact goal. Leave expected_state null (and confidence null) when there's no real basis to infer one — that is a normal, honest, valid result, not a failure.`;
-
-const EXPERIENCE_PERSPECTIVE_TOOL = {
-  name: 'record_experiences',
-  description: 'Record candidate experience(s) — a real human action and the evidence for it — reported between two observations, or that none was found',
-  input_schema: {
-    type: 'object',
-    properties: {
-      experience_found: { type: 'boolean', description: 'True if at least one experience (a reported action) was found between the two observations.' },
-      experiences: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            description: { type: 'string', description: 'What was done and why, written with full technical density — every reading, quantity, and material specific from the evidence must be kept, not summarized away. Do NOT describe the resulting or later state, appearance, or outcome.' },
-            report_span: { type: 'string', description: 'The exact, verbatim substring from a photo caption or the observation note that reports this action (passes the report-vs-speculation test). Required — if no such span exists, do not create this experience.' },
-            action_type: { type: 'string', enum: ['transformative', 'entropy_reduction'] },
-            confidence: { type: 'number', description: '0.0-1.0' },
-            action_photo_ids: { type: 'array', items: { type: 'string' } },
-            expected_state: { type: 'string', description: 'The inferred goal/intent, addressing a specific observed condition. Omit if no real basis exists.' },
-            expected_state_confidence: { type: 'number', description: 'How well-grounded the expected_state inference is, 0.0-1.0. Omit if expected_state is omitted.' },
-            expected_state_basis: { type: 'string', description: 'What specific observed value/condition this goal responds to. Required alongside expected_state.' },
-          },
-          required: ['title', 'description', 'report_span', 'action_type', 'confidence', 'action_photo_ids'],
-        },
-      },
-    },
-    required: ['experience_found', 'experiences'],
-  },
-};
 
 async function invokeBedrock(systemPrompt, userPrompt, tool) {
   const body = {
@@ -119,6 +47,73 @@ async function invokeBedrock(systemPrompt, userPrompt, tool) {
   return toolUse ? toolUse.input : null;
 }
 
+// v1 of the "Draft Experience" prompt — a person has already picked one
+// anchor (an observation or an action) and written a note saying what they
+// want captured; this proposes only what's missing around it. Expect this to
+// need real iteration once we see actual output, same as any tuned prompt.
+const DRAFT_PROMPT_VERSION = 'draft-experience-v1';
+
+const DRAFT_SYSTEM_PROMPT = `You are a precise technical field-log transcriber for an azolla/duckweed cultivation pilot, helping a person write up one specific experience — a real action that transitioned a container from one state to another — that they have already decided is worth recording. A person has pointed you at one anchor, either an action they already took or one observation they made, and added a short note saying what they want captured. Your job is to propose the missing piece(s) of the S -> A -> S' write-up, grounded strictly in the real context given to you (the anchor itself, nearby observations, and any existing CLAIM text) plus the person's note.
+
+Whenever you write a description, prioritize technical density over readability: every reading, quantity, material specific, and concrete detail present in the evidence belongs in it — never trade away a number, unit, or material name for a smoother sentence.
+
+**When in doubt, leave it blank or write less.** Every field you propose should be grounded in the evidence and the person's note — never invent a plausible-sounding detail to fill a gap. A short, honest field is the correct result when the evidence is thin; it is not a failure.
+
+When classifying an action, use:
+- "transformative": physically changes the container's real condition — adding an input, harvesting, moving the container, changing the water, adjusting the setup.
+- "entropy_reduction": does NOT change the container's real condition, but reduces uncertainty about it — a measurement, a test-kit reading, consulting AI, looking up documented best practice.
+
+When proposing an expected_state (the goal/intent behind an action), ground it in an actual observed value or condition when possible, and leave it out (with no confidence) when there's no real basis for one — a normal, honest, valid result.
+
+The person's own note is the most important signal for what to focus on and how to frame the write-up — prioritize it over your own guesses about what might be interesting.`;
+
+const DRAFT_FROM_STATE_TOOL = {
+  name: 'record_draft_experience',
+  description: 'Propose the action and the other boundary state for an experience anchored on one observation, treated as the final state.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string', description: 'What was done and why, at full technical density. Do NOT describe the resulting/later state.' },
+      action_type: { type: 'string', enum: ['transformative', 'entropy_reduction'] },
+      confidence: { type: 'number', description: '0.0-1.0' },
+      action_photo_ids: { type: 'array', items: { type: 'string' }, description: 'IDs (from the context given) of photos that document this action.' },
+      expected_state: { type: 'string', description: 'Omit if no real basis exists in the evidence.' },
+      expected_state_confidence: { type: 'number', description: '0.0-1.0. Omit if expected_state is omitted.' },
+      expected_state_basis: { type: 'string', description: 'What specific observed value/condition this goal responds to. Required alongside expected_state.' },
+      initial_state_text: { type: 'string', description: 'Proposed description of the condition before the action — the state this experience started from.' },
+    },
+    required: ['title', 'description', 'action_type', 'confidence', 'initial_state_text'],
+  },
+};
+
+const DRAFT_FROM_ACTION_TOOL = {
+  name: 'record_draft_experience_states',
+  description: 'Propose the initial and final state for an experience anchored on a real, already-recorded action.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      initial_state_text: { type: 'string', description: 'Proposed description of the condition before the action.' },
+      final_state_text: { type: 'string', description: 'Proposed description of the condition after the action.' },
+    },
+    required: ['initial_state_text', 'final_state_text'],
+  },
+};
+
+async function getOrCreateGenerationConfig(client, modelId, version, systemPrompt, inferenceConfig) {
+  const existing = await client.query(
+    `SELECT id FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1`,
+    [modelId, version]
+  );
+  if (existing.rows.length) return existing.rows[0].id;
+  const inserted = await client.query(
+    `INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [modelId, version, systemPrompt, JSON.stringify(inferenceConfig)]
+  );
+  return inserted.rows[0].id;
+}
+
 // experiences.created_by is NOT NULL, FK'd to organization_members.id — not
 // the cognito user id from the authorizer context. Same helper as
 // scripts/azolla-experience-form.js: falls back to any real member of the
@@ -134,51 +129,6 @@ async function resolveOrgMemberId(client, organizationId, cognitoUserId) {
     [organizationId]
   );
   return fallback.rows[0]?.id || null;
-}
-
-async function getOrCreateExperiencePerspectiveConfig(client) {
-  const existing = await client.query(
-    `SELECT id FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1`,
-    [MODEL_ID, EXPERIENCE_PERSPECTIVE_PROMPT_VERSION]
-  );
-  if (existing.rows.length) return existing.rows[0].id;
-  const inserted = await client.query(
-    `INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [MODEL_ID, EXPERIENCE_PERSPECTIVE_PROMPT_VERSION, EXPERIENCE_PERSPECTIVE_SYSTEM_PROMPT, JSON.stringify({ max_tokens: 1200, temperature: 0 })]
-  );
-  return inserted.rows[0].id;
-}
-
-// Same upsert-by-(state_id, perspective_type, llm_generation_config_id) keying
-// as scripts/azolla-experience-form.js — a rerun under the same active prompt
-// (e.g. because the observation text was edited) replaces its own row in
-// place; a rerun under a new prompt version inserts fresh alongside it.
-async function saveExperiencePerspective(client, configId, priorStateId, finalStateId, result) {
-  const content = JSON.stringify({
-    prior_state_id: priorStateId,
-    experience_found: result.experience_found,
-    experiences: result.experiences,
-    model: MODEL_ID,
-  });
-  const existing = await client.query(
-    `SELECT id FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'EXPERIENCE_PERSPECTIVE' AND llm_generation_config_id = $2`,
-    [finalStateId, configId]
-  );
-  if (existing.rows.length) {
-    const perspectiveId = existing.rows[0].id;
-    await client.query(
-      `UPDATE state_perspectives SET status = 'SUCCESS', error_message = NULL, content = $1, created_at = NOW() WHERE id = $2`,
-      [content, perspectiveId]
-    );
-    return perspectiveId;
-  }
-  const perspectiveId = crypto.randomUUID();
-  await client.query(
-    `INSERT INTO state_perspectives (id, state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, $2, 'EXPERIENCE_PERSPECTIVE', $3, 'SUCCESS', $4)`,
-    [perspectiveId, finalStateId, configId, content]
-  );
-  return perspectiveId;
 }
 
 // The action's own CLAIM — same perspective_type as a state's CLAIM (migration
@@ -205,6 +155,112 @@ async function saveActionClaim(client, configId, actionId, description, reportSp
   return perspectiveId;
 }
 
+// Shapes experience_components rows into the API's `components` object.
+//
+// All three legs are ARRAYS. An experience legitimately has multiple states
+// and multiple actions per leg — e.g. start with ash, measure phosphorus and
+// take a water sample (two actions), end with the phosphorus reading and the
+// water reading (two final states). The readings ARE the end state, and a
+// reading is a metric_snapshot keyed to a state, so collapsing a leg to one
+// state would lose real measurement data. See
+// docs/specs/azolla-impact-power-model.md.
+//
+// Legs may also be EMPTY — an experience with no final state yet is normal
+// (the outcome hasn't been observed), not a validation failure.
+//
+// Callers pass rows already ordered by leg then chronologically.
+async function hydrateComponents(rows) {
+  // states has no `photos` column — photos live in state_photos keyed by state_id.
+  const stateIds = [...new Set(rows.map((c) => c.state_id).filter(Boolean))];
+
+  const photosByStateId = new Map();
+  const metricsByStateId = new Map();
+  if (stateIds.length > 0) {
+    const [photosRes, metricsRes] = await Promise.all([
+      // photo_metadata_extractions.captured_at is the photo's own EXIF/file
+      // date — a synthesized state's own captured_at is when the write-up
+      // was made, not when the observation actually happened, so date-range
+      // displays should prefer the photo's date when one was extracted.
+      pool.query(
+        `SELECT sp.state_id, sp.id, sp.photo_url, sp.photo_description, pme.captured_at AS photo_captured_at
+         FROM state_photos sp
+         LEFT JOIN photo_metadata_extractions pme ON pme.photo_url = sp.photo_url
+         WHERE sp.state_id = ANY($1) ORDER BY sp.photo_order`,
+        [stateIds]
+      ),
+      // Metrics are what make a measurement-shaped final state meaningful —
+      // surfacing them lets the UI show "Phosphorus: >10 mg/L" as real data
+      // rather than only as prose inside state_text.
+      pool.query(
+        `SELECT ms.state_id, ms.snapshot_id, ms.value, m.name, m.unit
+         FROM metric_snapshots ms
+         JOIN metrics m ON m.metric_id = ms.metric_id
+         WHERE ms.state_id = ANY($1)`,
+        [stateIds]
+      ),
+    ]);
+    for (const p of photosRes.rows) {
+      if (!photosByStateId.has(p.state_id)) photosByStateId.set(p.state_id, []);
+      photosByStateId.get(p.state_id).push({
+        id: p.id,
+        photo_url: p.photo_url,
+        photo_description: p.photo_description,
+        captured_at: p.photo_captured_at || null,
+      });
+    }
+    for (const m of metricsRes.rows) {
+      if (!metricsByStateId.has(m.state_id)) metricsByStateId.set(m.state_id, []);
+      metricsByStateId.get(m.state_id).push({
+        snapshot_id: m.snapshot_id,
+        name: m.name,
+        value: m.value,
+        unit: m.unit,
+      });
+    }
+  }
+
+  const components = { initial_states: [], actions: [], final_states: [] };
+  for (const comp of rows) {
+    if (comp.component_type === 'initial_state' || comp.component_type === 'final_state') {
+      const lane = comp.component_type === 'initial_state' ? components.initial_states : components.final_states;
+      lane.push({
+        id: comp.id,
+        experience_id: comp.experience_id,
+        component_type: comp.component_type,
+        state_id: comp.state_id,
+        organization_id: comp.organization_id,
+        created_at: comp.created_at,
+        state: comp.state_id_detail ? {
+          id: comp.state_id_detail,
+          state_text: comp.state_text,
+          captured_at: comp.captured_at,
+          photos: photosByStateId.get(comp.state_id) || [],
+          metrics: metricsByStateId.get(comp.state_id) || [],
+        } : null,
+      });
+    } else if (comp.component_type === 'action') {
+      components.actions.push({
+        id: comp.id,
+        experience_id: comp.experience_id,
+        component_type: comp.component_type,
+        action_id: comp.action_id,
+        organization_id: comp.organization_id,
+        created_at: comp.created_at,
+        action: comp.action_id_detail ? {
+          id: comp.action_id_detail,
+          title: comp.action_title,
+          description: comp.action_description,
+          expected_state: comp.action_expected_state,
+          action_type: comp.action_type,
+          completed_at: comp.action_completed_at,
+          created_at: comp.action_created_at,
+        } : null,
+      });
+    }
+  }
+  return components;
+}
+
 exports.handler = async (event) => {
   const startTime = Date.now();
 
@@ -229,316 +285,128 @@ exports.handler = async (event) => {
   }
 
   try {
-    // POST /api/experiences/suggestions - run the tuned extraction over a
-    // container's full observation history, saving EXPERIENCE_PERSPECTIVE
-    // rows (idempotent upsert per pair). Proposes only — never creates a
-    // real action; a person confirms via /use below. Same path as the GET
-    // below (which lists suggestions) — POST generates them, by design.
-    if (httpMethod === 'POST' && path.endsWith('/suggestions')) {
+    // POST /api/experiences/draft - a person has picked one anchor (an
+    // observation or an action they already recognize as worth writing up)
+    // and added a note steering what to capture. Proposes only the missing
+    // piece(s) around that anchor — never writes anything real; the proposal
+    // is persisted as its own untouched state_perspectives row so it stays
+    // available for contrast against whatever the person actually saves.
+    if (httpMethod === 'POST' && path.endsWith('/draft')) {
       let body;
       try {
         body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
       } catch (parseErr) {
         return error('Invalid JSON in request body', 400);
       }
-      const { entity_type, entity_id } = body || {};
-      if (!entity_type || !entity_id) {
-        return error('entity_type and entity_id are required', 400);
+      const { entity_type, entity_id, anchor_type, anchor_id, note } = body || {};
+      if (!entity_type || !entity_id || !anchor_type || !anchor_id) {
+        return error('entity_type, entity_id, anchor_type, and anchor_id are required', 400);
       }
-      if (entity_type !== 'tool') {
-        return error('Generating suggestions is only supported for entity_type "tool"', 400);
-      }
-
-      // Excludes system-generated states (captured_by = the all-zeros
-      // placeholder) — see scripts/azolla-experience-form.js for why: a
-      // synthetic share-grant state otherwise reads as a farmer action.
-      const statesRes = await pool.query(`
-        SELECT s.id, s.organization_id, s.captured_by, s.captured_at, s.state_text
-        FROM states s JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = 'tool' AND sl.entity_id = $1
-        WHERE s.captured_by != '00000000-0000-0000-0000-000000000000' AND s.organization_id = $2
-        ORDER BY s.captured_at
-      `, [entity_id, organizationId]);
-      const states = statesRes.rows;
-      if (states.length < 2) {
-        return success({ pairs_processed: 0, experiences_found: 0, message: 'Not enough observations to find suggestions yet.' });
+      if (!['state', 'action'].includes(anchor_type)) {
+        return error('anchor_type must be "state" or "action"', 400);
       }
 
-      for (const s of states) {
-        const photos = await pool.query(`SELECT id, photo_url, photo_description FROM state_photos WHERE state_id = $1 ORDER BY photo_order`, [s.id]);
-        const claim = await pool.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'CLAIM'`, [s.id]);
-        const ent = await pool.query(`SELECT content->>'content' as content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'ENTROPY'`, [s.id]);
-        s.photos = photos.rows;
-        s.claim = claim.rows[0]?.content || null;
-        s.entropy = ent.rows[0]?.content || null;
-      }
-
-      const configId = await getOrCreateExperiencePerspectiveConfig(pool);
-
-      const pairResults = [];
-      let experiencesFound = 0;
-      for (let i = 1; i < states.length; i++) {
-        const prior = states[i - 1];
-        const final = states[i];
-        const photoList = (s) => s.photos.map((p, idx) => `  [photo ${idx + 1}/${s.photos.length}, id ${p.id}] ${p.photo_description || '(no description)'}`).join('\n') || '  (no photos)';
-        const describeState = (s) => `  Observation note: ${s.state_text ? `"${s.state_text}"` : '(none)'}\n  Photos:\n${photoList(s)}`;
-        const entropyContext = final.entropy ? `\n\nLater observation's already-computed ENTROPY analysis (for context, not to be treated as ground truth about actions): ${final.entropy}` : '';
-
-        let lastExperience = null;
-        for (let k = pairResults.length - 1; k >= 0; k--) {
-          if (pairResults[k].experience_found && pairResults[k].experiences.length) {
-            lastExperience = { pairResult: pairResults[k], resultingState: states[k + 1] };
-            break;
-          }
-        }
-        const priorActionContext = lastExperience
-          ? `\n\nMost recent experience already recorded (do NOT re-report these action(s) as new if the later observation is merely recalling or describing their outcome):\n${lastExperience.pairResult.experiences.map(h => `  - ${h.title}: ${h.description}`).join('\n')}\n  State that experience resulted in: ${lastExperience.resultingState.claim || '(no CLAIM available)'}`
-          : '';
-        const userPrompt = `Earlier observation [${prior.captured_at.toISOString().slice(0, 10)}]:\n${describeState(prior)}\n\nLater observation [${final.captured_at.toISOString().slice(0, 10)}]:\n${describeState(final)}${entropyContext}${priorActionContext}\n\nIdentify any human action(s) described as having happened between these two observations, and infer expected_state where grounded.`;
-        const result = await invokeBedrock(EXPERIENCE_PERSPECTIVE_SYSTEM_PROMPT, userPrompt, EXPERIENCE_PERSPECTIVE_TOOL);
-
-        const kept = result.experiences.filter((h) => h.confidence >= CONFIDENCE_FLOOR);
-        const filteredResult = { experience_found: result.experience_found && kept.length > 0, experiences: kept };
-        pairResults.push(filteredResult);
-        await saveExperiencePerspective(pool, configId, prior.id, final.id, filteredResult);
-        if (filteredResult.experience_found) experiencesFound += filteredResult.experiences.length;
-      }
-
-      return success({ pairs_processed: states.length - 1, experiences_found: experiencesFound });
-    }
-
-    // GET /api/experiences/suggestions - lists what POST to this same path generated:
-    // un-dismissed, unconfirmed hypotheses
-    // from the latest EXPERIENCE_PERSPECTIVE for a container's states.
-    if (httpMethod === 'GET' && path.endsWith('/suggestions')) {
-      const entity_type = queryStringParameters?.entity_type;
-      const entity_id = queryStringParameters?.entity_id;
-      if (!entity_type || !entity_id) {
-        return error('entity_type and entity_id are required', 400);
-      }
-
-      const statesRes = await pool.query(`
-        SELECT s.id, s.captured_at
-        FROM states s JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = $1 AND sl.entity_id = $2
-        WHERE s.organization_id = $3
-        ORDER BY s.captured_at
-      `, [entity_type, entity_id, organizationId]);
-      const stateIds = statesRes.rows.map(r => r.id);
-      if (stateIds.length === 0) return success({ data: [] });
-
-      const perspectivesRes = await pool.query(`
-        SELECT id, state_id, content, created_at
-        FROM state_perspectives
-        WHERE state_id = ANY($1) AND perspective_type = 'EXPERIENCE_PERSPECTIVE'
-      `, [stateIds]);
-
-      // Which (perspective_id, hypothesis_index) pairs already became a real action.
-      const usedRes = await pool.query(`
-        SELECT scoring_data->>'experience_perspective_id' AS perspective_id,
-               scoring_data->>'hypothesis_index' AS hypothesis_index
-        FROM actions
-        WHERE scoring_data->>'experience_perspective_id' = ANY(
-          SELECT id::text FROM state_perspectives WHERE state_id = ANY($1) AND perspective_type = 'EXPERIENCE_PERSPECTIVE'
-        )
-      `, [stateIds]);
-      const usedSet = new Set(usedRes.rows.map(r => `${r.perspective_id}:${r.hypothesis_index}`));
-
-      const photosRes = await pool.query(`SELECT id, state_id, photo_url, photo_description FROM state_photos WHERE state_id = ANY($1)`, [stateIds]);
-      const photosById = new Map(photosRes.rows.map(p => [p.id, p]));
-      const stateById = new Map(statesRes.rows.map(s => [s.id, s]));
-
-      const suggestions = [];
-      for (const persp of perspectivesRes.rows) {
-        const content = persp.content || {};
-        const dismissed = new Set(content.dismissed_indices || []);
-        (content.experiences || []).forEach((h, idx) => {
-          if (dismissed.has(idx)) return;
-          if (usedSet.has(`${persp.id}:${idx}`)) return;
-          suggestions.push({
-            perspective_id: persp.id,
-            hypothesis_index: idx,
-            final_state_id: persp.state_id,
-            prior_state_id: content.prior_state_id,
-            final_captured_at: stateById.get(persp.state_id)?.captured_at,
-            title: h.title,
-            description: h.description,
-            action_type: h.action_type,
-            confidence: h.confidence,
-            expected_state: h.expected_state || null,
-            expected_state_confidence: h.expected_state_confidence || null,
-            expected_state_basis: h.expected_state_basis || null,
-            photos: (h.action_photo_ids || []).map(id => photosById.get(id)).filter(Boolean),
-            created_at: persp.created_at,
-          });
-        });
-      }
-
-      suggestions.sort((a, b) => new Date(b.final_captured_at) - new Date(a.final_captured_at));
-      return success({ data: suggestions });
-    }
-
-    // POST /api/experiences/dismiss - mark one hypothesis dismissed in place,
-    // via jsonb_set on its own EXPERIENCE_PERSPECTIVE row. No new table/column;
-    // re-running the suggestions generator over an overlapping window must not re-surface it.
-    if (httpMethod === 'POST' && path.endsWith('/dismiss')) {
-      let body;
-      try {
-        body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
-      } catch (parseErr) {
-        return error('Invalid JSON in request body', 400);
-      }
-      const { perspective_id, hypothesis_index } = body || {};
-      if (!perspective_id || hypothesis_index === undefined || hypothesis_index === null) {
-        return error('perspective_id and hypothesis_index are required', 400);
-      }
-
-      const persp = await pool.query(
-        `SELECT sp.content FROM state_perspectives sp JOIN states s ON s.id = sp.state_id
-         WHERE sp.id = $1 AND sp.perspective_type = 'EXPERIENCE_PERSPECTIVE' AND s.organization_id = $2`,
-        [perspective_id, organizationId]
+      const configId = await getOrCreateGenerationConfig(
+        pool, MODEL_ID, DRAFT_PROMPT_VERSION, DRAFT_SYSTEM_PROMPT, { max_tokens: 1200, temperature: 0 }
       );
-      if (persp.rows.length === 0) return error('Perspective not found', 404);
 
-      const content = persp.rows[0].content || {};
-      const dismissed = new Set(content.dismissed_indices || []);
-      dismissed.add(hypothesis_index);
-      const updatedContent = { ...content, dismissed_indices: [...dismissed] };
+      const describeState = (s, photos) => {
+        const photoList = (photos || [])
+          .map((p, idx) => `  [photo ${idx + 1}/${photos.length}, id ${p.id}] ${p.photo_description || '(no description)'}`)
+          .join('\n') || '  (no photos)';
+        return `  Observation note: ${s.state_text ? `"${s.state_text}"` : '(none)'}\n  Photos:\n${photoList}`;
+      };
 
-      await pool.query(`UPDATE state_perspectives SET content = $1 WHERE id = $2`, [JSON.stringify(updatedContent), perspective_id]);
-      return success({ perspective_id, hypothesis_index, dismissed: true });
-    }
+      let userPrompt;
+      let tool;
 
-    // POST /api/experiences/use - a person confirms one AI-proposed hypothesis:
-    // creates the real actions row (status='completed', the action already
-    // happened) + its own CLAIM perspective + state_links(entity_type='action')
-    // to whichever state(s) its cited photos belong to — the same mechanism
-    // used everywhere else in the app to connect an action to its evidence.
-    // Does NOT create experience_components — building the initial/final-state
-    // write-up is a separate, person-driven step (the experience builder).
-    if (httpMethod === 'POST' && path.endsWith('/use')) {
-      let body;
-      try {
-        body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
-      } catch (parseErr) {
-        return error('Invalid JSON in request body', 400);
-      }
-      const { perspective_id, hypothesis_index, title, description, action_type, expected_state } = body || {};
-      if (!perspective_id || hypothesis_index === undefined || hypothesis_index === null || !title) {
-        return error('perspective_id, hypothesis_index, and title are required', 400);
-      }
-
-      const perspRes = await pool.query(
-        `SELECT sp.id, sp.state_id AS final_state_id, sp.content
-         FROM state_perspectives sp JOIN states s ON s.id = sp.state_id
-         WHERE sp.id = $1 AND sp.perspective_type = 'EXPERIENCE_PERSPECTIVE' AND s.organization_id = $2`,
-        [perspective_id, organizationId]
-      );
-      if (perspRes.rows.length === 0) return error('Perspective not found', 404);
-      const persp = perspRes.rows[0];
-      const hypothesis = (persp.content?.experiences || [])[hypothesis_index];
-      if (!hypothesis) return error('Hypothesis not found at that index', 404);
-
-      const finalStateRes = await pool.query(
-        `SELECT s.id, s.organization_id, s.captured_by, s.captured_at,
-                (SELECT entity_id FROM state_links WHERE state_id = s.id AND entity_type = 'tool' LIMIT 1) AS tool_id
-         FROM states s WHERE s.id = $1`,
-        [persp.final_state_id]
-      );
-      const finalState = finalStateRes.rows[0];
-      if (!finalState) return error('Underlying state not found', 404);
-
-      const profileRes = await pool.query(`SELECT 1 FROM profiles WHERE user_id = $1`, [finalState.captured_by]);
-      const assignedTo = profileRes.rows.length > 0 ? finalState.captured_by : null;
-
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-
-        const configId = await getOrCreateExperiencePerspectiveConfig(client);
-        const actionId = crypto.randomUUID();
-        const scoringData = {
-          action_type: action_type || hypothesis.action_type,
-          extraction_confidence: hypothesis.confidence,
-          expected_state_confidence: hypothesis.expected_state_confidence || null,
-          expected_state_basis: hypothesis.expected_state_basis || null,
-          experience_perspective_id: perspective_id,
-          hypothesis_index,
-        };
-        // description: intentionally left null — the action's own what/why
-        // lives in its CLAIM perspective (saveActionClaim below); the existing
-        // state is a real state_links pointer (below), not a text copy.
-        await client.query(
-          `INSERT INTO actions (id, title, expected_state, scoring_data, status, organization_id, created_by, assigned_to, completed_at, asset_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, $8, $9, NOW(), NOW())`,
-          [actionId, title.slice(0, 250), expected_state || hypothesis.expected_state || null, JSON.stringify(scoringData), finalState.organization_id, userId, assignedTo, finalState.captured_at, finalState.tool_id]
+      if (anchor_type === 'state') {
+        const anchorRes = await pool.query(
+          `SELECT id, state_text, captured_at FROM states WHERE id = $1 AND organization_id = $2`,
+          [anchor_id, organizationId]
         );
-        // description here is the person's edited text from the Suggestion
-        // card's Edit mode, if they changed it — falls back to the original
-        // hypothesis wording when they didn't. This is the action's own
-        // what/why account, so it belongs in the CLAIM, not on the action row.
-        await saveActionClaim(client, configId, actionId, description || hypothesis.description, hypothesis.report_span);
+        if (anchorRes.rows.length === 0) return error('Anchor observation not found', 404);
+        const anchor = anchorRes.rows[0];
 
-        // Link the action to its prior state (context/existing state) — the
-        // same pointer scripts/azolla-experience-form.js links for this same
-        // hypothesis. Same entity_type='action' link, same undifferentiated
-        // kind as the evidence citations below.
-        if (persp.content?.prior_state_id) {
-          await client.query(
-            `INSERT INTO state_links (id, state_id, entity_type, entity_id, created_at) VALUES ($1, $2, 'action', $3, NOW())`,
-            [crypto.randomUUID(), persp.content.prior_state_id, actionId]
-          );
-        }
+        const photosRes = await pool.query(
+          `SELECT id, photo_url, photo_description FROM state_photos WHERE state_id = $1 ORDER BY photo_order`,
+          [anchor.id]
+        );
+        const claimRes = await pool.query(
+          `SELECT content->>'content' AS content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'CLAIM'`,
+          [anchor.id]
+        );
 
-        // Link the action to whichever state(s) its cited evidence photos
-        // actually belong to (same mechanism as scripts/azolla-experience-form.js).
-        const photoIds = hypothesis.action_photo_ids || [];
-        const citedStateIds = new Set();
-        if (photoIds.length > 0) {
-          const owningRes = await client.query(`SELECT DISTINCT state_id FROM state_photos WHERE id = ANY($1)`, [photoIds]);
-          owningRes.rows.forEach(r => citedStateIds.add(r.state_id));
-        }
-        if (citedStateIds.size === 0) citedStateIds.add(finalState.id);
-        for (const stateId of citedStateIds) {
-          if (stateId === persp.content?.prior_state_id) continue; // already linked above, don't duplicate
-          await client.query(
-            `INSERT INTO state_links (id, state_id, entity_type, entity_id, created_at) VALUES ($1, $2, 'action', $3, NOW())`,
-            [crypto.randomUUID(), stateId, actionId]
-          );
-        }
+        // Nearest neighboring observations of the same container, for
+        // pairing context — not a rigid pair, just whatever's close in time.
+        const neighborsRes = await pool.query(
+          `SELECT s.id, s.state_text, s.captured_at, (s.captured_at < $2) AS is_prior
+           FROM states s
+           JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = $3 AND sl.entity_id = $4
+           WHERE s.id != $1 AND s.organization_id = $5
+           ORDER BY ABS(EXTRACT(EPOCH FROM (s.captured_at - $2::timestamptz)))
+           LIMIT 4`,
+          [anchor.id, anchor.captured_at, entity_type, entity_id, organizationId]
+        );
 
-        await client.query('COMMIT');
+        const neighborText = neighborsRes.rows.length
+          ? '\n\nNearby observations of the same container, for context on what changed around this time:\n' +
+            neighborsRes.rows.map((n) => `[${n.is_prior ? 'earlier' : 'later'}, ${new Date(n.captured_at).toISOString().slice(0, 10)}] ${n.state_text || '(no note)'}`).join('\n')
+          : '';
+        const claimText = claimRes.rows[0]?.content ? `\n\nThis observation's own CLAIM account: ${claimRes.rows[0].content}` : '';
 
-        const embeddingSource = composeActionPolicySource({ title: title.slice(0, 250), policy: null });
-        if (embeddingSource.trim()) {
-          try {
-            await sqs.send(new SendMessageCommand({
-              QueueUrl: EMBEDDINGS_QUEUE_URL,
-              MessageBody: JSON.stringify({ entity_type: 'action_policy', entity_id: actionId, embedding_source: embeddingSource, organization_id: finalState.organization_id }),
-            }));
-          } catch (sqsErr) {
-            console.error('[EXPERIENCES] Failed to queue action embedding:', sqsErr.message);
-          }
-        }
+        userPrompt = `The person is writing up an experience anchored on this observation, treated as the FINAL state (the outcome):\n${describeState(anchor, photosRes.rows)}${claimText}${neighborText}\n\nPerson's note: ${note || '(none given)'}\n\nPropose the action that led to this outcome, and initial_state_text describing the condition beforehand.`;
+        tool = DRAFT_FROM_STATE_TOOL;
+      } else {
+        const actionRes = await pool.query(
+          `SELECT id, title, description, expected_state, completed_at, scoring_data->>'action_type' AS action_type
+           FROM actions WHERE id = $1 AND organization_id = $2`,
+          [anchor_id, organizationId]
+        );
+        if (actionRes.rows.length === 0) return error('Anchor action not found', 404);
+        const anchor = actionRes.rows[0];
 
-        try {
-          await broadcastInvalidation({
-            entityType: 'action',
-            entityId: actionId,
-            mutationType: 'created',
-            organizationId: finalState.organization_id,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null,
-          });
-        } catch (err) {
-          console.error('[EXPERIENCES] Broadcast failed:', err.message);
-        }
+        const claimRes = await pool.query(
+          `SELECT content->>'content' AS content FROM state_perspectives WHERE action_id = $1 AND perspective_type = 'CLAIM'`,
+          [anchor.id]
+        );
+        const linkedRes = await pool.query(
+          `SELECT s.id, s.state_text, s.captured_at
+           FROM states s
+           JOIN state_links sl ON sl.state_id = s.id AND sl.entity_type = 'action' AND sl.entity_id = $1
+           ORDER BY s.captured_at`,
+          [anchor.id]
+        );
 
-        const actionRes = await pool.query(`SELECT * FROM actions WHERE id = $1`, [actionId]);
-        return success(actionRes.rows[0]);
-      } catch (txErr) {
-        await client.query('ROLLBACK');
-        throw txErr;
-      } finally {
-        client.release();
+        const linkedText = linkedRes.rows.length
+          ? '\n\nObservations already linked to this action:\n' + linkedRes.rows.map((s) => `[${new Date(s.captured_at).toISOString().slice(0, 10)}] ${s.state_text || '(no note)'}`).join('\n')
+          : '';
+
+        userPrompt = `The person is writing up an experience anchored on this already-recorded action — do not propose action fields, only the two boundary states:\n  Title: ${anchor.title}\n  Description: ${anchor.description || '(none)'}\n  Type: ${anchor.action_type || '(unclassified)'}\n  Expected state / goal: ${anchor.expected_state || '(none recorded)'}\n  Completed: ${anchor.completed_at ? new Date(anchor.completed_at).toISOString().slice(0, 10) : '(unknown)'}\n  Its own CLAIM account: ${claimRes.rows[0]?.content || '(none)'}${linkedText}\n\nPerson's note: ${note || '(none given)'}\n\nPropose initial_state_text (the condition before this action) and final_state_text (the condition after).`;
+        tool = DRAFT_FROM_ACTION_TOOL;
       }
+
+      const proposal = await invokeBedrock(DRAFT_SYSTEM_PROMPT, userPrompt, tool);
+      if (!proposal) return error('The model did not return a proposal', 502);
+
+      // Always a fresh row, never an upsert — a different note deserves its
+      // own permanent record, and every draft attempt stays around for
+      // contrast, not just the latest one per anchor.
+      const perspectiveId = crypto.randomUUID();
+      const content = JSON.stringify({ anchor_type, anchor_id, note: note || null, proposal, model: MODEL_ID });
+      await pool.query(
+        `INSERT INTO state_perspectives (id, ${anchor_type === 'state' ? 'state_id' : 'action_id'}, perspective_type, llm_generation_config_id, status, content)
+         VALUES ($1, $2, 'EXPERIENCE_PERSPECTIVE', $3, 'SUCCESS', $4)`,
+        [perspectiveId, anchor_id, configId, content]
+      );
+
+      return success({
+        perspective_id: perspectiveId,
+        llm_generation_config_id: configId,
+        anchor_type,
+        anchor_id,
+        proposal,
+      });
     }
 
     // GET /api/experiences - List experiences with filters
@@ -622,6 +490,9 @@ exports.handler = async (event) => {
                a.id as action_id_detail,
                a.title as action_title,
                a.description as action_description,
+               a.expected_state as action_expected_state,
+               a.completed_at as action_completed_at,
+               a.scoring_data->>'action_type' as action_type,
                a.created_at as action_created_at
              FROM experience_components ec
              LEFT JOIN states s ON ec.state_id = s.id
@@ -632,60 +503,14 @@ exports.handler = async (event) => {
                  WHEN 'initial_state' THEN 1
                  WHEN 'action' THEN 2
                  WHEN 'final_state' THEN 3
-               END`,
+               END,
+               -- chronological within each lane; no position column exists and
+               -- none is needed (docs/specs/azolla-impact-power-model.md)
+               COALESCE(s.captured_at, a.completed_at, ec.created_at) ASC`,
             [experience.id]
           );
 
-          // states has no `photos` column — photos live in state_photos, keyed
-          // by state_id (see the pattern already used above for suggestion cards).
-          const stateIds = [...new Set(componentsResult.rows.map((c) => c.state_id).filter(Boolean))];
-          const photosByStateId = new Map();
-          if (stateIds.length > 0) {
-            const photosRes = await pool.query(
-              `SELECT state_id, id, photo_url, photo_description FROM state_photos WHERE state_id = ANY($1) ORDER BY photo_order`,
-              [stateIds]
-            );
-            for (const p of photosRes.rows) {
-              if (!photosByStateId.has(p.state_id)) photosByStateId.set(p.state_id, []);
-              photosByStateId.get(p.state_id).push(p);
-            }
-          }
-
-          const components = {};
-          componentsResult.rows.forEach((comp) => {
-            if (comp.component_type === 'initial_state' || comp.component_type === 'final_state') {
-              components[comp.component_type] = {
-                id: comp.id,
-                experience_id: comp.experience_id,
-                component_type: comp.component_type,
-                state_id: comp.state_id,
-                organization_id: comp.organization_id,
-                created_at: comp.created_at,
-                state: comp.state_id_detail ? {
-                  id: comp.state_id_detail,
-                  state_text: comp.state_text,
-                  captured_at: comp.captured_at,
-                  photos: photosByStateId.get(comp.state_id) || []
-                } : null
-              };
-            } else if (comp.component_type === 'action') {
-              if (!components.actions) components.actions = [];
-              components.actions.push({
-                id: comp.id,
-                experience_id: comp.experience_id,
-                component_type: comp.component_type,
-                action_id: comp.action_id,
-                organization_id: comp.organization_id,
-                created_at: comp.created_at,
-                action: comp.action_id_detail ? {
-                  id: comp.action_id_detail,
-                  title: comp.action_title,
-                  description: comp.action_description,
-                  created_at: comp.action_created_at
-                } : null
-              });
-            }
-          });
+          const components = await hydrateComponents(componentsResult.rows);
 
           return {
             ...experience,
@@ -752,6 +577,9 @@ exports.handler = async (event) => {
            a.id as action_id_detail,
            a.title as action_title,
            a.description as action_description,
+           a.expected_state as action_expected_state,
+           a.completed_at as action_completed_at,
+           a.scoring_data->>'action_type' as action_type,
            a.created_at as action_created_at
          FROM experience_components ec
          LEFT JOIN states s ON ec.state_id = s.id
@@ -762,59 +590,46 @@ exports.handler = async (event) => {
              WHEN 'initial_state' THEN 1
              WHEN 'action' THEN 2
              WHEN 'final_state' THEN 3
-           END`,
+           END,
+           COALESCE(s.captured_at, a.completed_at, ec.created_at) ASC`,
         [experienceId]
       );
 
-      // states has no `photos` column — photos live in state_photos, keyed by state_id.
-      const detailStateIds = [...new Set(componentsResult.rows.map((c) => c.state_id).filter(Boolean))];
-      const detailPhotosByStateId = new Map();
-      if (detailStateIds.length > 0) {
-        const photosRes = await pool.query(
-          `SELECT state_id, id, photo_url, photo_description FROM state_photos WHERE state_id = ANY($1) ORDER BY photo_order`,
-          [detailStateIds]
+      const components = await hydrateComponents(componentsResult.rows);
+
+      // Action CLAIMs: the technically-dense account of what was done, plus
+      // any person-authored edit stored on the experience. The original
+      // perspective is never overwritten — keeping both makes the
+      // AI-vs-human delta computable later.
+      const actionIds = components.actions.map((c) => c.action_id).filter(Boolean);
+      if (actionIds.length > 0) {
+        const claimsRes = await pool.query(
+          `SELECT action_id, content->>'content' AS claim, content->>'report_span' AS report_span
+           FROM state_perspectives
+           WHERE action_id = ANY($1) AND perspective_type = 'CLAIM'`,
+          [actionIds]
         );
-        for (const p of photosRes.rows) {
-          if (!detailPhotosByStateId.has(p.state_id)) detailPhotosByStateId.set(p.state_id, []);
-          detailPhotosByStateId.get(p.state_id).push(p);
+        const claimByActionId = new Map(claimsRes.rows.map((r) => [r.action_id, r]));
+        const edits = experience.metadata?.action_claim_edits || {};
+        // An action's linked photos (state_links) are real data, often
+        // including shots irrelevant to this particular write-up — an
+        // experience is a deliberate distillation of a state transition,
+        // not a mirror of everything attached to the action. Which of an
+        // action's photos actually belong in this write-up is therefore an
+        // explicit per-experience pick (opt-in), not an opt-out from
+        // "everything by default" — stored on the experience, same as the
+        // CLAIM edits above.
+        const photoInclusions = experience.metadata?.action_photo_inclusions || {};
+        for (const comp of components.actions) {
+          const c = claimByActionId.get(comp.action_id);
+          if (comp.action) {
+            comp.action.claim = c?.claim || null;
+            comp.action.report_span = c?.report_span || null;
+            comp.action.claim_edit = edits[comp.action_id] || null;
+            comp.action.included_photo_urls = photoInclusions[comp.action_id] || [];
+          }
         }
       }
-
-      const components = {};
-      componentsResult.rows.forEach((comp) => {
-        if (comp.component_type === 'initial_state' || comp.component_type === 'final_state') {
-          components[comp.component_type] = {
-            id: comp.id,
-            experience_id: comp.experience_id,
-            component_type: comp.component_type,
-            state_id: comp.state_id,
-            organization_id: comp.organization_id,
-            created_at: comp.created_at,
-            state: comp.state_id_detail ? {
-              id: comp.state_id_detail,
-              state_text: comp.state_text,
-              captured_at: comp.captured_at,
-              photos: detailPhotosByStateId.get(comp.state_id) || []
-            } : null
-          };
-        } else if (comp.component_type === 'action') {
-          if (!components.actions) components.actions = [];
-          components.actions.push({
-            id: comp.id,
-            experience_id: comp.experience_id,
-            component_type: comp.component_type,
-            action_id: comp.action_id,
-            organization_id: comp.organization_id,
-            created_at: comp.created_at,
-            action: comp.action_id_detail ? {
-              id: comp.action_id_detail,
-              title: comp.action_title,
-              description: comp.action_description,
-              created_at: comp.action_created_at
-            } : null
-          });
-        }
-      });
 
       return success({
         ...experience,
@@ -835,7 +650,23 @@ exports.handler = async (event) => {
       } catch (parseErr) {
         return error('Invalid JSON in request body', 400);
       }
-      const { initial_state_id, final_state_id, action_ids } = body;
+      const {
+        initial_state_id, final_state_id,       // deprecated singular forms
+        initial_state_ids, final_state_ids,     // current plural forms
+        action_ids,
+        action_claim_edits,
+        action_photo_inclusions,
+        experience_perspective_id,
+        llm_generation_config_id,
+      } = body;
+
+      // Singular forms fold into the plural ones so older callers keep working.
+      const nextInitialStateIds = Array.isArray(initial_state_ids)
+        ? initial_state_ids
+        : (initial_state_id ? [initial_state_id] : null);
+      const nextFinalStateIds = Array.isArray(final_state_ids)
+        ? final_state_ids
+        : (final_state_id ? [final_state_id] : null);
 
       const existingRes = await pool.query(
         `SELECT id FROM experiences WHERE id = $1 AND organization_id = $2`,
@@ -845,47 +676,85 @@ exports.handler = async (event) => {
         return error('Experience not found', 404);
       }
 
+      // Add/remove diffing, identical for all three legs. Passing [] clears a
+      // leg — legitimate, since an experience with no final state yet is a
+      // normal in-progress state, not an error.
+      const diffLeg = async (client, componentType, idColumn, nextIds) => {
+        if (!Array.isArray(nextIds)) return; // omitted entirely = leave untouched
+        const currentRes = await client.query(
+          `SELECT ${idColumn} AS id FROM experience_components WHERE experience_id = $1 AND component_type = $2`,
+          [experienceId, componentType]
+        );
+        const current = new Set(currentRes.rows.map((r) => r.id));
+        const next = new Set(nextIds);
+        const toRemove = [...current].filter((id) => !next.has(id));
+        const toAdd = [...next].filter((id) => !current.has(id));
+
+        if (toRemove.length > 0) {
+          await client.query(
+            `DELETE FROM experience_components WHERE experience_id = $1 AND component_type = $2 AND ${idColumn} = ANY($3)`,
+            [experienceId, componentType, toRemove]
+          );
+        }
+        for (const id of toAdd) {
+          await client.query(
+            `INSERT INTO experience_components (experience_id, component_type, ${idColumn}, organization_id, created_at)
+             VALUES ($1, $2, $3, $4, NOW())`,
+            [experienceId, componentType, id, organizationId]
+          );
+        }
+      };
+
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
 
-        if (initial_state_id) {
+        await diffLeg(client, 'initial_state', 'state_id', nextInitialStateIds);
+        await diffLeg(client, 'final_state', 'state_id', nextFinalStateIds);
+        await diffLeg(client, 'action', 'action_id', action_ids);
+
+        // A person's edit of an action's CLAIM lands on the experience, never
+        // on the action's own CLAIM perspective — that stays the AI baseline,
+        // so delta(original, edit) remains computable.
+        if (action_claim_edits && typeof action_claim_edits === 'object') {
           await client.query(
-            `UPDATE experience_components SET state_id = $1 WHERE experience_id = $2 AND component_type = 'initial_state'`,
-            [initial_state_id, experienceId]
+            `UPDATE experiences
+             SET metadata = COALESCE(metadata, '{}'::jsonb) ||
+                            jsonb_build_object('action_claim_edits',
+                              COALESCE(metadata->'action_claim_edits', '{}'::jsonb) || $1::jsonb)
+             WHERE id = $2`,
+            [JSON.stringify(action_claim_edits), experienceId]
           );
         }
-        if (final_state_id) {
+
+        // Which of an action's already-linked photos are actually part of
+        // this write-up — an explicit, opt-in pick (default: none) rather
+        // than an opt-out from "show everything." The underlying state_links
+        // are untouched, so the photos stay reachable (and pickable) from
+        // the container's history regardless of what's included here.
+        if (action_photo_inclusions && typeof action_photo_inclusions === 'object') {
           await client.query(
-            `UPDATE experience_components SET state_id = $1 WHERE experience_id = $2 AND component_type = 'final_state'`,
-            [final_state_id, experienceId]
+            `UPDATE experiences
+             SET metadata = COALESCE(metadata, '{}'::jsonb) ||
+                            jsonb_build_object('action_photo_inclusions',
+                              COALESCE(metadata->'action_photo_inclusions', '{}'::jsonb) || $1::jsonb)
+             WHERE id = $2`,
+            [JSON.stringify(action_photo_inclusions), experienceId]
           );
         }
 
-        if (Array.isArray(action_ids)) {
-          const currentRes = await client.query(
-            `SELECT action_id FROM experience_components WHERE experience_id = $1 AND component_type = 'action'`,
-            [experienceId]
+        // Points back at the untouched AI draft (state_perspectives row) this
+        // experience was written from, if any — so delta(AI draft, what the
+        // person actually saved) stays computable. Set once, at whichever
+        // save first supplies it; never cleared by a later save that omits it.
+        if (experience_perspective_id) {
+          await client.query(
+            `UPDATE experiences
+             SET metadata = COALESCE(metadata, '{}'::jsonb) ||
+                            jsonb_build_object('experience_perspective_id', $1::text, 'llm_generation_config_id', $2::text)
+             WHERE id = $3`,
+            [experience_perspective_id, llm_generation_config_id || null, experienceId]
           );
-          const currentActionIds = new Set(currentRes.rows.map((r) => r.action_id));
-          const nextActionIds = new Set(action_ids);
-
-          const toRemove = [...currentActionIds].filter((id) => !nextActionIds.has(id));
-          const toAdd = [...nextActionIds].filter((id) => !currentActionIds.has(id));
-
-          if (toRemove.length > 0) {
-            await client.query(
-              `DELETE FROM experience_components WHERE experience_id = $1 AND component_type = 'action' AND action_id = ANY($2)`,
-              [experienceId, toRemove]
-            );
-          }
-          for (const actionId of toAdd) {
-            await client.query(
-              `INSERT INTO experience_components (experience_id, component_type, action_id, organization_id, created_at)
-               VALUES ($1, 'action', $2, $3, NOW())`,
-              [experienceId, actionId, organizationId]
-            );
-          }
         }
 
         await client.query('COMMIT');
@@ -911,6 +780,48 @@ exports.handler = async (event) => {
       return success({ id: experienceId, updated: true });
     }
 
+    // DELETE /api/experiences/:id - Delete an experience and its component
+    // links. The underlying states/actions are untouched — this only removes
+    // the write-up grouping them together.
+    if (httpMethod === 'DELETE' && pathParameters?.id) {
+      const experienceId = pathParameters.id;
+
+      const existingRes = await pool.query(
+        `SELECT id FROM experiences WHERE id = $1 AND organization_id = $2`,
+        [experienceId, organizationId]
+      );
+      if (existingRes.rows.length === 0) {
+        return error('Experience not found', 404);
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`DELETE FROM experience_components WHERE experience_id = $1`, [experienceId]);
+        await client.query(`DELETE FROM experiences WHERE id = $1`, [experienceId]);
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        client.release();
+      }
+
+      try {
+        await broadcastInvalidation({
+          entityType: 'experience',
+          entityId: experienceId,
+          mutationType: 'deleted',
+          organizationId,
+          excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+        });
+      } catch (err) {
+        console.error('[EXPERIENCES] Broadcast failed:', err.message);
+      }
+
+      return success({ id: experienceId, deleted: true });
+    }
+
     // POST /api/experiences - Create new experience
     if (httpMethod === 'POST' && path === '/api/experiences') {
       let body;
@@ -921,15 +832,27 @@ exports.handler = async (event) => {
         return error('Invalid JSON in request body', 400);
       }
       
-      const { entity_type, entity_id, initial_state_id, action_id, action_ids, final_state_id } = body;
+      const {
+        entity_type, entity_id,
+        initial_state_id, final_state_id, action_id,        // deprecated singular forms
+        initial_state_ids, final_state_ids, action_ids,     // current plural forms
+        action_photo_inclusions,
+        experience_perspective_id,
+        llm_generation_config_id,
+      } = body;
 
-      // Validate required fields
-      if (!entity_type || !entity_id || !final_state_id) {
-        return error('entity_type, entity_id, and final_state_id are required', 400);
+      // Only the entity is genuinely required. A final state is NOT — an
+      // experience with an initial state and an action but no observed
+      // outcome yet is a normal in-progress experiment, and forcing one here
+      // would make people invent an outcome to satisfy the API.
+      if (!entity_type || !entity_id) {
+        return error('entity_type and entity_id are required', 400);
       }
 
-      // action_id is deprecated but still accepted for backward compat (StockDetails.tsx);
-      // action_ids is the current, multi-action-capable field. Combine and de-dupe.
+      // Singular forms are deprecated but still accepted (StockDetails.tsx).
+      // Combine and de-dupe with the plural forms.
+      const allInitialStateIds = [...new Set([...(initial_state_ids || []), ...(initial_state_id ? [initial_state_id] : [])])];
+      const allFinalStateIds = [...new Set([...(final_state_ids || []), ...(final_state_id ? [final_state_id] : [])])];
       const allActionIds = [...new Set([...(action_ids || []), ...(action_id ? [action_id] : [])])];
 
       // Validate entity_type
@@ -944,86 +867,36 @@ exports.handler = async (event) => {
 
         const orgMemberId = await resolveOrgMemberId(client, organizationId, userId);
 
+        // Set at creation time so these aren't lost if the experience is
+        // never subsequently updated: which of an action's linked photos are
+        // actually picked for this write-up (opt-in — default none), and
+        // (when this experience was written from an AI draft) the pointer
+        // back to that untouched draft for future contrast.
+        const initialMetadata = {
+          ...(action_photo_inclusions && typeof action_photo_inclusions === 'object' ? { action_photo_inclusions } : {}),
+          ...(experience_perspective_id ? { experience_perspective_id, llm_generation_config_id: llm_generation_config_id || null } : {}),
+        };
+
         // Create experience record
         const experienceResult = await client.query(
           `INSERT INTO experiences
-           (entity_type, entity_id, organization_id, created_by, created_at)
-           VALUES ($1, $2, $3, $4, NOW())
+           (entity_type, entity_id, organization_id, created_by, created_at, metadata)
+           VALUES ($1, $2, $3, $4, NOW(), $5)
            RETURNING *`,
-          [entity_type, entity_id, organizationId, orgMemberId]
+          [entity_type, entity_id, organizationId, orgMemberId, JSON.stringify(initialMetadata)]
         );
 
         const experience = experienceResult.rows[0];
 
-        // Create components object to return
-        const components = {};
-
-        // Create initial_state component if provided
-        if (initial_state_id) {
-          const initialStateResult = await client.query(
-            `INSERT INTO experience_components 
-             (experience_id, component_type, state_id, organization_id, created_at)
-             VALUES ($1, $2, $3, $4, NOW())
-             RETURNING *`,
-            [experience.id, 'initial_state', initial_state_id, organizationId]
-          );
-
-          // Fetch state details
-          const stateResult = await client.query(
-            `SELECT id, state_text, captured_at, photos FROM states WHERE id = $1`,
-            [initial_state_id]
-          );
-
-          components.initial_state = {
-            ...initialStateResult.rows[0],
-            state: stateResult.rows[0]
-          };
-        }
-
-        // Create one action component per provided action id
-        if (allActionIds.length > 0) {
-          components.actions = [];
-          for (const actionId of allActionIds) {
-            const actionResult = await client.query(
-              `INSERT INTO experience_components
-               (experience_id, component_type, action_id, organization_id, created_at)
-               VALUES ($1, $2, $3, $4, NOW())
-               RETURNING *`,
-              [experience.id, 'action', actionId, organizationId]
-            );
-
-            // Fetch action details
-            const actionDetailsResult = await client.query(
-              `SELECT id, title, description, created_at FROM actions WHERE id = $1`,
-              [actionId]
-            );
-
-            components.actions.push({
-              ...actionResult.rows[0],
-              action: actionDetailsResult.rows[0]
-            });
-          }
-        }
-
-        // Create final_state component (required)
-        const finalStateResult = await client.query(
-          `INSERT INTO experience_components 
-           (experience_id, component_type, state_id, organization_id, created_at)
-           VALUES ($1, $2, $3, $4, NOW())
-           RETURNING *`,
-          [experience.id, 'final_state', final_state_id, organizationId]
+        const insertComponent = (componentType, idColumn, id) => client.query(
+          `INSERT INTO experience_components (experience_id, component_type, ${idColumn}, organization_id, created_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [experience.id, componentType, id, organizationId]
         );
 
-        // Fetch state details
-        const finalStateDetailsResult = await client.query(
-          `SELECT id, state_text, captured_at, photos FROM states WHERE id = $1`,
-          [final_state_id]
-        );
-
-        components.final_state = {
-          ...finalStateResult.rows[0],
-          state: finalStateDetailsResult.rows[0]
-        };
+        for (const id of allInitialStateIds) await insertComponent('initial_state', 'state_id', id);
+        for (const id of allActionIds) await insertComponent('action', 'action_id', id);
+        for (const id of allFinalStateIds) await insertComponent('final_state', 'state_id', id);
 
         await client.query('COMMIT');
 
@@ -1040,9 +913,36 @@ exports.handler = async (event) => {
           console.error('[EXPERIENCES] Broadcast failed:', err.message);
         }
 
+        // Read the components back through the same path GET uses, so the
+        // create response and the fetch response are the same shape.
+        const createdComponentsRes = await pool.query(
+          `SELECT
+             ec.id, ec.experience_id, ec.component_type, ec.state_id, ec.action_id,
+             ec.organization_id, ec.created_at,
+             s.id as state_id_detail, s.state_text, s.captured_at,
+             a.id as action_id_detail, a.title as action_title,
+             a.description as action_description,
+             a.expected_state as action_expected_state,
+             a.completed_at as action_completed_at,
+             a.scoring_data->>'action_type' as action_type,
+             a.created_at as action_created_at
+           FROM experience_components ec
+           LEFT JOIN states s ON ec.state_id = s.id
+           LEFT JOIN actions a ON ec.action_id = a.id
+           WHERE ec.experience_id = $1
+           ORDER BY
+             CASE ec.component_type
+               WHEN 'initial_state' THEN 1
+               WHEN 'action' THEN 2
+               WHEN 'final_state' THEN 3
+             END,
+             COALESCE(s.captured_at, a.completed_at, ec.created_at) ASC`,
+          [experience.id]
+        );
+
         return success({
           ...experience,
-          components
+          components: await hydrateComponents(createdComponentsRes.rows)
         });
 
       } catch (txErr) {

@@ -4,18 +4,10 @@ import {
   updateExperience,
   listExperiences,
   getExperience,
-  generateExperienceSuggestions,
-  listExperienceSuggestions,
-  useExperienceSuggestion as useExperienceSuggestionApi,
-  dismissExperienceSuggestion,
 } from '@/lib/apiService';
 import {
   experiencesQueryKey,
   experienceQueryKey,
-  experienceSuggestionsQueryKey,
-  actionsQueryKey,
-  allActionsQueryKey,
-  completedActionsQueryKey,
 } from '@/lib/queryKeys';
 import type {
   CreateExperienceRequest,
@@ -31,6 +23,15 @@ export function useExperiences(params?: ExperienceListParams) {
     queryKey: experiencesQueryKey(params),
     queryFn: () => listExperiences(params),
     enabled: !!(params?.entity_type && params?.entity_id),
+    // The global default (staleTime: 24h, refetchOnMount: false — see
+    // queryConfig.ts) is tuned for offline-first field use, but it means a
+    // persisted, hours-stale cache from a previous session silently wins on
+    // reload with no visible signal that it's stale. This is exactly the
+    // view where "did my save actually take?" confusion shows up (open vs.
+    // completed depends on this being current), so always refetch here —
+    // same override SariSariChat.tsx already uses for its own list.
+    staleTime: 30 * 1000,
+    refetchOnMount: true,
   });
 }
 
@@ -43,6 +44,9 @@ export function useExperience(experienceId: string) {
     queryKey: experienceQueryKey(experienceId),
     queryFn: () => getExperience(experienceId),
     enabled: !!experienceId,
+    // Same reasoning as useExperiences above.
+    staleTime: 30 * 1000,
+    refetchOnMount: true,
   });
 }
 
@@ -83,67 +87,6 @@ export function useUpdateExperience(entityType: 'tool' | 'part', entityId: strin
       updateExperience(experienceId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: experiencesQueryKey({ entity_type: entityType, entity_id: entityId }) });
-    },
-  });
-}
-
-/**
- * Query hook to list AI-proposed action hypotheses awaiting a person's
- * decision (use/dismiss) for a container.
- */
-export function useExperienceSuggestions(entityType: 'tool' | 'part', entityId: string) {
-  return useQuery({
-    queryKey: experienceSuggestionsQueryKey(entityType, entityId),
-    queryFn: () => listExperienceSuggestions(entityType, entityId),
-    enabled: !!(entityType && entityId),
-  });
-}
-
-/**
- * Mutation hook to generate fresh suggestions (AI extraction) over a
- * container's observation history. Invalidates the suggestions list on success.
- */
-export function useGenerateExperienceSuggestions(entityType: 'tool' | 'part', entityId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () => generateExperienceSuggestions(entityType, entityId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: experienceSuggestionsQueryKey(entityType, entityId) });
-    },
-  });
-}
-
-/**
- * Mutation hook to confirm ("use") one AI-proposed hypothesis into a real
- * action. Invalidates the suggestions list and the actions caches, since
- * the new action is created outside the generic /actions cache-update path.
- */
-export function useConfirmExperienceSuggestion(entityType: 'tool' | 'part', entityId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: useExperienceSuggestionApi,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: experienceSuggestionsQueryKey(entityType, entityId) });
-      queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
-    },
-  });
-}
-
-/**
- * Mutation hook to dismiss one AI-proposed hypothesis.
- */
-export function useDismissExperienceSuggestion(entityType: 'tool' | 'part', entityId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({ perspective_id, hypothesis_index }: { perspective_id: string; hypothesis_index: number }) =>
-      dismissExperienceSuggestion(perspective_id, hypothesis_index),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: experienceSuggestionsQueryKey(entityType, entityId) });
     },
   });
 }

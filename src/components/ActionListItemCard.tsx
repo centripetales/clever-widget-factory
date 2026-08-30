@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { User, Handshake } from "lucide-react";
+import { User, Handshake, Route } from "lucide-react";
 import { cn, getActionBorderStyle } from "@/lib/utils";
 import { BaseAction, Profile } from "@/types/actions";
 import { ScoreButton } from "./ScoreButton";
@@ -44,12 +45,22 @@ export function ActionListItemCard({
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [showShareDialog, setShowShareDialog] = useState(false);
   const isShared = action.shared_with_partners ?? false;
 
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowShareDialog(true);
+  };
+
+  // asset_id matches either a tool or a part with nothing on the action
+  // itself to distinguish them — tools account for the overwhelming
+  // majority, same simplification already made in UnifiedActionDialog.
+  const handleDraftExperienceClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!action.asset_id) return;
+    navigate(`/experiences/new?entity_type=tool&entity_id=${action.asset_id}&draft_action_id=${action.id}`);
   };
 
   const handleScoreClick = (e: React.MouseEvent) => {
@@ -117,6 +128,17 @@ export function ActionListItemCard({
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
+              {action.asset_id && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDraftExperienceClick}
+                  className="h-7 w-7 p-0 hover:text-purple-600 hover:bg-purple-50 bg-white dark:bg-zinc-900"
+                  title="Draft Experience"
+                >
+                  <Route className="h-4 w-4" />
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"

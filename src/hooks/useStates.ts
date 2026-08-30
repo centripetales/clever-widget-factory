@@ -234,7 +234,19 @@ export function useStateMutations(orgId: string, filters?: { entity_type?: strin
   const deleteMutation = useMutation({
     mutationFn: (id: string) => stateService.deleteState(id),
     onMutate: async (id) => {
-      const deletedState = queryClient.getQueryData<any>(stateQueryKey(orgId, id));
+      // The single-item cache (stateQueryKey) is only populated by
+      // useStateById or by this hook's own create/update mutations — a
+      // state reached through a list-only view (e.g. a tool's History tab,
+      // which fetches through a completely separate endpoint/cache) never
+      // lands there, so this lookup alone silently misses its `links` and
+      // the tool/part history invalidation below becomes a no-op. Fall back
+      // to whichever list cache actually has it.
+      const deletedState =
+        queryClient.getQueryData<any>(stateQueryKey(orgId, id)) ??
+        queryClient.getQueryData<any[]>(statesQueryKey(orgId))?.find((s) => s.id === id) ??
+        (filters
+          ? queryClient.getQueryData<any[]>(statesQueryKey(orgId, filters))?.find((s) => s.id === id)
+          : undefined);
       return { deletedState };
     },
     onSuccess: (data, variables, context) => {
