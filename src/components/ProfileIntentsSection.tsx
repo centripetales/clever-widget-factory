@@ -45,6 +45,7 @@ export function ProfileIntentsSection({
   const saveIntents = (updatedIntents: string[]) => {
     updateMutation.mutate({
       userId,
+      organizationId,
       settings: { ...settings, growth_intents: updatedIntents },
     });
   };

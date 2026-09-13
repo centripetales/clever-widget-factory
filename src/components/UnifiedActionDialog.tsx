@@ -1502,6 +1502,11 @@ export function ActionForm({
                 entity_type="action"
                 entity_id={action.id}
                 source_organization_id={(action as any).organization_id}
+                toolId={
+                  (Array.isArray(formData.required_tools) ? formData.required_tools[0] : undefined) ||
+                  formData.asset_id ||
+                  undefined
+                }
               />
             ) : (
               <div className="space-y-2">

@@ -6227,6 +6227,19 @@ exports.handler = async (event) => {
           }
         }
 
+        // Validate metrics_chart_range if present (GroupMetricsGrid.tsx's
+        // persisted time-range preference for the org-wide metrics charts)
+        if (settings.metrics_chart_range !== undefined) {
+          const validRanges = ['week', 'month', '3months', 'all'];
+          if (!validRanges.includes(settings.metrics_chart_range)) {
+            return {
+              statusCode: 400,
+              headers,
+              body: JSON.stringify({ error: `metrics_chart_range must be one of: ${validRanges.join(', ')}` })
+            };
+          }
+        }
+
         const settingsJson = JSON.stringify(settings);
         const updateSql = `
           UPDATE organization_members

@@ -12,7 +12,8 @@ interface MetricsInputProps {
 }
 
 export function MetricsInput({ toolId, values, onChange }: MetricsInputProps) {
-  const { data: metrics, isLoading } = useMetrics(toolId);
+  const { data: allMetrics, isLoading } = useMetrics(toolId);
+  const metrics = allMetrics?.filter((metric) => metric.active !== false);
 
   const handleChange = (metricId: string, value: string) => {
     onChange({

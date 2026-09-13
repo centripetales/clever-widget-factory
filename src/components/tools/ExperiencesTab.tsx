@@ -1,25 +1,34 @@
 /**
  * ExperiencesTab
  *
- * A container's experiences, in four sections:
- * - Complete: the full S -> A -> S' shape — at least one initial state, one
- *   action, AND one final state.
- * - Reviewed: has both an initial and a final state, but no action attached
- *   yet. A decline is exactly as valid a result as growth here — "reviewed"
- *   describes the write-up, not that the outcome was new information to the
- *   person who lived it.
- * - In progress: everything else that's still a real row in the database —
- *   missing an initial state, a final state, or both. Without this, a
+ * A container's experiences, in two sections:
+ * - In progress: everything still missing an initial state, an action, a
+ *   final state, or more than one. Shown first, above Complete — this is
+ *   the list a person actually needs to act on, so it shouldn't be buried
+ *   below the (usually much longer) Complete list. Without this bucket, a
  *   just-started write-up (or an abandoned "New experience" click) is
- *   invisible: not Complete, not Reviewed, and easy to mistake for deleted.
- * - Actions: confirmed actions with no full write-up yet. Defaults to the
- *   last week (they accumulate fast) with an explicit "show all" to see
- *   older ones.
+ *   invisible: not Complete, and easy to mistake for deleted.
+ * - Complete: the full S -> A -> S' shape — at least one initial state, one
+ *   action, AND one final state. A decline is exactly as valid a result as
+ *   growth here — "complete" describes the write-up's shape, not that the
+ *   outcome was new information to the person who lived it. Sorted most
+ *   recent first, by the final state's own date. Collapsed by default —
+ *   it's usually the longest list and the one least often acted on.
  *
- * Complete, Reviewed, and In progress are mutually exclusive (an experience
- * appears in exactly one). Complete and Reviewed are collapsed by default,
- * shown above In progress — they're usually the longest lists and the ones
- * least often acted on.
+ * Complete and In progress are mutually exclusive (an experience appears in
+ * exactly one).
+ *
+ * Deliberately no "has initial + final, no action yet" bucket (a prior
+ * "Reviewed" section did this) — experiences here are meant to stay
+ * human-curated, not partially accepted on their way to Complete. Something
+ * without an action just sits in In progress until a person finishes it.
+ *
+ * Deliberately no list of "confirmed actions with no write-up yet" either (a
+ * prior "Actions" section did this, nudging toward writing every action up)
+ * — starting a new experience is a deliberate choice a person makes, not a
+ * queue to clear. "New experience" always starts from a blank card; picking
+ * an existing action for it happens inside that flow (Add from {container}),
+ * not from a pre-filtered list here.
  *
  * Experiences are written up by a person, starting from a specific
  * observation or action they already recognize as worth sharing (the "Draft
@@ -27,7 +36,7 @@
  * system-wide AI sweep.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,8 +56,7 @@ import { format } from 'date-fns';
 import { useExperiences } from '@/hooks/useExperiences';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { actionService, type ActionResponse } from '@/services/actionService';
-import { apiService, deleteExperience } from '@/lib/apiService';
+import { deleteExperience } from '@/lib/apiService';
 import { useToast } from '@/hooks/use-toast';
 import { toolHistoryQueryKey, experiencesQueryKey } from '@/lib/queryKeys';
 import type { Experience, ExperienceComponent } from '@/types/experiences';
@@ -109,67 +117,13 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [openActions, setOpenActions] = useState<ActionResponse[]>([]);
-  const [loadingOpenActions, setLoadingOpenActions] = useState(false);
   // AlertDialog-based confirm, not window.confirm() — native dialogs are
   // suppressed in some embedded/preview browser contexts, where confirm()
   // silently returns false and the delete never fires.
-  const [deleteConfirm, setDeleteConfirm] = useState<{ kind: 'action' | 'experience'; id: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string } | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
-  // Actions without a write-up accumulate fast — default to the last week
-  // so the list stays scannable, with an explicit opt-in to see older ones.
-  const [showAllActions, setShowAllActions] = useState(false);
-  const [reviewedOpen, setReviewedOpen] = useState(false);
 
   const experiences = experiencesRes?.data || [];
-
-  const attachedActionIds = useMemo(() => {
-    const ids = new Set<string>();
-    experiences.forEach((exp) => (exp.components?.actions || []).forEach((c) => c.action_id && ids.add(c.action_id)));
-    return ids;
-  }, [experiences]);
-
-  const fetchOpenActions = async () => {
-    if (entityType !== 'tool') return;
-    setLoadingOpenActions(true);
-    try {
-      const actions = await actionService.listActions({ asset_id: entityId, status: 'completed' });
-      setOpenActions(actions);
-    } catch (err) {
-      console.error('Failed to load actions:', err);
-    } finally {
-      setLoadingOpenActions(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchOpenActions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityType, entityId]);
-
-  const handleDeleteAction = async (actionId: string) => {
-    try {
-      // The backend also deletes this action's experience_components row
-      // and, if that was the experience's last remaining component, the
-      // now-empty experience itself — so the experiences cache needs
-      // invalidating here too, not just the open-actions list and history.
-      await apiService.delete(`/actions/${actionId}`);
-      setOpenActions((prev) => prev.filter((a) => a.id !== actionId));
-      // The History tab (ToolDetails.tsx) reads this same action from its own
-      // cached query — without this it keeps showing the deleted action until
-      // something else happens to invalidate it.
-      if (entityType === 'tool') {
-        queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(entityId) });
-      }
-      queryClient.invalidateQueries({ queryKey: experiencesQueryKey({ entity_type: entityType, entity_id: entityId }) });
-      toast({ title: 'Action deleted', description: 'The action has been deleted successfully.' });
-    } catch (err) {
-      console.error('Failed to delete action:', err);
-      toast({ title: 'Error', description: 'Failed to delete action. Please try again.', variant: 'destructive' });
-    } finally {
-      setDeleteConfirm(null);
-    }
-  };
 
   const handleDeleteExperience = async (experienceId: string) => {
     try {
@@ -187,27 +141,24 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
     }
   };
 
-  const trulyOpenActions = openActions.filter((a) => !attachedActionIds.has(a.id));
-  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recentOpenActions = trulyOpenActions.filter(
-    (a) => a.completed_at && new Date(a.completed_at).getTime() >= oneWeekAgo
-  );
-  const olderOpenActionsCount = trulyOpenActions.length - recentOpenActions.length;
-  const visibleOpenActions = showAllActions ? trulyOpenActions : recentOpenActions;
-
-  // Complete = the full S -> A -> S' shape. Reviewed = has both a starting
-  // condition and an observed outcome, but no action attached yet — still a
-  // real write-up, just not tied to a logged action. Mutually exclusive.
+  // Complete = the full S -> A -> S' shape. Everything else -- missing an
+  // initial state, an action, a final state, or more than one -- is In
+  // progress; without that fallback, a just-started write-up (or an empty
+  // shell from a "New experience" click that got abandoned) is a real row
+  // in the database that never appears anywhere in this tab.
   const hasInitial = (exp: Experience) => !!exp.components?.initial_states?.length;
   const hasFinal = (exp: Experience) => !!exp.components?.final_states?.length;
   const hasAction = (exp: Experience) => !!exp.components?.actions?.length;
-  const completeExperiences = experiences.filter((exp) => hasInitial(exp) && hasAction(exp) && hasFinal(exp));
-  const reviewedExperiences = experiences.filter((exp) => hasInitial(exp) && hasFinal(exp) && !hasAction(exp));
-  // Anything missing an initial or a final state falls through both filters
-  // above — without this, a just-started write-up (or an empty shell from a
-  // "New experience" click that got abandoned) is a real row in the
-  // database that never appears anywhere in this tab.
-  const inProgressExperiences = experiences.filter((exp) => !(hasInitial(exp) && hasFinal(exp)));
+  // Most recent first, by the final state's own date -- the moment the
+  // experience actually concluded, not when its write-up was saved.
+  const completeExperiences = experiences
+    .filter((exp) => hasInitial(exp) && hasAction(exp) && hasFinal(exp))
+    .sort((a, b) => {
+      const aDate = lastCapturedAt(a.components?.final_states);
+      const bDate = lastCapturedAt(b.components?.final_states);
+      return (bDate ? new Date(bDate).getTime() : 0) - (aDate ? new Date(aDate).getTime() : 0);
+    });
+  const inProgressExperiences = experiences.filter((exp) => !(hasInitial(exp) && hasAction(exp) && hasFinal(exp)));
 
   const renderExperienceRow = (exp: Experience) => {
     const firstInitial = summarizeStateComponent(exp.components?.initial_states?.[0]);
@@ -243,7 +194,7 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setDeleteConfirm({ kind: 'experience', id: exp.id })}
+              onClick={() => setDeleteConfirm({ id: exp.id })}
               className="h-8 px-2 text-muted-foreground/60 hover:text-red-600 hover:bg-red-50"
               aria-label="Delete experience"
               title="Delete experience — the states and actions themselves are untouched"
@@ -311,6 +262,37 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          onClick={() => navigate(`/experiences/new?entity_type=${entityType}&entity_id=${entityId}`)}
+          disabled={disabled}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          New experience
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-base flex items-center gap-2">
+            In progress
+            {inProgressExperiences.length > 0 && (
+              <Badge variant="secondary" className="font-normal">{inProgressExperiences.length}</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {loadingExperiences ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : inProgressExperiences.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nothing started yet.</p>
+          ) : (
+            inProgressExperiences.map(renderExperienceRow)
+          )}
+        </CardContent>
+      </Card>
+
       <Collapsible open={completeOpen} onOpenChange={setCompleteOpen}>
         <Card>
           <CollapsibleTrigger asChild>
@@ -338,137 +320,12 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
         </Card>
       </Collapsible>
 
-      <Collapsible open={reviewedOpen} onOpenChange={setReviewedOpen}>
-        <Card>
-          <CollapsibleTrigger asChild>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 cursor-pointer select-none">
-              <CardTitle className="text-base flex items-center gap-2">
-                Reviewed
-                {reviewedExperiences.length > 0 && (
-                  <Badge variant="secondary" className="font-normal">{reviewedExperiences.length}</Badge>
-                )}
-              </CardTitle>
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${reviewedOpen ? 'rotate-180' : ''}`} />
-            </CardHeader>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <CardContent className="space-y-2">
-              {loadingExperiences ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : reviewedExperiences.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No reviewed write-ups yet.</p>
-              ) : (
-                reviewedExperiences.map(renderExperienceRow)
-              )}
-            </CardContent>
-          </CollapsibleContent>
-        </Card>
-      </Collapsible>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-base flex items-center gap-2">
-            In progress
-            {inProgressExperiences.length > 0 && (
-              <Badge variant="secondary" className="font-normal">{inProgressExperiences.length}</Badge>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {loadingExperiences ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : inProgressExperiences.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing started yet.</p>
-          ) : (
-            inProgressExperiences.map(renderExperienceRow)
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-base">Actions</CardTitle>
-          <Button
-            size="sm"
-            onClick={() => navigate(`/experiences/new?entity_type=${entityType}&entity_id=${entityId}`)}
-            disabled={disabled}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            New experience
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {loadingOpenActions ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : trulyOpenActions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing confirmed yet without a write-up.</p>
-          ) : visibleOpenActions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing in the last week.{' '}
-              <button type="button" onClick={() => setShowAllActions(true)} className="underline hover:text-foreground">
-                Show all {trulyOpenActions.length}
-              </button>
-            </p>
-          ) : (
-            visibleOpenActions.map((action) => (
-              <div key={action.id} className="flex items-center justify-between rounded-md border p-3">
-                <div>
-                  <p className="font-medium text-sm">{action.title}</p>
-                  {action.completed_at && (
-                    <p className="text-xs text-muted-foreground">{format(new Date(action.completed_at), 'MMM d, yyyy')}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => navigate(`/experiences/new?entity_type=${entityType}&entity_id=${entityId}&action_id=${action.id}`)}
-                  >
-                    Review
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteConfirm({ kind: 'action', id: action.id })}
-                    className="h-8 px-2 text-muted-foreground/60 hover:text-red-600 hover:bg-red-50"
-                    aria-label="Delete action"
-                    title="Delete action"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-          {!showAllActions && olderOpenActionsCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAllActions(true)}
-              className="text-xs text-muted-foreground underline hover:text-foreground"
-            >
-              Show {olderOpenActionsCount} older
-            </button>
-          )}
-          {showAllActions && olderOpenActionsCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAllActions(false)}
-              className="text-xs text-muted-foreground underline hover:text-foreground"
-            >
-              Show last week only
-            </button>
-          )}
-        </CardContent>
-      </Card>
-
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{deleteConfirm?.kind === 'experience' ? 'Delete experience' : 'Delete action'}</AlertDialogTitle>
+            <AlertDialogTitle>Delete experience</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteConfirm?.kind === 'experience'
-                ? 'This removes the write-up only — the observations and actions it references are untouched. This cannot be undone.'
-                : 'Are you sure you want to delete this action? This cannot be undone.'}
+              This removes the write-up only — the observations and actions it references are untouched. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -476,8 +333,7 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
             <AlertDialogAction
               onClick={() => {
                 if (!deleteConfirm) return;
-                if (deleteConfirm.kind === 'experience') handleDeleteExperience(deleteConfirm.id);
-                else handleDeleteAction(deleteConfirm.id);
+                handleDeleteExperience(deleteConfirm.id);
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >

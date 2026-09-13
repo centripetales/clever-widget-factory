@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { apiService, getApiData } from '@/lib/apiService';
-import { partsOrdersQueryKey } from '@/lib/queryKeys';
+import { partsOrdersQueryKey, toolsQueryKey, partsQueryKey } from '@/lib/queryKeys';
 import { offlineQueryConfig } from '@/lib/queryConfig';
 import { useAssetMutations } from '@/hooks/useAssetMutations';
 import { ArrowLeft, Plus, BarChart3 } from "lucide-react";
@@ -29,6 +29,7 @@ import { useImageUpload } from "@/hooks/useImageUpload";
 import { useOrganizationMembers } from "@/hooks/useOrganizationMembers";
 import { InventoryItemForm } from "./InventoryItemForm";
 import { getImageUrl, getThumbnailUrl } from '@/lib/imageUtils';
+import { getRecentAssetIds } from '@/lib/recentAssets';
 import { MaxwellInlinePanel } from "@/components/MaxwellInlinePanel";
 import { PrismIcon } from "@/components/icons/PrismIcon";
 import { EntityContext } from "@/hooks/useEntityContext";
@@ -92,6 +93,10 @@ export const CombinedAssetsContainer = () => {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [isMaxwellOpen, setIsMaxwellOpen] = useState(false);
   const [maxwellDialogAsset, setMaxwellDialogAsset] = useState<CombinedAsset | null>(null);
+  // Read once on mount -- this component remounts fresh whenever navigating
+  // back from an asset's details page, so a plain read (rather than state
+  // synced elsewhere) always reflects the latest recently-viewed list.
+  const recentAssetIds = getRecentAssetIds();
   
   // Image state for stock editing
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -371,6 +376,31 @@ export const CombinedAssetsContainer = () => {
 
     return filtered;
   }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, showMyCheckedOut, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
+
+  // Most-recently-viewed shortcut. Looked up against the full tools/parts
+  // query cache (same one AssetDetailsPage reads), not the `assets` array
+  // above -- that array is paginated (50 at a time, growing only as the grid
+  // is scrolled), so a recently-viewed item outside the currently-loaded
+  // page would otherwise silently fail to resolve and the chip would never
+  // appear even though it's genuinely in the recent list.
+  const recentAssetsQueryClient = useQueryClient();
+  const recentAssets = useMemo(() => {
+    const tools = recentAssetsQueryClient.getQueryData<any[]>(toolsQueryKey()) || [];
+    const parts = recentAssetsQueryClient.getQueryData<any[]>(partsQueryKey()) || [];
+    return recentAssetIds
+      .map((id) => {
+        const tool = tools.find((t) => t.id === id);
+        if (tool) return { ...tool, type: 'asset' as const } as CombinedAsset;
+        const part = parts.find((p) => p.id === id);
+        if (part) return { ...part, type: 'stock' as const } as CombinedAsset;
+        return null;
+      })
+      .filter((asset): asset is CombinedAsset => !!asset);
+    // `assets` isn't read above, but it's built from the same tools/parts
+    // query cache this memo reads imperatively -- including it as a dep
+    // forces a recompute once that cache actually has data, since
+    // getQueryData() alone doesn't subscribe to cache updates.
+  }, [recentAssetIds, recentAssetsQueryClient, assets]);
 
   const handleCreateAsset = async (assetData: any, isAsset: boolean) => {
     const result = await createAsset(assetData, isAsset);
@@ -699,6 +729,31 @@ export const CombinedAssetsContainer = () => {
           Summary
         </Button>
       </div>
+
+      {/* Recently viewed -- jump straight back to the last couple of items
+          without re-filtering, regardless of the current search/filter state */}
+      {recentAssets.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-muted-foreground">Recently viewed:</span>
+          {recentAssets.map((asset) => {
+            const thumbnailUrl = getThumbnailUrl(asset.image_url);
+            return (
+              <Button
+                key={asset.id}
+                variant="outline"
+                size="sm"
+                className="h-8 gap-2"
+                onClick={() => handleShowAssetDetails(asset)}
+              >
+                {thumbnailUrl ? (
+                  <img src={thumbnailUrl} alt="" className="h-5 w-5 rounded object-cover" />
+                ) : null}
+                <span className="max-w-[160px] truncate">{asset.name}</span>
+              </Button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Filters */}
       <CombinedAssetFilters

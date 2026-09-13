@@ -127,7 +127,7 @@ export const handler = async (event) => {
                   'metric_id', ms.metric_id, 'metric_name', m.name, 'value', ms.value, 'unit', m.unit
                 ))
                 FROM metric_snapshots ms JOIN metrics m ON ms.metric_id = m.metric_id
-                WHERE ms.state_id = s.id
+                WHERE ms.state_id = s.id AND m.active
               ) as metrics
             FROM states s
             JOIN state_links sl ON sl.state_id = s.id
@@ -210,7 +210,7 @@ export const handler = async (event) => {
     // GET /api/tools/{id}/metrics - List all metrics for a tool
     if (httpMethod === 'GET' && toolId && !metricId) {
       const result = await executeQuery(
-        `SELECT metric_id, tool_id, name, unit, benchmark_value, details, created_at, organization_id
+        `SELECT metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id
          FROM metrics
          WHERE tool_id = $1 AND organization_id = $2
          ORDER BY created_at DESC`,
@@ -240,7 +240,7 @@ export const handler = async (event) => {
       const result = await executeQuery(
         `INSERT INTO metrics (tool_id, name, unit, benchmark_value, details, organization_id)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, created_at, organization_id`,
+         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id`,
         [toolId, name.trim(), unit || null, benchmark_value || null, details || null, organizationId]
       );
 
@@ -254,7 +254,7 @@ export const handler = async (event) => {
     // PUT /api/tools/{id}/metrics/{metric_id} - Update a metric
     if (httpMethod === 'PUT' && toolId && metricId) {
       const body = JSON.parse(event.body || '{}');
-      const { name, unit, benchmark_value, details } = body;
+      const { name, unit, benchmark_value, details, active } = body;
 
       if (!name || !name.trim()) {
         return {
@@ -266,10 +266,10 @@ export const handler = async (event) => {
 
       const result = await executeQuery(
         `UPDATE metrics
-         SET name = $1, unit = $2, benchmark_value = $3, details = $4
-         WHERE metric_id = $5 AND tool_id = $6 AND organization_id = $7
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, created_at, organization_id`,
-        [name.trim(), unit || null, benchmark_value || null, details || null, metricId, toolId, organizationId]
+         SET name = $1, unit = $2, benchmark_value = $3, details = $4, active = $5
+         WHERE metric_id = $6 AND tool_id = $7 AND organization_id = $8
+         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id`,
+        [name.trim(), unit || null, benchmark_value || null, details || null, active !== false, metricId, toolId, organizationId]
       );
 
       if (result.rows.length === 0) {

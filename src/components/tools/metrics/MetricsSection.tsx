@@ -24,6 +24,7 @@ export function MetricsSection({ toolId }: MetricsSectionProps) {
     unit?: string;
     benchmark_value?: number;
     details?: string;
+    active?: boolean;
   }) => {
     if (editingMetric) {
       updateMetric.mutate(

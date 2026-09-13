@@ -400,6 +400,7 @@ erDiagram
     character varying unit
     numeric benchmark_value
     text details
+    boolean active NOT NULL
     timestamp without time zone created_at
     uuid organization_id NOT NULL
   }

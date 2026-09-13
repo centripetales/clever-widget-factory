@@ -208,11 +208,16 @@ export default function ExperiencePage() {
   // for a brand new one).
   useEffect(() => {
     if (isNew) {
-      setInitialStateIds([]);
+      // Each lane defaults straight into its editable card — rather than the
+      // empty "No starting state/outcome yet" placeholder — whenever nothing
+      // is already preselected for it, so Link existing photo is reachable
+      // immediately instead of requiring a trip down to "Add from {container}"
+      // first just to get a card to exist.
+      setInitialStateIds([PENDING_STATE_ID.initial_states]);
       // A state-anchored draft places the real, already-existing observation
       // straight into the final-state lane — no AI needed for that leg, only
       // for the action and the initial state around it.
-      setFinalStateIds(draftAnchor?.type === 'state' ? [draftAnchor.id] : []);
+      setFinalStateIds(draftAnchor?.type === 'state' ? [draftAnchor.id] : [PENDING_STATE_ID.final_states]);
       const initialActionId = preselectedActionId || (draftAnchor?.type === 'action' ? draftAnchor.id : undefined);
       setActionIds(initialActionId ? [initialActionId] : []);
       setClaimEdits({});
@@ -224,7 +229,7 @@ export default function ExperiencePage() {
       setDraftAction(null);
       setDraftPerspectiveId(null);
       setDraftGenerationConfigId(null);
-      setNewActionDraft(null);
+      setNewActionDraft(initialActionId ? null : { title: '', text: '', photos: [] });
       return;
     }
     if (!experience) return;
@@ -378,7 +383,17 @@ export default function ExperiencePage() {
 
   const addToLane = (leg: LegKey, id: string) => {
     const setter = leg === 'initial_states' ? setInitialStateIds : setFinalStateIds;
-    setter((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const pendingId = PENDING_STATE_ID[leg];
+    const pendingDraft = drafts[pendingId];
+    const pendingHasContent = !!pendingDraft && (pendingDraft.photos.length > 0 || pendingDraft.text.trim().length > 0);
+    setter((prev) => {
+      const withNew = prev.includes(id) ? prev : [...prev, id];
+      // A real item was just picked for this lane -- drop its default blank
+      // card so the lane doesn't show an empty card alongside the real one,
+      // but only when it's still untouched; never discard photos/text
+      // someone already started on it.
+      return pendingHasContent ? withNew : withNew.filter((x) => x !== pendingId);
+    });
     ensureDraft(id);
   };
 
@@ -597,12 +612,23 @@ export default function ExperiencePage() {
         const pendingId = PENDING_STATE_ID[leg];
         const draft = drafts[pendingId];
         const laneIds = leg === 'initial_states' ? nextInitialIds : nextFinalIds;
+        if (!laneIds.includes(pendingId)) continue;
         // Only create it if it's actually still in its lane — a promoted
         // photo or drafted text that was then removed must not leave an
         // orphan state behind. Content can come from photos (promote-photo
         // flow) or text alone (AI-drafted state text, no photos).
         const hasContent = draft && (draft.photos.length > 0 || draft.text.trim().length > 0);
-        if (!hasContent || !laneIds.includes(pendingId)) continue;
+        if (!hasContent) {
+          // The lane defaults to this blank placeholder card so Link
+          // existing photo is reachable without an extra click (see
+          // renderLane) — left untouched, its sentinel id must not reach the
+          // backend as if it were a real state id, or the save request
+          // fails outright (not a valid state_id).
+          const stripped = laneIds.filter((id) => id !== pendingId);
+          if (leg === 'initial_states') nextInitialIds = stripped;
+          else nextFinalIds = stripped;
+          continue;
+        }
 
         const createdState = await stateService.createState({
           state_text: draft.text.trim() || undefined,
@@ -704,9 +730,17 @@ export default function ExperiencePage() {
       //     UnifiedActionDialog uses, then its own linked observation via
       //     the same state_links mechanism as step 3 above. A title-less
       //     draft is dropped rather than saved as noise.
+      //
+      //     The typed "what was done" text is saved as the action's own
+      //     `description` — its real, permanent baseline, not a "claim
+      //     edit" (that mechanism is specifically a person's correction of
+      //     an AI-extracted CLAIM, which a brand-new action doesn't have).
+      //     renderActionCard's originalClaim falls back to `description`
+      //     when there's no CLAIM, so this shows back up on reopen.
       if (newActionDraft && newActionDraft.title.trim()) {
         const createdAction = await actionService.createAction({
           title: newActionDraft.title.trim(),
+          description: newActionDraft.text.trim() || undefined,
           status: 'completed',
           completed_at: new Date().toISOString(),
           asset_id: entityType === 'tool' ? entityId : undefined,
@@ -798,7 +832,7 @@ export default function ExperiencePage() {
       >
         <div className="flex items-start justify-between gap-2">
           {isPending ? (
-            <p className="text-xs text-muted-foreground">New — from promoted photos, created on save</p>
+            <p className="text-xs text-muted-foreground">New — created on save</p>
           ) : (
             <Input
               type="date"
@@ -991,7 +1025,11 @@ export default function ExperiencePage() {
     const title = comp?.action?.title || fallback?.title || 'Untitled action';
     const actionType = comp?.action?.action_type;
     const completedAt = comp?.action?.completed_at || fallback?.completed_at;
-    const originalClaim = comp?.action?.claim || '';
+    // A person-authored action (created straight in this experience, no AI
+    // involved) has no CLAIM perspective to extract "what was done" from --
+    // its own `description` (set at creation, see handleSave step 5b) is
+    // the real baseline text for it, not an edit of anything.
+    const originalClaim = comp?.action?.claim || comp?.action?.description || '';
 
     // An action's linked observations often carry photos unrelated to what
     // this write-up is actually about, so nothing shows here by default —
@@ -1387,7 +1425,15 @@ export default function ExperiencePage() {
                       <p className="text-sm truncate">{item.data.title}</p>
                     </div>
                     <Button size="sm" variant="outline" className="h-7 text-xs shrink-0"
-                      onClick={() => setActionIds((prev) => [...prev, item.data.id])}>
+                      onClick={() => {
+                        setActionIds((prev) => [...prev, item.data.id]);
+                        // Same reasoning as addToLane's pending-state cleanup:
+                        // drop the default blank "new action" card once a
+                        // real action is picked, but only if it's untouched.
+                        setNewActionDraft((prev) =>
+                          prev && !prev.title.trim() && !prev.text.trim() && prev.photos.length === 0 ? null : prev
+                        );
+                      }}>
                       <Plus className="h-3 w-3 mr-1" />Add
                     </Button>
                   </div>

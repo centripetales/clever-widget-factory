@@ -237,7 +237,7 @@ export default function AddObservation() {
   // Determine toolId for metrics
   const toolId = linkedAssets.find(a => a.type === 'tool')?.id || null;
   const { data: metrics } = useMetrics(toolId || '');
-  const hasMetrics = metrics && metrics.length > 0;
+  const hasMetrics = !!metrics?.some(metric => metric.active !== false);
 
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [observationText, setObservationText] = useState('');

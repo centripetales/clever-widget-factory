@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import type { Metric } from '@/lib/metricsApi';
 
 interface MetricDialogProps {
@@ -14,6 +15,7 @@ interface MetricDialogProps {
     unit?: string;
     benchmark_value?: number;
     details?: string;
+    active?: boolean;
   }) => void;
   metric?: Metric;
   isSubmitting?: boolean;
@@ -25,6 +27,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
     unit: '',
     benchmark_value: '',
     details: '',
+    active: true,
   });
 
   useEffect(() => {
@@ -34,6 +37,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
         unit: metric.unit || '',
         benchmark_value: metric.benchmark_value?.toString() || '',
         details: metric.details || '',
+        active: metric.active !== false,
       });
     } else {
       setFormData({
@@ -41,6 +45,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
         unit: '',
         benchmark_value: '',
         details: '',
+        active: true,
       });
     }
   }, [metric, open]);
@@ -48,7 +53,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (!formData.name.trim()) {
       return;
     }
@@ -58,6 +63,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
       unit: formData.unit.trim() || undefined,
       benchmark_value: formData.benchmark_value ? parseFloat(formData.benchmark_value) : undefined,
       details: formData.details.trim() || undefined,
+      active: formData.active,
     });
   };
 
@@ -111,6 +117,22 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
               rows={3}
             />
           </div>
+
+          {metric && (
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="active">Active</Label>
+                <p className="text-sm text-muted-foreground">
+                  Disable to hide this metric from observation forms and charts, without losing its history.
+                </p>
+              </div>
+              <Switch
+                id="active"
+                checked={formData.active}
+                onCheckedChange={(checked) => setFormData(prev => ({ ...prev, active: checked }))}
+              />
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
