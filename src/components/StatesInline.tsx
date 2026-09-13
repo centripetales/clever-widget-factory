@@ -9,12 +9,16 @@ import { useLearningObjectives, useObservationVerification } from '@/hooks/useLe
 import type { VerificationResponse, LearningObjective } from '@/hooks/useLearning';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { MetricsInput } from '@/components/observations/MetricsInput';
+import { useMetrics } from '@/hooks/metrics/useMetrics';
+import { useSnapshots, useSnapshotMutations } from '@/hooks/useSnapshots';
+import { snapshotService } from '@/services/snapshotService';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,9 +41,19 @@ interface StatesInlineProps {
   entity_id: string;
   /** The organization_id that owns this entity. When different from the active org, observations are fetched cross-org. */
   source_organization_id?: string;
+  /**
+   * The tool this entity's observations should offer metric fields for —
+   * e.g. an action's own linked asset (`formData.asset_id` in
+   * UnifiedActionDialog.tsx). Without this, observations logged here (most
+   * commonly an action's evidence) have no way to record a Temperature/
+   * Moisture/etc. reading even when the tool they're really about has
+   * metrics defined, unlike the dedicated Observation form
+   * (src/pages/AddObservation.tsx) which always knows its own linked tool.
+   */
+  toolId?: string | null;
 }
 
-export function StatesInline({ entity_type, entity_id, source_organization_id }: StatesInlineProps) {
+export function StatesInline({ entity_type, entity_id, source_organization_id, toolId }: StatesInlineProps) {
   const { toast } = useToast();
   const { uploadFiles } = useFileUpload();
   const { user } = useAuth();
@@ -171,6 +185,30 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
   const [stateText, setStateText] = useState('');
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
 
+  // Metric values for the current form (create or edit) — same pattern as
+  // src/pages/AddObservation.tsx, keyed by metric_id. Only meaningful when
+  // `toolId` was passed in and that tool actually has metrics defined.
+  const { data: metrics } = useMetrics(toolId || '');
+  const hasMetrics = !!metrics?.some(metric => metric.active !== false);
+  const [metricValues, setMetricValues] = useState<Record<string, string>>({});
+  // Existing snapshots for whichever observation is currently being edited —
+  // query is inert (enabled: false) while nothing is being edited.
+  const { data: existingSnapshots } = useSnapshots(editingStateId || undefined);
+  useEffect(() => {
+    if (editingStateId && existingSnapshots) {
+      const values: Record<string, string> = {};
+      existingSnapshots.forEach((snapshot) => { values[snapshot.metric_id] = snapshot.value; });
+      setMetricValues(values);
+    }
+  }, [editingStateId, existingSnapshots]);
+  // Bound to editingStateId for the edit path (mirrors AddObservation.tsx) —
+  // during creation there's no id yet, so that path calls snapshotService
+  // directly against the id createState just returned instead.
+  const { createSnapshot, updateSnapshot, deleteSnapshot } = useSnapshotMutations(
+    editingStateId || '',
+    toolId ? [{ type: 'tool', id: toolId }] : []
+  );
+
   // Demonstration checklist state
   const [selectedObjectiveIds, setSelectedObjectiveIds] = useState<Set<string>>(new Set());
   const [verificationResults, setVerificationResults] = useState<VerificationResponse | null>(null);
@@ -253,6 +291,44 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
     setShowAddForm(false);
     setSelectedObjectiveIds(new Set());
     setVerificationResults(null);
+    setMetricValues({});
+  };
+
+  // Diffs metricValues against whatever snapshots already existed for this
+  // state and creates/updates/deletes only what changed — same logic as
+  // src/pages/AddObservation.tsx's handleSubmit, duplicated rather than
+  // shared since that page owns its own local metricValues/toolId/mutation
+  // wiring and isn't set up to be called from elsewhere.
+  const saveMetricSnapshots = async (stateId: string, isEdit: boolean) => {
+    if (!toolId || !hasMetrics || Object.keys(metricValues).length === 0) return;
+    const existingSnapshotsMap = new Map((existingSnapshots || []).map((s) => [s.metric_id, s]));
+    for (const [metricId, value] of Object.entries(metricValues)) {
+      const existingSnapshot = existingSnapshotsMap.get(metricId);
+      if (value.trim()) {
+        if (existingSnapshot) {
+          if (isEdit) {
+            await updateSnapshot({ snapshotId: existingSnapshot.snapshot_id, data: { value } });
+          } else {
+            await snapshotService.updateSnapshot(existingSnapshot.snapshot_id, { value });
+          }
+        } else {
+          if (isEdit) {
+            await createSnapshot({ metric_id: metricId, value });
+          } else {
+            await snapshotService.createSnapshot(stateId, { metric_id: metricId, value });
+          }
+        }
+      }
+    }
+    for (const [metricId, snapshot] of existingSnapshotsMap.entries()) {
+      if (!metricValues[metricId] || !metricValues[metricId].trim()) {
+        if (isEdit) {
+          await deleteSnapshot(snapshot.snapshot_id);
+        } else {
+          await snapshotService.deleteSnapshot(snapshot.snapshot_id);
+        }
+      }
+    }
   };
 
   const handleSubmit = async () => {
@@ -364,6 +440,17 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
           }
         });
 
+        try {
+          await saveMetricSnapshots(editingStateId, true);
+        } catch (snapshotError) {
+          console.error('Failed to save metric snapshots:', snapshotError);
+          toast({
+            title: 'Metrics not saved',
+            description: 'The observation was updated, but one or more metric values failed to save.',
+            variant: 'destructive'
+          });
+        }
+
         toast({
           title: 'Observation updated',
           description: 'Your observation has been updated successfully.'
@@ -379,6 +466,7 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
         setPhotos([]);
         setShowAddForm(false);
         setEditingStateId(null);
+        setMetricValues({});
         return;
       } else {
         // Create new observation with uploaded photos
@@ -392,6 +480,19 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
         };
 
         const savedObservation = await createState(data);
+
+        if (savedObservation?.id) {
+          try {
+            await saveMetricSnapshots(savedObservation.id, false);
+          } catch (snapshotError) {
+            console.error('Failed to save metric snapshots:', snapshotError);
+            toast({
+              title: 'Metrics not saved',
+              description: 'The observation was saved, but one or more metric values failed to save.',
+              variant: 'destructive'
+            });
+          }
+        }
 
         toast({
           title: 'Observation saved',
@@ -411,6 +512,7 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
         setEditingStateId(null);
         setShowAddForm(false);
         setSelectedObjectiveIds(new Set());
+        setMetricValues({});
 
         // Trigger verification in the background if objectives were selected
         if (selectedObjectiveIds.size > 0 && savedObservation?.id && user?.userId) {
@@ -461,6 +563,10 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
     // Load the observation data for editing
     setEditingStateId(state.id);
     setStateText(state.observation_text || '');
+    // Cleared immediately so a previous edit's values don't flash while
+    // this state's own snapshots load — the useEffect above (keyed on
+    // editingStateId + existingSnapshots) fills in the real ones shortly.
+    setMetricValues({});
 
     // Load existing photos into PhotoItem format
     const existingPhotos: PhotoItem[] = (state.photos || []).map((photo, index) => ({
@@ -548,6 +654,22 @@ export function StatesInline({ entity_type, entity_id, source_organization_id }:
                 rows={3}
               />
             </div>
+
+            {/* Metrics — only when a tool was resolved for this entity (see
+                the toolId prop) and it actually has metrics defined. Same
+                condition/component AddObservation.tsx uses, so e.g. an
+                action's own linked tool gets the same Temperature/Moisture
+                fields here that a standalone observation on that tool would. */}
+            {toolId && hasMetrics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <MetricsInput toolId={toolId} values={metricValues} onChange={setMetricValues} />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Demonstration Checklist — shown below observation form for actions with incomplete objectives */}
             {showDemonstrationChecklist && showAddForm && !verificationResults && (

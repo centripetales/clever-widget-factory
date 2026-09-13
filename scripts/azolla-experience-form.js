@@ -57,6 +57,19 @@ if (fs.existsSync(envPath)) {
   }
 }
 
+// Deprecated: this script creates real `actions` rows unattended, gated only
+// by CONFIDENCE_FLOOR below -- no person reviews/approves any individual
+// action before it's written. Experience and action creation is meant to be
+// fully human-generated now. Use the review-gated pipeline instead:
+//   azolla-experience-propose.js -> azolla-experience-review-gen.js (Accept/
+//   Reject per pair) -> azolla-experience-commit.js -- which only creates an
+//   action for pairs a person explicitly accepted.
+console.error(
+  'azolla-experience-form.js is deprecated: it creates actions without per-action human review.\n' +
+  'Use the review-gated pipeline instead: azolla-experience-propose.js -> azolla-experience-review-gen.js -> azolla-experience-commit.js'
+);
+process.exit(1);
+
 const TOOL_ID = process.argv[2];
 const DRY_RUN = process.argv.includes('--dry-run');
 if (!TOOL_ID) {

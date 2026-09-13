@@ -67,12 +67,22 @@ export function LinkExistingPhotoDialog({
     if (!open) setSelected({});
   }, [open]);
 
-  // useStates returns whole states with their photos; flatten to a photo pool.
+  // useStates returns whole states with their photos; flatten to a photo
+  // pool, deduped by photo_url. The same photo can legitimately live on more
+  // than one state -- e.g. once "promoted" into a new experience lane, it's
+  // copied onto that pending state while the original state keeps its own
+  // copy too -- so without deduping, picking a photo here would show that
+  // same image twice.
   const photos = useMemo<LinkablePhoto[]>(() => {
+    const sorted = [...(states || [])].sort(
+      (a, b) => new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime()
+    );
+    const seen = new Set<string>();
     const flat: LinkablePhoto[] = [];
-    for (const s of states || []) {
+    for (const s of sorted) {
       for (const p of s.photos || []) {
-        if (!p.photo_url) continue;
+        if (!p.photo_url || seen.has(p.photo_url)) continue;
+        seen.add(p.photo_url);
         flat.push({
           photo_url: p.photo_url,
           photo_description: p.photo_description,
@@ -81,9 +91,7 @@ export function LinkExistingPhotoDialog({
         });
       }
     }
-    return flat.sort(
-      (a, b) => new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime()
-    );
+    return flat;
   }, [states]);
 
   const alreadyAdded = useMemo(() => new Set(existingPhotoUrls), [existingPhotoUrls]);
@@ -112,6 +120,17 @@ export function LinkExistingPhotoDialog({
             Reuse a photo already recorded for this container. The original observation keeps its copy.
           </DialogDescription>
         </DialogHeader>
+
+        {/* Mirrors the button row at the bottom -- with a long photo grid,
+            confirming a selection shouldn't require scrolling past it. */}
+        <div className="flex justify-end gap-2 pb-2 border-b">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleConfirm} disabled={selectedCount === 0}>
+            Add {selectedCount > 0 ? `${selectedCount} photo${selectedCount === 1 ? '' : 's'}` : 'selected'}
+          </Button>
+        </div>
 
         {isLoading ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground">

@@ -8,6 +8,7 @@ import { apiService } from '@/lib/apiService';
 import { useToolHistory } from '@/hooks/tools/useToolHistory';
 import { ToolDetails } from '@/components/tools/ToolDetails';
 import { StockDetails } from '@/components/StockDetails';
+import { recordRecentAsset } from '@/lib/recentAssets';
 
 // Real route for "view an asset's details/history" (was previously a local
 // component-state swap inside CombinedAssetsContainer with no URL of its
@@ -34,6 +35,15 @@ export default function AssetDetailsPage() {
   }, [setSearchParams]);
 
   const { toolHistory, fetchToolHistory, loading: toolHistoryLoading } = useToolHistory(asset?.type === 'asset' ? id : undefined);
+
+  // Recorded here (the actual details page, reached via search results,
+  // chart click-throughs, the Tools list, etc.) rather than only from the
+  // Combined Assets grid's own click handler, so "recently viewed" reflects
+  // every way of arriving at an asset's details, not just one.
+  useEffect(() => {
+    if (!id) return;
+    recordRecentAsset(id);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;

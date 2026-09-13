@@ -22,7 +22,7 @@ import { useExperiences } from "@/hooks/useExperiences";
 import { useEffect, useMemo, useState } from "react";
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { PhotoThumb } from "@/components/shared/PhotoThumb";
-import { GroupCoverageGrid } from "@/components/shared/GroupCoverageGrid";
+import { GroupMetricsGrid } from "@/components/shared/GroupMetricsGrid";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -620,7 +620,11 @@ export const ToolDetails = ({
               <TabsTrigger value="experiences" className="w-full">Experiences</TabsTrigger>
               {shares.map((share) => (
                 <TabsTrigger key={share.target_org_id} value={`group-${share.target_org_id}`} className="w-full">
-                  {share.target_org_name}
+                  {/* This tab is really "the metrics chart, as seen by {org}"
+                      -- "Metrics" alone reads clearly when there's just one
+                      share (the common case); with more than one, the org
+                      name is kept to tell the tabs apart. */}
+                  {shares.length === 1 ? 'Metrics' : `Metrics: ${share.target_org_name}`}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -785,7 +789,7 @@ export const ToolDetails = ({
 
             {shares.map((share) => (
               <TabsContent key={share.target_org_id} value={`group-${share.target_org_id}`} className="space-y-4">
-                <GroupCoverageGrid orgId={share.target_org_id} />
+                <GroupMetricsGrid orgId={share.target_org_id} hideContainerName />
               </TabsContent>
             ))}
           </Tabs>

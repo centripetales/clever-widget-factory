@@ -7,6 +7,7 @@ export interface Metric {
   unit?: string;
   benchmark_value?: number;
   details?: string;
+  active: boolean;
   created_at: string;
   organization_id: string;
 }
@@ -23,6 +24,7 @@ export interface UpdateMetricRequest {
   unit?: string;
   benchmark_value?: number;
   details?: string;
+  active?: boolean;
 }
 
 export const metricsApi = {
