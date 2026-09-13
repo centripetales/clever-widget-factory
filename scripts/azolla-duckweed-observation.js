@@ -25,7 +25,16 @@ const path = require('path');
 const fs = require('fs');
 
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
-const PROMPT_VERSION = 'azolla-duckweed-v1';
+// v2, 2026-09-05: v1 had no morphological guidance distinguishing azolla
+// from duckweed at all (just the bare species_guess enum) — verified in a
+// live test that this model, given this exact photo, misidentified a
+// duckweed-only container as ~450 azolla fronds. Re-tested the same photo
+// with the distinguishing description now in SYSTEM_PROMPT below and it
+// correctly said zero azolla, all duckweed. New version, not an overwrite —
+// old species_guess/dominant_plant_color extractions under v1 stay
+// queryable and contrastable against v2's, same convention as every other
+// prompt bump in this codebase.
+const PROMPT_VERSION = 'azolla-duckweed-v2-species-distinction';
 
 const envPath = path.join(__dirname, '..', '.env.local');
 if (fs.existsSync(envPath)) {
@@ -43,6 +52,14 @@ if (fs.existsSync(envPath)) {
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
+// Off by default: normal runs must stay "process each photo once" (an
+// editor tweaking unrelated text shouldn't re-trigger a Bedrock vision call
+// on a photo already extracted). This is the deliberate escape hatch for
+// re-testing a new PROMPT_VERSION against photos that already have an
+// AZOLLA_DUCKWEED_OBSERVATION row from a prior version — combine with
+// --participant/--limit to keep a test run small and targeted rather than
+// reprocessing the whole pilot's history.
+const FORCE = args.includes('--force');
 const SINCE = (() => {
   const a = args.find(a => a.startsWith('--since='));
   return a ? a.split('=')[1] : '2026-07-19';
@@ -107,6 +124,25 @@ const TOOL_SCHEMA = {
       dominant_plant_color: { type: 'string', enum: ['green', 'yellow-green', 'red-tinged', 'brown', 'mixed', 'not_visible'] },
       species_guess: { type: 'string', enum: ['azolla', 'duckweed', 'mixed', 'indistinguishable', 'not_visible'] },
       species_guess_basis: { type: 'string' },
+      azolla_count_estimate: { type: ['number', 'null'], description: 'Estimated number of individual azolla plants visible. 0 if you are confident none are present (distinct from null, which means the count could not be determined at all, e.g. too blurry). Use a sample-a-section-and-extrapolate method when the count is high; do not attempt to count every individual plant one by one.' },
+      azolla_count_basis: { type: 'string', description: 'Method used for the azolla count (e.g. sampled area + extrapolation factor), or why it is null.' },
+      azolla_count_confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      duckweed_count_estimate: { type: ['number', 'null'], description: 'Same as azolla_count_estimate, for duckweed.' },
+      duckweed_count_basis: { type: 'string', description: 'Method used for the duckweed count, or why it is null.' },
+      duckweed_count_confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      // Species-specific observable dimensions (docs/specs/azolla-impact-power-model.md
+      // §9.1) — deliberately NOT folded into dominant_plant_color, which
+      // conflates species the same way the count fields' initial miss did.
+      // Null on any of these means "this species isn't present/visible in
+      // the frame," not "not determined" — species_guess/the count fields
+      // above already establish presence; use null here rather than
+      // forcing a value onto a species that isn't in the photo.
+      azolla_color: { type: ['string', 'null'], enum: ['dark_green', 'light_green', 'yellow', 'red_brown', null] },
+      azolla_size: { type: ['string', 'null'], description: 'small = individual fronds under ~1cm diameter, large = over ~1cm. A rough visual judgment, not a measurement.', enum: ['small', 'large', null] },
+      azolla_texture: { type: ['string', 'null'], enum: ['fluffy_full', 'flat_wilted', null] },
+      duckweed_color: { type: ['string', 'null'], enum: ['green', 'pale', null] },
+      duckweed_spots: { type: ['string', 'null'], description: 'Visible spots or damage on duckweed leaves.', enum: ['present', 'absent', null] },
+      water_color: { type: 'string', enum: ['clear', 'green', 'brown', 'not_visible'] },
       lighting_condition: { type: 'string', enum: ['direct_sun', 'shade', 'overcast', 'indoor', 'backlit', 'unknown'] },
       frame_contains_non_vessel_vegetation: { type: 'boolean', description: 'True if there is visible plant material in the frame that is clearly not inside/part of the vessel (e.g. background leaves, garden plants).' },
       most_interesting_observation: { type: 'string', description: 'The single most noteworthy, specific thing visible in this photo that a quick glance might miss. State ONLY what is directly visible (position, count, shape, color, arrangement) — do not infer a cause, mechanism, or explanation for why it looks that way. If you cannot confidently identify what an object or feature specifically is, describe its visible properties (shape, color, size, position) rather than naming what it is — e.g. write "an elongated white streak" rather than "a pipette" unless you are certain. A hedged, generic description is more useful than a specific but unconfirmed one.' },
@@ -124,6 +160,13 @@ const TOOL_SCHEMA = {
 const SYSTEM_PROMPT = `You are a data extraction system supporting azolla/duckweed cultivation. Your only job is to report what is directly visible in the photo, as structured data. Do not assess health, growth quality, or compare against an ideal state. If something can't be determined from the image, say so explicitly in uncertainty_flags rather than guessing.
 
 This program cultivates azolla and duckweed as part of a research trial in the Philippines.
+
+Azolla and duckweed are commonly confused with each other — look carefully before guessing:
+- Azolla (mosquito fern): a distinctly multi-branched, frilly, moss-like texture. Individual plants look like tiny fuzzy clusters, not flat leaves.
+- Duckweed: smooth, flat, rounded or oval individual leaves (fronds), floating singly or in small clusters of 2-4.
+A container can hold only duckweed, only azolla, both, or neither — do not assume azolla is present just because this is an azolla-cultivation photo.
+
+For azolla_size, ~1cm frond diameter is the small/large boundary — this is a rough visual judgment against the vessel's known scale, not a precise measurement. For azolla_texture, "fluffy_full" means a dense, layered, moss-like mat; "flat_wilted" means sparse, deflated-looking, or lying flat rather than fluffed up. Set azolla_color/azolla_size/azolla_texture to null if azolla is not present or not visibly distinguishable in the frame — do not force a value onto a species that isn't there. Same rule for duckweed_color/duckweed_spots when duckweed isn't present.
 
 When choosing plant_sample_points, only pick points that fall on visible plant material — never on open water, container walls, or background. These points seed an automated image segmentation step, and a point on the wrong thing will make that step segment the wrong object entirely. If you are not confident a point lands on plant material, mark its confidence as "low" rather than omitting it.`;
 
@@ -188,12 +231,12 @@ async function fetchEligiblePhotos(client) {
       JOIN actions a ON a.id = sl.entity_id
       WHERE sl.entity_type = 'action' AND sl.entity_id = $1
         AND sp.photo_url IS NOT NULL
-        AND NOT EXISTS (
+        ${FORCE ? '' : `AND NOT EXISTS (
           SELECT 1 FROM state_links sl2
           JOIN state_perspectives sper ON sper.state_id = sl2.state_id
           WHERE sl2.entity_type = 'state_photo' AND sl2.entity_id = sp.id
             AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-        )
+        )`}
       ORDER BY s.captured_at ASC
       ${LIMIT ? `LIMIT ${LIMIT}` : ''}
     `;
@@ -227,12 +270,12 @@ async function fetchEligiblePhotos(client) {
       AND sp.photo_url IS NOT NULL
       ${participantClause}
       ${excludeClause}
-      AND NOT EXISTS (
+      ${FORCE ? '' : `AND NOT EXISTS (
         SELECT 1 FROM state_links sl
         JOIN state_perspectives sper ON sper.state_id = sl.state_id
         WHERE sl.entity_type = 'state_photo' AND sl.entity_id = sp.id
           AND sper.perspective_type = 'AZOLLA_DUCKWEED_OBSERVATION'
-      )
+      )`}
     ORDER BY s.captured_at ASC
     ${LIMIT ? `LIMIT ${LIMIT}` : ''}
   `;
@@ -296,7 +339,7 @@ async function main() {
       try {
         const imageBuffer = await fetchImageBytes(photo.photo_url);
         const result = await runObservation(imageBuffer);
-        console.log(`  species_guess=${result.species_guess} coverage=${result.plant_coverage_percent_estimate}% observation="${result.most_interesting_observation}"`);
+        console.log(`  species_guess=${result.species_guess} coverage=${result.plant_coverage_percent_estimate}% azolla_count=${result.azolla_count_estimate} duckweed_count=${result.duckweed_count_estimate} observation="${result.most_interesting_observation}"`);
 
         if (DRY_RUN) {
           console.log('  [DRY RUN] not writing to DB');
