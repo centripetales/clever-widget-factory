@@ -50,7 +50,13 @@ export function PhotoThumb({ src, alt, href, onClick, className = "", onError, c
           {tile}
         </button>
         <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
-          <DialogContent className="max-w-[90vw] w-fit h-[90vh] p-2 border-none bg-transparent shadow-none flex items-center justify-center">
+          {/* max-h, not a fixed h — the close button Dialog renders is
+              anchored to this container's own top-right corner, so forcing
+              a fixed near-full-height box left it floating far above a
+              shorter/landscape photo that only fills part of that height.
+              Sizing the container to the actual image keeps the X next to
+              the image it belongs to. */}
+          <DialogContent className="max-w-[90vw] max-h-[90vh] w-fit h-fit p-2 border-none bg-transparent shadow-none flex items-center justify-center">
             <img src={href} alt={alt || "Full resolution"} className="max-w-full max-h-full object-contain rounded" />
           </DialogContent>
         </Dialog>

@@ -533,7 +533,11 @@ export function PhotoUploadPanel({
               onDrop={(e) => handleDrop(e, index)}
               onDragEnd={handleDragEnd}
               className={cn(
-                'flex gap-2 items-stretch border rounded p-2 transition-colors',
+                // Wraps below sm: the description textarea was being
+                // squeezed into a sliver next to the fixed-width thumbnail
+                // on mobile (flex-1 min-w-0 shrinking it to near nothing),
+                // wrapping its placeholder text one word per line.
+                'flex flex-wrap sm:flex-nowrap gap-2 items-stretch border rounded p-2 transition-colors',
                 dragOverIndex === index && 'border-primary bg-primary/5',
                 dragIndex === index && 'opacity-50'
               )}
@@ -595,7 +599,7 @@ export function PhotoUploadPanel({
                 </div>
               </div>
 
-              <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+              <div className="flex-1 basis-full sm:basis-0 flex flex-col gap-1.5 min-w-0">
                 {photoTypes && photoTypes.length > 0 && (
                   <Select
                     value={photo.photo_type || ''}

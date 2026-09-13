@@ -91,13 +91,17 @@ transitively. Rejected per-observation sharing deliberately: selective
 sharing invites curating away bad days, which is exactly the
 performance-over-authenticity failure mode this whole design avoids.
 
-Build work still needed: `view_shared` support exists for tools/parts/
-actions; extending it to `states` (so shared containers' *observations* are
-actually visible, not just the container row itself) needs the
-transitive-via-container join, which is new — the existing
-`shared-observations.md` spec assumed per-observation share links, not
-cascading-from-container visibility, so its query needs adapting rather
-than used as-is.
+**Corrected, 2026-09-05 — this was stale.** This section previously said
+extending `view_shared` to `states` transitively-via-container "needs...
+a new join, which is new." It doesn't — that join is already built and
+shipped, just not as a generic `view_shared` param on `/api/states`: it's
+inline in `lambda/cwf-metrics/index.mjs`'s `GET
+/api/organizations/{id}/coverage-snapshots` handler (`state_links` joined to
+an `entity_type='organization'` share row, then per-tool `states` joined
+back through `state_links`), and the state-transition-graph endpoint (§9)
+reuses it directly. The `shared-observations.md` spec's per-observation-link
+assumption is still a real mismatch worth noting, but the underlying
+transitive-visibility query itself is not missing infrastructure.
 
 ## 4. Scoring philosophy
 
@@ -171,6 +175,16 @@ merge either into this design**:
    the existing `action_scores` table. Reward (coverage % delta) is
    separate and is not an AI judgment at all — plain arithmetic over
    existing `metric_snapshots`, no scoring table needed.
+
+   **Superseded, 2026-08-30 — see §9.** This point had drifted from §7's own
+   inventory table, which still said "mirror into a new `experience_scores`
+   table" — never reconciled. Resolved in favor of the mirrored-table
+   reading, renamed `experience_power`, scored against the **experience**
+   as a whole rather than only its action component: authenticity and
+   causal clarity are properties of the full claimed trajectory (was the
+   transition real, is it evidenced), not the action in isolation. §9 has
+   the full redesign, including a materially different authenticity model
+   and dropping innovativeness as a scored dimension.
 4. **`epistemic_links`** — unused, reserved for replication/help credit
    (§3).
 5. **`energeia_cache`'s pattern**, not the table — one cached JSONB payload
@@ -795,7 +809,7 @@ distinct outputs, not one:
 |---|---|---|
 | Experience (S→A→S') data model | `.kiro/specs/experience-tracking/` | Spec'd (Phase 1: manual/UI only, no scoring) — **extend this, this design's scoring is the next layer on top** |
 | `state_perspectives` generalized perspective mechanism | `rsp-worker`, `pending_perspectives`, `cwf-perspectives-queue` | Live in production. **Generalized to actions 2026-08-22** (migration 023, `state_perspectives.action_id`, see §5b) — actions now get their own `CLAIM` through the same mechanism. Add an `AUTHENTICITY` perspective type the same way (§4). |
-| `action_scores`/`scoring_prompts` shape | `lambda/core`, `lambda/analysis` | Live for actions only — mirror its shape into a new `experience_scores` table, don't extend the action-specific table directly |
+| `action_scores`/`scoring_prompts` shape | `lambda/core`, `lambda/analysis` | Live for actions only. **Resolved 2026-08-30 (§9): mirror into a new `experience_power` table**, scored per-experience not per-action — this row previously conflicted with §4 point 3's "reused directly" language; §9 supersedes both. |
 | Energy classification (dynamis/oikonomia/techne) | `.kiro/specs/energeia-membrane/` | Resolved: a computed report over action embeddings, not a table — coincidental conceptual resemblance only, **not an extension point, do not merge** |
 | Evidence-weighted scoring | `.kiro/specs/evidence-weighted-scoring/` | Resolved: a prompt-wording fix inside the unrelated Bloom's/capability scorer — **not a scoring mechanism, not an extension point** |
 | Cross-org sharing (actions/assets) | `docs/specs/cross-org-sharing.md`, `.kiro/specs/action-sharing/` | Backend live (`POST /shares`), frontend built for actions/assets only |
@@ -844,13 +858,11 @@ distinct outputs, not one:
   direct inspection of a rendered artifact caught real issues at 10-container
   scale, but whether that keeps working as the pilot grows, or the
   review-HTML tool becomes worth reviving, is still open.
-- **Individual power score is not built.** Resolved *how* it should work
-  (§4: score the action via the existing `action_scores` mechanism, a
-  number + reasoning, criteria = authenticity gate + causal clarity +
-  innovativeness + entropy-reduction + impact-when-knowable) but the
-  actual `scoring_prompts` row and a run against real actions don't exist
-  yet. `action_scores.action_id` also still has a `UNIQUE` constraint that
-  needs relaxing first (§4) — agreed, not yet migrated.
+- **Individual power score is not built.** **Superseded, 2026-08-30 (§9)** —
+  the criteria list changed (innovativeness dropped, authenticity is no
+  longer an upfront gate, path-discovery credit added) and the table it's
+  scored into is renamed `experience_power`. See §9 for the current design;
+  none of it is built yet.
 - **Group power is not computed.** Formula is specified (§5: sum not
   mean, over a rolling window, diminishing returns weighting) but nothing
   reads real data through it yet.
@@ -864,4 +876,210 @@ distinct outputs, not one:
 - **Payout mechanics** — how a power score converts to PHP/GCash, and the
   mechanics of that conversion. Not discussed. Needed today.
 - Anti-gaming review of `epistemic_links` self-asserted credit — lower
-  priority, not blocking today's tally.
+  priority, not blocking today's tally. **Partly mooted, 2026-08-30 (§9)**:
+  path-discovery credit (the main place self-assertion would have mattered)
+  is now inferred structurally from action-embedding similarity instead of
+  self-reported, specifically to avoid this gaming surface. `epistemic_links`
+  itself remains unused and un-reviewed.
+- **State-transition diagram, `experience_power` scoring redesign, and
+  path-discovery credit** — new capability, not built. See §9.
+
+## 9. State-transition diagram, `experience_power`, and path-discovery credit (2026-08-30)
+
+Design conversation, not yet built. Motivated by a distinct need from §4-§5's
+individual/group power scores: a **group-health debugging tool** — where is
+the group spending its time, where does it get stuck, how well does a fix
+found by one person actually propagate to others — rather than a payout
+number. The two efforts share a data model (experiences as the unit) but
+serve different purposes and can be built independently.
+
+**Core philosophy, settled 2026-08-30 after extended back-and-forth (kept
+here so the false starts aren't repeated):** the "why" behind an action —
+the reasoning that justified taking it — is not a write-time bonus for
+explaining yourself well. It **is a state**, the same as any other state
+under §5c's operative definition ("whatever context the agent conditions
+its next action on"). So the valuable unit is the **transition itself** —
+a real justifying state, connected through a real action, to a real
+resulting state — not a rating bolted on top of it. But that structural
+completeness is the *precondition* for something being scorable at all, not
+the score itself. The actual magnitude of `experience_power` tracks **how
+much a person's transition helps the group** — concretely, how many other
+people are helped by it, either because they already needed it (§9.5a,
+estimated) or because they actually used it (§9.5, realized). A transition
+nobody was ever stuck on and nobody ever reuses does not earn power just
+for being real and well-documented — Spinoza's group power (*potentia
+multitudinis*) isn't a separate metric layered on top here, it flows
+directly into the individual number instead.
+
+### 9.1 State-transition graph
+
+- **Node = a small, hardcoded state category (v1), not a raw `states` row.**
+  Real `states` text is high-quality but unique per capture — not a usable
+  graph node on its own. v1 taxonomy is intentionally simple and expected to
+  split into finer categories once real data shows where it's too coarse:
+  e.g. `small_azolla`, `slow_growth`, `low_phosphorus`, `algae`, `thriving`,
+  `die_off`, plus a required `unclassified` catch-all (a fixed list will
+  never cover 100% of real free text). Exact v1 list still to be finalized.
+- **Classifying a state into a category**: an LLM call reading the state's
+  existing `CLAIM` text (no new capture step, no new perspective type
+  necessarily required for v1 — could be script-side and throwaway rather
+  than a stored `state_perspectives` row, revisit if it needs to be
+  auditable/reusable later).
+- **Edge = an experience, not a raw action.** Not every action qualifies —
+  only actions that close a real experience (§5a's action-gating rule) plot
+  at all. This isn't new filtering logic: a trivial/routine action (e.g.
+  daily harvesting) simply never produces an `experiences` row in the first
+  place, so it's already excluded by the existing data model with no
+  additional work. An edge connects the experience's initial state's
+  category to its final state's category, labeled by the action(s)
+  attached.
+- **Graph is merged across the whole group**, not per-person — the point is
+  to see shared structure (which transitions are common, which states are
+  bottlenecks, which recovery routes exist) across everyone at once.
+- **Rendering**: v1 is a debug tool, not an in-app feature — a script
+  querying `experiences`/`experience_components` that renders a shareable
+  HTML diagram, same "script → artifact" pattern as
+  `azolla-coverage-chart.py` / `azolla-experience-review-gen.js`.
+
+### 9.2 Per-person view (phase 2, deferred)
+
+A button a person can hit to see **their own path through the graph so far**,
+and a suggested route to states they haven't reached yet. Explicitly phased
+after the group-level debug tool — the framing is "traverse your own azolla
+map and see how closely it aligns with expectation," i.e. this is also where
+the existing `expected_state` field (a goal that may never be observed,
+§5c) finally gets compared against what actually happened. Target state(s)
+for "how to get there," and how a suggested route is computed, not designed
+yet.
+
+### 9.3 Certificates
+
+A person earns a certificate for having visited every defined state category
+at least once. Open, not decided: whether order matters (a specific required
+sequence) or any order counts, and what "visited" means precisely (any
+experience touching that category as either its initial or final state, or
+only as a final/arrival state).
+
+### 9.4 `experience_power` — scoring redesign, supersedes §4 point 3 / §7's `action_scores` row
+
+Renamed from `action_scores`/"action score" to `experience_power`,
+mirroring `action_scores`'/`scoring_prompts`' shape into a new table scored
+against the **experience** as a whole (resolves the standing §4/§7
+contradiction — see the notes added at both locations, 2026-08-30). Dimension
+list, revised from §4's original authenticity/causal-clarity/innovativeness/
+entropy-reduction/impact-when-knowable:
+
+- **Innovativeness — dropped entirely as a scored dimension.** It was
+  trying to capture two different things at once: "does this solve a real
+  problem" (already entropy reduction's job — entropy reduction is about
+  resolving encountered uncertainty, which is the technical, verifiable
+  half of what "innovative" was gesturing at) and "is this novel" (only
+  actually valuable if *others follow it* — which isn't knowable from the
+  action alone at write-time, and shouldn't be an LLM guess). The
+  reuse/follow-on value that novelty was reaching for is handled instead by
+  path-discovery credit (§9.5), computed from real behavior, not judged.
+- **Causal clarity — reframed as a gate on real-ness, not a graded LLM
+  rating.** Per this section's opening note, "why" is a state, and a real
+  transition needs one. Causal clarity is really asking "does a genuine
+  justifying state exist and actually connect to this action" — a
+  structural check (is the link there) rather than a 1-10 judgment of how
+  eloquently it's explained. An experience missing this isn't a real,
+  complete transition at all, so it can't earn power regardless of the
+  group-benefit terms below (§9.5/§9.5a).
+- **Entropy reduction — kept**, unchanged in spirit from §4: did this
+  resolve real, encountered uncertainty (a measurement, a diagnostic, an
+  actual fix), not "was this technically difficult." Already substantially
+  free: `action_type` (§5a) already distinguishes `entropy_reduction` from
+  `transformative` as a plain categorical field on the action, so this may
+  not need any new LLM judgment at all — revisit once §9.5/§9.5a are built
+  and it's clear whether the categorical field alone is a good enough
+  signal.
+- **Authenticity — dropped entirely, not softened into a gate or a
+  retrospective signal.** Corrects the note this section originally had
+  here (2026-08-30, same day): a "gate" implies deciding it before scoring
+  proceeds, but authenticity was never actually knowable that way — a
+  fabricated report and a genuine one read identically well-written, so
+  there's nothing to gate *on*. It doesn't reappear later either: once
+  power is defined as "did this genuinely help the group" (this section's
+  opening note), a fabricated experience that nobody was ever stuck on and
+  nobody ever reuses simply scores zero on its own terms — authenticity was
+  trying to do a job that measuring real group benefit already does for
+  free, without needing a separate judgment call about honesty at all.
+
+### 9.5 Realized power (path-discovery credit)
+
+Answers "what incentivizes someone to deliberately go down a non-ideal path
+and document the recovery" — without this, the rational move is always to
+take the shortest route to the best state, and the group never accumulates
+recovery knowledge. **Generalized, 2026-08-30**: applies to *any* edge in
+the graph, not only recovery-shaped ones — e.g. documenting how a good
+state degrades *into* `algae` is exactly as eligible as documenting the
+recovery out of it, since both are real causal information others can use
+(one to fix the problem, one to recognize/avoid it). Nothing about the
+mechanism below is recovery-specific; it was only ever written sounding
+that way.
+
+- **Mechanism, decided 2026-08-30**: inferred structurally, **not**
+  self-asserted. Considered and rejected self-assertion via `epistemic_links`
+  ("I copied this from X") specifically because it's gameable — a false or
+  collusive claim costs nothing to make. Structural detection can only be
+  gamed by actually taking a different, dissimilar action, which defeats the
+  point of copying in the first place.
+- **How**: for actions departing the *same* state category, compare them via
+  the existing `action_policy` embedding (title + policy, §5c — already
+  built, no new infrastructure). Actions above a similarity cutoff threshold
+  count as "the same path"; the earliest one chronologically (`created_at`)
+  is the discoverer.
+- **Reward shape**: not binary. The raw similarity score itself is used as a
+  **compensation multiplier** above the cutoff — a near-identical later
+  action credits the discoverer more than one that only just clears the
+  threshold — rather than every qualifying reuse counting equally once past
+  the gate.
+- **Not yet decided**: the cutoff value itself, whether credit trickles
+  indefinitely for every future reuse or decays/caps, and whether this
+  interacts with §5's group-power diminishing-returns weighting or stays
+  fully separate.
+
+### 9.5a Estimated power (prospective, on demand)
+
+New, 2026-08-30. §9.5's realized credit only pays off once someone else
+actually reuses a transition — which can take arbitrarily long, or never
+happen even for a genuinely valuable fix. Estimated power is the forward-
+looking counterpart: **how many people are currently sitting in the state a
+given experience solves**, i.e. the size of the audience this could help if
+it catches on. A person who finds a way out of `algae` while five other
+people's most-recent state currently classifies as `algae` has high
+estimated power immediately, before anyone has copied anything.
+
+- **Computed on demand, not stored** — consistent with §5a's existing
+  principle for reward generally ("computed on demand... can always be
+  recomputed... no new column or table needed"). The formula will need
+  tuning as real data comes in, so persisting a value now would just mean
+  invalidating/recomputing it repeatedly; simpler to have no stored value
+  yet.
+- **Doubles as the group-health triage view** this whole section (§9) was
+  motivated by: ranking state categories by current population size
+  surfaces "where the group is stuck" directly, independent of whether
+  anyone has solved it yet — a useful view on its own, not just an input to
+  one person's score.
+- **Not yet decided**: the exact formula (raw headcount? weighted by how
+  long each person has been stuck there? by container/entity rather than
+  raw person-count?), and how/whether estimated power converts into or gets
+  superseded by realized power (§9.5) once real reuse starts happening —
+  do they stay two separate displayed numbers, or does realized power
+  simply replace the estimate as evidence accumulates?
+
+### 9.6 Open items
+
+- Full v1 state taxonomy (§9.1) — draft list given above, not finalized.
+- Classification implementation: throwaway script-side LLM call vs. a real
+  stored `state_perspectives` row.
+- Certificate semantics: ordered vs. unordered, what counts as "visited."
+- Similarity cutoff threshold, decay/cap behavior for realized power
+  (§9.5).
+- Estimated power formula and its relationship to realized power (§9.5a).
+- Relationship (if any) between this section's `experience_power` and §5's
+  original individual/group power formulas — not reconciled yet; §9 may
+  fully replace §4-§5's scoring approach or sit alongside it as a
+  different-purpose metric. Needs a decision once both are closer to
+  built.
