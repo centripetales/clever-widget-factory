@@ -153,6 +153,239 @@ export const handler = async (event) => {
       return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ containers }) };
     }
 
+    // GET /api/organizations/{id}/state-transition-graph — the observable-state
+    // graph (docs/specs/azolla-impact-power-model.md §9). States are
+    // reduced to the simplest possible signal — increasing or decreasing —
+    // computed live, in this query, straight from the existing Coverage %
+    // metric (metric_snapshots). This is deliberately NOT persisted
+    // anywhere: an experience's initial_state and final_state are already
+    // linked via experience_components, and each already links to its own
+    // Coverage % reading via metric_snapshots, so "did coverage go up or
+    // down" is a plain comparison of data that's already joined, not a new
+    // fact to classify and store. Persisting it as its own row (an earlier,
+    // reverted version of this did, as a STATE_TREND state_perspectives
+    // row written by a one-off script) would also drift stale the moment
+    // someone hand-corrects a Coverage % value via PUT /states/{id}/coverage
+    // below. A chain's first initial_state (or any experience where
+    // Coverage % is missing on either side) has no computable trend and
+    // renders as an explicit "unclassified" node instead of silently
+    // disappearing.
+    //
+    // Rebuilt around real `experiences` rows 2026-09-06 — each one a
+    // deliberately-chained initial_state -> action(s) -> final_state
+    // triple, already built by the older experiences/experience_components
+    // pipeline. Before this, an intermediate version built edges from
+    // "immediately preceding observation + any linked action," which
+    // produced a confusing artifact: a self-loop like "struggling ->
+    // struggling" showed up identically in both Ways In and Ways Out,
+    // since it's simultaneously both to the naive adjacency rule. Using
+    // real experiences fixes this at the root: a self-loop here
+    // specifically means "a real, closed state-action-state unit whose
+    // action didn't change the classified condition," not an arbitrary
+    // artifact of which observation happened to come right before
+    // another.
+    //
+    // Earlier still (before 2026-09-06), this was a manually-curated
+    // multi-lane model (STATE_LANES) with per-dimension nodes/edges,
+    // deleted for introducing dimensions (e.g. manure/compost) that were
+    // really just actions, and for confusing "lane" terminology with the
+    // system's own domain language.
+    if (httpMethod === 'GET' && path.includes('/organizations/') && path.includes('/state-transition-graph')) {
+      const targetOrgId = pathParams.id;
+      if (!targetOrgId) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'Organization id is required' }) };
+      }
+
+      const accessibleOrgIds = (() => {
+        const raw = event.requestContext?.authorizer?.accessible_organization_ids;
+        if (!raw) return [];
+        try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return []; }
+      })();
+      if (!accessibleOrgIds.includes(targetOrgId)) {
+        return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({ error: 'Not a member of this organization' }) };
+      }
+
+      const sharedTools = await executeQuery(
+        `SELECT DISTINCT sl_entity.entity_id::text as tool_id, t.name as tool_name
+         FROM state_links sl_entity
+         JOIN state_links sl_org ON sl_org.state_id = sl_entity.state_id AND sl_org.entity_type = 'organization'
+         JOIN tools t ON t.id = sl_entity.entity_id
+         WHERE sl_entity.entity_type = 'tool' AND sl_org.entity_id = $1`,
+        [targetOrgId]
+      );
+      const toolIds = sharedTools.rows.map((r) => r.tool_id);
+      const toolNameById = new Map(sharedTools.rows.map((r) => [r.tool_id, r.tool_name]));
+      if (toolIds.length === 0) {
+        return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ nodes: [], edges: [] }) };
+      }
+
+      // Every real experience for these containers, with its initial/final
+      // states' raw Coverage % reading (trend is computed from these below
+      // — not classified/stored), CLAIM text, and photos, plus whatever
+      // action(s) are attached to the experience itself (experiences are
+      // action-gated by design — §5a — so every experience here has at
+      // least one real action, no "no action reported" case needed).
+      // final_state is a LEFT JOIN, not inner: an experience with an
+      // initial_state and an action but no final_state yet is a normal,
+      // intentional in-progress experiment (see POST /api/experiences in
+      // lambda/experiences/index.js) — these rows come back with every
+      // final_* column NULL rather than being silently excluded.
+      const experienceRows = await executeQuery(
+        `SELECT
+           e.id AS experience_id, e.entity_id::text AS tool_id,
+           init_s.id AS initial_state_id, init_s.captured_at AS initial_captured_at,
+           init_coverage.value AS initial_coverage,
+           (SELECT sp.content->>'content' FROM state_perspectives sp
+            WHERE sp.state_id = init_s.id AND sp.perspective_type = 'CLAIM'
+            ORDER BY sp.created_at DESC LIMIT 1) AS initial_claim,
+           (SELECT json_agg(json_build_object('url', ph.photo_url, 'description', ph.photo_description) ORDER BY ph.photo_order)
+            FROM state_photos ph WHERE ph.state_id = init_s.id) AS initial_photos,
+           final_s.id AS final_state_id, final_s.captured_at AS final_captured_at,
+           final_coverage.value AS final_coverage,
+           (SELECT sp.content->>'content' FROM state_perspectives sp
+            WHERE sp.state_id = final_s.id AND sp.perspective_type = 'CLAIM'
+            ORDER BY sp.created_at DESC LIMIT 1) AS final_claim,
+           (SELECT json_agg(json_build_object('url', ph.photo_url, 'description', ph.photo_description) ORDER BY ph.photo_order)
+            FROM state_photos ph WHERE ph.state_id = final_s.id) AS final_photos,
+           COALESCE(
+             json_agg(DISTINCT jsonb_build_object('id', a.id::text, 'title', a.title)) FILTER (WHERE a.id IS NOT NULL),
+             '[]'::json
+           ) AS actions
+         FROM experiences e
+         JOIN experience_components ec_init ON ec_init.experience_id = e.id AND ec_init.component_type = 'initial_state'
+         JOIN states init_s ON init_s.id = ec_init.state_id
+         LEFT JOIN metric_snapshots init_coverage ON init_coverage.state_id = init_s.id
+           AND init_coverage.metric_id IN (SELECT metric_id FROM metrics WHERE name = 'Coverage %')
+         LEFT JOIN experience_components ec_final ON ec_final.experience_id = e.id AND ec_final.component_type = 'final_state'
+         LEFT JOIN states final_s ON final_s.id = ec_final.state_id
+         LEFT JOIN metric_snapshots final_coverage ON final_coverage.state_id = final_s.id
+           AND final_coverage.metric_id IN (SELECT metric_id FROM metrics WHERE name = 'Coverage %')
+         LEFT JOIN experience_components ec_action ON ec_action.experience_id = e.id AND ec_action.component_type = 'action'
+         LEFT JOIN actions a ON a.id = ec_action.action_id
+         WHERE e.entity_type = 'tool' AND e.entity_id = ANY($1::uuid[])
+         GROUP BY e.id, e.entity_id, init_s.id, init_coverage.value, final_s.id, final_coverage.value`,
+        [toolIds]
+      );
+
+      // A state's trend describes the transition INTO it: compare this
+      // experience's own initial/final Coverage % directly (not "this
+      // state vs. whatever preceded it elsewhere") — missing or equal
+      // values return null, i.e. no directional signal to force.
+      const trendOf = (initialCoverage, finalCoverage) => {
+        if (initialCoverage === null || finalCoverage === null) return null;
+        const init = parseFloat(initialCoverage);
+        const final = parseFloat(finalCoverage);
+        if (final > init) return 'increasing';
+        if (final < init) return 'decreasing';
+        return null;
+      };
+
+      const nodesByKey = new Map();
+      const edgesByKey = new Map();
+      const evidenceOf = (stateId, toolId, capturedAt, claim, photos, actions) => ({
+        state_id: stateId,
+        tool_id: toolId,
+        tool_name: toolNameById.get(toolId),
+        captured_at: capturedAt,
+        claim,
+        photos: photos || [],
+        actions: actions || [],
+      });
+
+      const touchNode = (value, toolId, evidence, daysDelta) => {
+        const key = value || 'unclassified';
+        if (!nodesByKey.has(key)) {
+          nodesByKey.set(key, { key, value: key, state_count: 0, tool_ids: new Set(), total_days: 0, examples: [] });
+        }
+        const node = nodesByKey.get(key);
+        node.state_count += 1;
+        node.tool_ids.add(toolId);
+        node.total_days += daysDelta;
+        node.examples.push(evidence);
+      };
+
+      // A chain resolves correctly across experiences: a state's bucket
+      // comes from being SOME experience's final_state, so the middle state
+      // of e.g. Lesterluna's 60% -> 25% -> 15% chain gets its bucket from
+      // experience 1 (where it's the final_state), not from experience 2
+      // (where it's the initial_state and has no comparison of its own).
+      const trendByStateId = new Map();
+      for (const row of experienceRows.rows) {
+        if (row.final_state_id) {
+          trendByStateId.set(row.final_state_id, trendOf(row.initial_coverage, row.final_coverage));
+        }
+      }
+
+      for (const row of experienceRows.rows) {
+        const toolId = row.tool_id;
+        const isInProgress = !row.final_state_id;
+        const initialEvidence = evidenceOf(row.initial_state_id, toolId, row.initial_captured_at, row.initial_claim, row.initial_photos, row.actions);
+        const finalEvidence = isInProgress
+          ? null
+          : evidenceOf(row.final_state_id, toolId, row.final_captured_at, row.final_claim, row.final_photos, row.actions);
+
+        // "Days this state represents": how long between this experience's
+        // initial and final observation (or, for an in-progress experience
+        // with no final observation yet, how long it's been running so
+        // far) — scoped to experience-bracketed occurrences only,
+        // consistent with what this graph now shows.
+        const daysDelta = (isInProgress ? new Date() : new Date(row.final_captured_at)) - new Date(row.initial_captured_at);
+        touchNode(trendByStateId.get(row.initial_state_id), toolId, initialEvidence, daysDelta / 86400000);
+        if (!isInProgress) touchNode(trendByStateId.get(row.final_state_id), toolId, finalEvidence, 0);
+
+        const fromKey = trendByStateId.get(row.initial_state_id) || 'unclassified';
+        const toKey = isInProgress ? 'unclassified' : (trendByStateId.get(row.final_state_id) || 'unclassified');
+        const edgeKey = `${fromKey}=>${toKey}`;
+        if (!edgesByKey.has(edgeKey)) {
+          edgesByKey.set(edgeKey, { from: fromKey, to: toKey, count: 0, tool_ids: new Set(), examples: [] });
+        }
+        const edge = edgesByKey.get(edgeKey);
+        edge.count += 1;
+        edge.tool_ids.add(toolId);
+        edge.examples.push({ tool_name: toolNameById.get(toolId), from: initialEvidence, to: finalEvidence, actions: row.actions || [], experience_id: row.experience_id });
+      }
+
+      const nodes = [...nodesByKey.values()].map((n) => ({
+        key: n.key,
+        value: n.value,
+        state_count: n.state_count,
+        tool_ids: [...n.tool_ids],
+        tool_names: [...n.tool_ids].map((id) => toolNameById.get(id)),
+        distinct_org_count: n.tool_ids.size,
+        total_days: Math.round(n.total_days * 10) / 10,
+        examples: n.examples,
+      }));
+      const edges = [...edgesByKey.values()].map((e) => ({
+        from: e.from,
+        to: e.to,
+        count: e.count,
+        tool_ids: [...e.tool_ids],
+        tool_names: [...e.tool_ids].map((id) => toolNameById.get(id)),
+        examples: e.examples,
+      }));
+
+      // Raw, unaggregated experience list — every experience feeding the
+      // graph above, one row each, for the audit table: a person can see
+      // exactly what data produced the graph and jump straight to fixing
+      // any experience that looks wrong at /experiences/{id}.
+      const experiences = experienceRows.rows.map((row) => ({
+        experience_id: row.experience_id,
+        tool_id: row.tool_id,
+        tool_name: toolNameById.get(row.tool_id),
+        initial: {
+          state_id: row.initial_state_id,
+          captured_at: row.initial_captured_at,
+          claim: row.initial_claim,
+        },
+        final: row.final_state_id
+          ? { state_id: row.final_state_id, captured_at: row.final_captured_at, claim: row.final_claim }
+          : null,
+        actions: row.actions,
+      }));
+
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ nodes, edges, experiences }) };
+    }
+
     // PUT /api/states/{id}/coverage — lets the observation's owner (or an
     // org admin, same rule as ToolDetails.tsx's canEditObservation: creator
     // OR admin in the currently-active org) hand-correct the Coverage %

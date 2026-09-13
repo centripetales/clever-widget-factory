@@ -58,6 +58,7 @@ import Finances from "./pages/Finances";
 import QuizPage from "./pages/QuizPage";
 import UserProfile from "./pages/UserProfile";
 import GroupCoverage from "./pages/GroupCoverage";
+import StateTransitionGraph from "./pages/StateTransitionGraph";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -425,6 +426,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <GroupCoverage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/state-transition-graph"
+          element={
+            <ProtectedRoute>
+              <StateTransitionGraph />
             </ProtectedRoute>
           }
         />

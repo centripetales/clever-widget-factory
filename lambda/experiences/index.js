@@ -261,6 +261,71 @@ async function hydrateComponents(rows) {
   return components;
 }
 
+// Cross-org access for a single experience: an experience is owned by
+// whichever organization it was created under (e.g. a pilot participant's
+// own dedicated org), which is very often NOT whatever org is currently
+// active for the caller (e.g. a shared group org a graph is viewed from) —
+// Stefan is a direct admin member of every pilot org individually, but the
+// caller's *active* org header is still just one of those at a time, so a
+// literal `organization_id = <active org>` filter 404s for everything
+// except whichever org happens to be active right now. Look the experience
+// up by id alone instead, then decide view/edit access explicitly.
+async function fetchExperienceWithAuthor(pool, id) {
+  const res = await pool.query(
+    `SELECT e.*, om.cognito_user_id AS author_cognito_user_id
+     FROM experiences e
+     LEFT JOIN organization_members om ON om.id = e.created_by
+     WHERE e.id = $1`,
+    [id]
+  );
+  return res.rows[0] || null;
+}
+
+// authContext.accessible_organization_ids and .permissions are NOT safe to
+// use here: /opt/nodejs/authorizerContext's X-Organization-Id override (the
+// app sends this header on every request to scope work to whichever org is
+// currently active) deliberately narrows accessible_organization_ids down
+// to just that one org and strips data:read:all/data:write:all whenever
+// it fires — see the "--- X-Organization-Id header override ---" block
+// there. That's the right behavior for ordinary same-org data listing, but
+// it means those fields can never reflect "every org this person actually
+// belongs to," which is exactly what's needed to view/edit an experience
+// that lives in a DIFFERENT org than whichever one is active right now
+// (e.g. Stefan reviewing a pilot participant's experience while Azolla
+// Kapwa is the active org). authContext.organization_memberships is the
+// one field that override leaves untouched — it's always every org this
+// cognito_user_id is a direct member of, with their role in each.
+function isOrgAccessible(authContext, orgId) {
+  const memberships = authContext.organization_memberships || [];
+  const partners = authContext.partner_access || [];
+  return memberships.some((m) => m.organization_id === orgId)
+    || partners.some((p) => p.organization_id === orgId);
+}
+
+function canViewExperience(authContext, experience) {
+  return isOrgAccessible(authContext, experience.organization_id);
+}
+
+// Same "admin in more than one organization" signal the authorizer itself
+// uses to mean "this is Stefan" (see calculatePermissions's data:read:all
+// grant) — recomputed here from organization_memberships directly instead
+// of trusting authContext.permissions, since that field is what the
+// X-Organization-Id override strips.
+function isSuperAdmin(authContext) {
+  const memberships = authContext.organization_memberships || [];
+  return memberships.filter((m) => m.role === 'admin').length > 1;
+}
+
+// Only the person who wrote this experience up, or a superadmin, may
+// change or delete it. Being an admin of the org an experience happens to
+// live in is NOT sufficient on its own — every pilot org already has
+// Stefan as a direct admin member for oversight, so a plain org-role check
+// here would be nearly as broad as no check at all.
+function canEditExperience(authContext, experience) {
+  return experience.author_cognito_user_id === authContext.cognito_user_id
+    || isSuperAdmin(authContext);
+}
+
 exports.handler = async (event) => {
   const startTime = Date.now();
 
@@ -533,17 +598,16 @@ exports.handler = async (event) => {
     if (httpMethod === 'GET' && pathParameters?.id) {
       const experienceId = pathParameters.id;
 
-      // Fetch experience
-      const experienceResult = await pool.query(
-        `SELECT * FROM experiences WHERE id = $1 AND organization_id = $2`,
-        [experienceId, organizationId]
-      );
+      // Fetch experience — not scoped to the caller's currently-active org;
+      // see fetchExperienceWithAuthor's comment above.
+      const experience = await fetchExperienceWithAuthor(pool, experienceId);
 
-      if (experienceResult.rows.length === 0) {
+      if (!experience) {
         return error('Experience not found', 404);
       }
-
-      const experience = experienceResult.rows[0];
+      if (!canViewExperience(authContext, experience)) {
+        return error('Not a member of the organization this experience belongs to', 403);
+      }
 
       // Fetch entity details based on entity_type
       let entity = null;
@@ -668,13 +732,20 @@ exports.handler = async (event) => {
         ? final_state_ids
         : (final_state_id ? [final_state_id] : null);
 
-      const existingRes = await pool.query(
-        `SELECT id FROM experiences WHERE id = $1 AND organization_id = $2`,
-        [experienceId, organizationId]
-      );
-      if (existingRes.rows.length === 0) {
+      const existing = await fetchExperienceWithAuthor(pool, experienceId);
+      if (!existing) {
         return error('Experience not found', 404);
       }
+      if (!canEditExperience(authContext, existing)) {
+        return error('Only the person who wrote this experience up, or an admin, can edit it', 403);
+      }
+      // New component rows belong to the experience's OWN organization, not
+      // whichever org happens to be active for whoever is editing right now
+      // (e.g. Stefan editing a pilot participant's experience from a shared
+      // group org's view) — otherwise a cross-org edit would silently
+      // mislabel new rows with the editor's active org instead of the
+      // experience's real one.
+      const experienceOrgId = existing.organization_id;
 
       // Add/remove diffing, identical for all three legs. Passing [] clears a
       // leg — legitimate, since an experience with no final state yet is a
@@ -700,7 +771,7 @@ exports.handler = async (event) => {
           await client.query(
             `INSERT INTO experience_components (experience_id, component_type, ${idColumn}, organization_id, created_at)
              VALUES ($1, $2, $3, $4, NOW())`,
-            [experienceId, componentType, id, organizationId]
+            [experienceId, componentType, id, experienceOrgId]
           );
         }
       };
@@ -786,12 +857,12 @@ exports.handler = async (event) => {
     if (httpMethod === 'DELETE' && pathParameters?.id) {
       const experienceId = pathParameters.id;
 
-      const existingRes = await pool.query(
-        `SELECT id FROM experiences WHERE id = $1 AND organization_id = $2`,
-        [experienceId, organizationId]
-      );
-      if (existingRes.rows.length === 0) {
+      const existing = await fetchExperienceWithAuthor(pool, experienceId);
+      if (!existing) {
         return error('Experience not found', 404);
+      }
+      if (!canEditExperience(authContext, existing)) {
+        return error('Only the person who wrote this experience up, or an admin, can delete it', 403);
       }
 
       const client = await pool.connect();
