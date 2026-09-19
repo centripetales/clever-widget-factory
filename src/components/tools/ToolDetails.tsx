@@ -30,7 +30,10 @@ import { useStateMutations } from "@/hooks/useStates";
 import { useToast } from "@/hooks/use-toast";
 import { apiService, deleteExperience } from "@/lib/apiService";
 import { useQueryClient } from "@tanstack/react-query";
-import { toolHistoryQueryKey, experiencesQueryKey } from "@/lib/queryKeys";
+import { toolHistoryQueryKey, experiencesQueryKey, groupSnapshotsQueryKey } from "@/lib/queryKeys";
+import { offlineQueryConfig } from "@/lib/queryConfig";
+import { useToolShares } from "@/hooks/useToolShares";
+import { fetchGroupSnapshots } from "@/hooks/useGroupSnapshots";
 
 interface ToolDetailsProps {
   tool: Tool;
@@ -73,12 +76,18 @@ export const ToolDetails = ({
   // somewhere (POST /shares) — the tab surfaces where that share leads, not a
   // hardcoded program name, so it works for whichever org(s) this container
   // happens to be shared into.
-  const [shares, setShares] = useState<{ target_org_id: string; target_org_name: string }[]>([]);
+  const { data: sharesData } = useToolShares(tool.id);
+  const shares = useMemo(() => sharesData ?? [], [sharesData]);
   useEffect(() => {
-    apiService.get<{ shares: { target_org_id: string; target_org_name: string }[] }>(`/shares/tool/${tool.id}`)
-      .then((res) => setShares(res.shares || []))
-      .catch(() => setShares([]));
-  }, [tool.id]);
+    // Warm the Metrics tab's data so it's ready by the time the tab is opened.
+    for (const share of shares) {
+      queryClient.prefetchQuery({
+        queryKey: groupSnapshotsQueryKey(share.target_org_id),
+        queryFn: () => fetchGroupSnapshots(share.target_org_id),
+        ...offlineQueryConfig,
+      });
+    }
+  }, [shares, queryClient]);
 
   // Experiences this history feed's observations/actions may already belong
   // to — used only to badge/link them in place, not to filter them out. The

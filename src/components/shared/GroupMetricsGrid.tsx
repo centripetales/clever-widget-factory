@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Pencil, Check, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ComposedChart, Line, Scatter, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
 import { apiService } from '@/lib/apiService';
+import { useGroupSnapshots } from '@/hooks/useGroupSnapshots';
+import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
 import { PhotoThumb } from '@/components/shared/PhotoThumb';
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { useAuth } from '@/hooks/useCognitoAuth';
@@ -146,6 +149,15 @@ interface GroupAction {
   scoring_data: { action_type?: string; what_was_done?: string } | null;
 }
 
+function applyCoverageEdit(obs: GroupObservation, value: number): GroupObservation {
+  return {
+    ...obs,
+    metrics: (obs.metrics || []).map((m) =>
+      m.metric_name === 'Coverage %' ? { ...m, value: value.toFixed(2) } : m
+    ),
+  };
+}
+
 // "transformative" = an actual intervention that changes the system (add
 // manure, move something); "entropy_reduction" = pure information-gathering
 // (a measurement, a reading) — see scripts/azolla-experience-form.js.
@@ -156,7 +168,7 @@ function actionText(a: GroupAction): string {
   return a.claim || a.scoring_data?.what_was_done || a.description || a.title;
 }
 
-interface GroupContainer {
+export interface GroupContainer {
   toolId: string;
   toolName: string;
   sourceOrgId: string;
@@ -891,9 +903,10 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   // edit observations belonging to whichever org is currently selected —
   // same rule ToolDetails.tsx's canEditObservation uses).
   const { isAdmin } = useOrganization();
-  const [containers, setContainers] = useState<GroupContainer[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { data: containersData, isLoading: loading, error: loadError } = useGroupSnapshots(orgId);
+  const containers = containersData ?? null;
+  const error = loadError ? (loadError as Error).message || 'Failed to load group data' : null;
   // Set on click, rendered as a popup dialog (see the dark-styled Dialog
   // below) — a hover-preview doesn't have a touch-device equivalent, so
   // click/tap is the one interaction that works on both.
@@ -901,7 +914,6 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   const [selectedAction, setSelectedAction] = useState<{ action: GroupAction; toolName: string; color: string } | null>(null);
   const [editingCoverage, setEditingCoverage] = useState(false);
   const [coverageDraft, setCoverageDraft] = useState('');
-  const [savingCoverage, setSavingCoverage] = useState(false);
   const [coverageError, setCoverageError] = useState<string | null>(null);
 
   // "What did they do before this observation" — actions on this container
@@ -933,38 +945,40 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   // Updates both the open dialog and the underlying containers/chart data in
   // place, so the line reflects the correction immediately instead of
   // needing a refetch of the whole /coverage-snapshots response.
-  const saveCoverage = async () => {
+  const saveCoverageMutation = useMutation<unknown, Error, { stateId: string; value: number }>({
+    mutationFn: ({ stateId, value }) => apiService.put(`/api/states/${stateId}/coverage`, { value }),
+    onSuccess: (_res, { stateId, value }) => {
+      queryClient.setQueryData<GroupContainer[]>(groupSnapshotsQueryKey(orgId), (prev) =>
+        prev?.map((c) => ({
+          ...c,
+          observations: c.observations.map((o) => (o.id === stateId ? applyCoverageEdit(o, value) : o)),
+        }))
+      );
+      // The same state shows in History/Observations views elsewhere.
+      queryClient.invalidateQueries({ queryKey: ['states'] });
+      queryClient.invalidateQueries({ queryKey: ['tool_history'] });
+    },
+  });
+  const savingCoverage = saveCoverageMutation.isPending;
+
+  const saveCoverage = () => {
     if (!selectedObservation) return;
     const value = Number(coverageDraft);
     if (Number.isNaN(value) || value < 0 || value > 100) {
       setCoverageError('Enter a number between 0 and 100');
       return;
     }
-    setSavingCoverage(true);
     setCoverageError(null);
-    try {
-      await apiService.put(`/api/states/${selectedObservation.obs.id}/coverage`, { value });
-      const applyEdit = (obs: GroupObservation): GroupObservation => ({
-        ...obs,
-        metrics: (obs.metrics || []).map((m) =>
-          m.metric_name === 'Coverage %' ? { ...m, value: value.toFixed(2) } : m
-        ),
-      });
-      setSelectedObservation((prev) => (prev ? { ...prev, obs: applyEdit(prev.obs) } : prev));
-      setContainers((prev) =>
-        prev
-          ? prev.map((c) => ({
-              ...c,
-              observations: c.observations.map((o) => (o.id === selectedObservation.obs.id ? applyEdit(o) : o)),
-            }))
-          : prev
-      );
-      setEditingCoverage(false);
-    } catch (err: any) {
-      setCoverageError(err.message || 'Failed to save coverage');
-    } finally {
-      setSavingCoverage(false);
-    }
+    saveCoverageMutation.mutate(
+      { stateId: selectedObservation.obs.id, value },
+      {
+        onSuccess: () => {
+          setSelectedObservation((prev) => (prev ? { ...prev, obs: applyCoverageEdit(prev.obs, value) } : prev));
+          setEditingCoverage(false);
+        },
+        onError: (err) => setCoverageError(err.message || 'Failed to save coverage'),
+      }
+    );
   };
 
   // Keyed by plain toolId for a metric family with no subtypes, or
@@ -987,16 +1001,6 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     // person with growth_intents already set would otherwise lose them.
     updateMemberSettings.mutate({ userId: user.userId, organizationId: orgId, settings: { ...memberSettings, metrics_chart_range: next } });
   };
-
-  useEffect(() => {
-    if (!orgId) return;
-    setLoading(true);
-    setError(null);
-    apiService.get<{ containers: GroupContainer[] }>(`/organizations/${orgId}/coverage-snapshots`)
-      .then((res) => setContainers(res.containers))
-      .catch((err) => setError(err.message || 'Failed to load group data'))
-      .finally(() => setLoading(false));
-  }, [orgId]);
 
   // The persisted range trims each container's observations/actions down to
   // the selected window before anything downstream (metric discovery, chart

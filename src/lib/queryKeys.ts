@@ -84,4 +84,6 @@ export const organizationsQueryKey = () => ['organizations'];
 
 // Tool & Part History query keys
 export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];
+export const toolSharesQueryKey = (toolId: string) => ['tool_shares', toolId];
+export const groupSnapshotsQueryKey = (orgId: string) => ['group_snapshots', orgId];
 export const partHistoryQueryKey = (partId: string) => ['part_history', partId];
