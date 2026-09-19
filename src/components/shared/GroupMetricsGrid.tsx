@@ -99,7 +99,7 @@ function MetricChartCard({
   onPickAction: (payload: { action: GroupAction; toolId: string; toolName: string; color: string }) => void;
   hideContainerName?: boolean;
 }) {
-  const { metric, experienceBands, experienceLinks, legend, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
+  const { metric, experienceLinks, legend, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
   const isCoverage = metric.name === 'Coverage %';
 
   // Recharts' own automatic brush-to-chart data slicing (an uncontrolled
@@ -321,9 +321,6 @@ function MetricChartCard({
                 name={s.label}
                 stroke={s.color}
                 strokeWidth={2}
-                // Dashed wherever no experience explains the movement; the
-                // covered stretches are redrawn solid on top (below).
-                strokeDasharray={experienceBands.length > 0 ? '5 4' : undefined}
                 connectNulls
                 hide={hiddenSeriesKeys.has(s.key)}
                 // A toggled-back-on series fully remounts (hide returns
@@ -358,24 +355,6 @@ function MetricChartCard({
                 }}
               />
             ))}
-            {coveredLines.map((cl) => {
-              const s = chartSeries.find((x) => x.key === cl.seriesKey);
-              if (!s || hiddenSeriesKeys.has(s.key)) return null;
-              return (
-                <Line
-                  key={cl.key}
-                  yAxisId={s.yAxisId}
-                  dataKey={cl.key}
-                  stroke={s.color}
-                  strokeWidth={2}
-                  connectNulls
-                  dot={false}
-                  activeDot={false}
-                  isAnimationActive={false}
-                  legendType="none"
-                />
-              );
-            })}
             <Scatter
               yAxisId="left"
               // Always the full array, never filtered by hiddenSeriesKeys —

@@ -270,18 +270,6 @@ export interface AxisInfo {
   domain: [number, number];
 }
 
-// A translucent span on the chart: one experience from its earliest initial
-// state to its latest final state. `open` when it has no final state yet, in
-// which case it runs to the newest reading.
-export interface ExperienceBand {
-  id: string;
-  toolId: string;
-  color: string;
-  start: number;
-  end: number;
-  open: boolean;
-}
-
 // A thin connector from an action's marker (top of the plot) to one of its
 // experience's initial/final readings, in left-axis coordinates.
 export interface ExperienceLink {
@@ -292,19 +280,10 @@ export interface ExperienceLink {
   to: { x: number; y: number };
 }
 
-// An extra solid line drawn over the part of a series that lies inside an
-// experience band; the base line is dashed wherever no experience covers it.
-export interface CoveredLine {
-  key: string;
-  seriesKey: string;
-}
-
 export interface MetricChartBundle {
   metric: DiscoveredMetric;
-  experienceBands: ExperienceBand[];
   experienceLinks: ExperienceLink[];
   legend: ChartLegend;
-  coveredLines: CoveredLine[];
   chartData: ChartRow[];
   actionMarkers: { timestamp: number; y: number; toolId: string; color: string; toolName: string; action: GroupAction; inExperience: boolean }[];
   // Explicit [min, max] rather than trusting Recharts' 'auto' keyword to
@@ -394,55 +373,6 @@ export function collectContainerPoints(
     }
   }
   return points.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-// The bands for one container on one metric family's chart. An experience
-// only appears where one of its initial/final states has a reading of this
-// family, so a band always means "this experience measured this metric".
-// `toTimestamp` maps an ISO time onto the chart's own x positions (Coverage %
-// plots by Manila day, everything else at exact time).
-function collectExperienceBands(
-  container: GroupContainer,
-  familyName: string,
-  color: string,
-  toTimestamp: (iso: string) => number,
-  newestTimestamp: number,
-  applyCutoff: boolean
-): ExperienceBand[] {
-  const familyLower = familyName.trim().toLowerCase();
-  const obsById = new Map(container.observations.map((o) => [o.id, o]));
-  const actionById = new Map(container.actions.map((a) => [a.id, a]));
-  const hasReading = (o: GroupObservation) =>
-    (o.metrics || []).some(
-      (m) => parseMetricName(m.metric_name).family.trim().toLowerCase() === familyLower && Number.isFinite(Number(m.value))
-    );
-
-  const bands: ExperienceBand[] = [];
-  for (const exp of container.experiences) {
-    const initial = exp.initial_state_ids.map((id) => obsById.get(id)).filter((o): o is GroupObservation => !!o);
-    const final = exp.final_state_ids.map((id) => obsById.get(id)).filter((o): o is GroupObservation => !!o);
-    if (![...initial, ...final].some(hasReading)) continue;
-
-    const initialTimes = initial.map((o) => toTimestamp(o.observed_at));
-    const finalTimes = final.map((o) => toTimestamp(o.observed_at));
-    const actionTimes = exp.action_ids
-      .map((id) => actionById.get(id))
-      .filter((a): a is GroupAction => !!a)
-      .map((a) => toTimestamp(a.completed_at || a.created_at));
-
-    const startCandidates = initialTimes.length ? initialTimes : actionTimes.length ? actionTimes : finalTimes;
-    if (startCandidates.length === 0) continue;
-    let start = Math.min(...startCandidates);
-    const open = finalTimes.length === 0;
-    let end = open ? Math.max(newestTimestamp, start) : Math.max(...finalTimes);
-    if (end < start) [start, end] = [end, start];
-    if (applyCutoff) {
-      start = Math.max(start, CHART_START_MS);
-      if (end < start) continue;
-    }
-    bands.push({ id: exp.id, toolId: container.toolId, color, start, end, open });
-  }
-  return bands;
 }
 
 // Builds one metric's chart data across every container — the same logic
@@ -566,12 +496,6 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
   const seriesByKey = new Map(chartSeries.map((s) => [s.key, s]));
 
   const toTimestamp = (iso: string) => (applyCutoff ? manilaDayKey(iso) : new Date(iso).getTime());
-  const newestTimestamp = allPoints.reduce((max, { point }) => Math.max(max, point.timestamp), -Infinity);
-  const experienceBands = containers.flatMap((c) =>
-    collectExperienceBands(c, metric.name, series.find((x) => x.toolId === c.toolId)?.color ?? LINE_COLORS[0], toTimestamp, newestTimestamp, applyCutoff)
-  );
-  const coveredLineKeys = new Map<string, CoveredLine>();
-
   const rows = new Map<number, ChartRow>();
   const axisRange = new Map<'left' | 'right', { min: number; max: number }>();
   for (const { container, point } of allPoints) {
@@ -579,12 +503,6 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
     const row = rows.get(point.timestamp) || { timestamp: point.timestamp, date: formatManila(point.timestamp, MANILA_DATE_OPTS) };
     row[seriesKey] = point.value;
     row[`${seriesKey}__obs`] = point.obs;
-    for (const band of experienceBands) {
-      if (band.toolId !== container.toolId || point.timestamp < band.start || point.timestamp > band.end) continue;
-      const key = `${seriesKey}__cov__${band.id}`;
-      row[key] = point.value;
-      coveredLineKeys.set(key, { key, seriesKey });
-    }
     rows.set(point.timestamp, row);
     const yAxisId = seriesByKey.get(seriesKey)!.yAxisId;
     const range = axisRange.get(yAxisId) ?? { min: Infinity, max: -Infinity };
@@ -702,5 +620,5 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
       });
   });
 
-  return { metric, experienceBands, experienceLinks, legend, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
+  return { metric, experienceLinks, legend, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
 }
