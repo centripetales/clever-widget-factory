@@ -86,6 +86,15 @@ export interface GroupObservation {
 // plots each reading at its own exact timestamp instead, so someone taking
 // several readings in one day (e.g. a few coconut moisture checks) sees
 // each one, not a single collapsed per-day max.
+// The time to show for an observation: when its newest photo was taken.
+// observed_at is only when it was submitted, often well after the event, so
+// it's used only when there are no dated photos.
+export function observationDisplayTime(obs: GroupObservation): string {
+  const photoTimes = (obs.photos || []).map((p) => p.captured_at).filter((t): t is string => !!t);
+  if (photoTimes.length === 0) return obs.observed_at;
+  return photoTimes.reduce((latest, t) => (new Date(t).getTime() > new Date(latest).getTime() ? t : latest));
+}
+
 export function mergeObservations(obsList: GroupObservation[]): GroupObservation {
   const sorted = [...obsList].sort((a, b) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime());
   const photos = sorted.flatMap((o) => o.photos || []);

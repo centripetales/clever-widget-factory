@@ -24,6 +24,7 @@ import {
   GroupContainer,
   GroupObservation,
   LINE_COLORS,
+  observationDisplayTime,
   MANILA_DATETIME_OPTS,
   MANILA_DATE_OPTS,
   MetricChartBundle,
@@ -428,7 +429,7 @@ function ExperienceStateView({ obs }: { obs: GroupObservation }) {
   return (
     <div className="rounded-md border p-3 space-y-2 text-sm">
       <p className="text-xs text-muted-foreground">
-        {formatManila(obs.observed_at, MANILA_DATETIME_OPTS)} · {obs.observed_by_name}
+        {formatManila(observationDisplayTime(obs), MANILA_DATETIME_OPTS)} · {obs.observed_by_name}
       </p>
       {obs.observation_text && <p>{obs.observation_text}</p>}
       {obs.metrics && obs.metrics.length > 0 && (
@@ -785,7 +786,12 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                 {!selectedObservation.obs.observed_by_name.startsWith(selectedObservation.toolName) && (
                   <p className="font-medium text-foreground">{selectedObservation.obs.observed_by_name}</p>
                 )}
-                <p className="text-muted-foreground">{formatManila(selectedObservation.obs.observed_at, MANILA_DATETIME_OPTS)}</p>
+                <p className="text-muted-foreground">{formatManila(observationDisplayTime(selectedObservation.obs), MANILA_DATETIME_OPTS)}</p>
+                {observationDisplayTime(selectedObservation.obs) !== selectedObservation.obs.observed_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Submitted {formatManila(selectedObservation.obs.observed_at, MANILA_DATETIME_OPTS)}
+                  </p>
+                )}
                 {selectedObservation.obs.mergedIds && (
                   <p className="text-xs text-muted-foreground">
                     Combined from {selectedObservation.obs.mergedIds.length} check-ins this day — showing each metric's max.

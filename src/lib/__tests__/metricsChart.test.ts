@@ -3,6 +3,7 @@ import {
   manilaDayKey,
   parseMetricName,
   mergeObservations,
+  observationDisplayTime,
   rangeStartMs,
   buildMetricChart,
   collectContainerPoints,
@@ -198,5 +199,20 @@ describe('buildMetricChart experience bands', () => {
     const bundle = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' });
     expect(bundle.actionMarkers.map((m) => [m.action.id, m.inExperience])).toEqual([['x1', true], ['x2', false]]);
     expect(bundle.actionMarkers.every((m) => m.y === bundle.leftAxis.domain[1])).toBe(true);
+  });
+});
+
+describe('observationDisplayTime', () => {
+  const withPhotos = (captured: (string | null)[]): GroupObservation => ({
+    ...obs('o', '2026-09-16T13:03:00Z', []),
+    photos: captured.map((c, i) => ({ id: `p${i}`, photo_url: `u${i}`, photo_description: null, captured_at: c })),
+  });
+
+  it('uses the newest photo time, not the submission time', () => {
+    expect(observationDisplayTime(withPhotos(['2026-09-16T06:25:00Z', '2026-09-16T06:40:00Z']))).toBe('2026-09-16T06:40:00Z');
+  });
+  it('falls back to the submission time when no photo is dated', () => {
+    expect(observationDisplayTime(withPhotos([null]))).toBe('2026-09-16T13:03:00Z');
+    expect(observationDisplayTime(obs('o', '2026-09-16T13:03:00Z', []))).toBe('2026-09-16T13:03:00Z');
   });
 });
