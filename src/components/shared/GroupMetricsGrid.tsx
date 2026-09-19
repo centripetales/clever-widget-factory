@@ -44,11 +44,14 @@ interface DotProps {
   index: number;
   payload: ChartRow;
 }
+type ActionMarker = MetricChartBundle['actionMarkers'][number];
 interface ActionShapeProps {
   cx: number;
   cy: number;
-  payload: MetricChartBundle['actionMarkers'][number];
+  // An action marker, or (for the entries Recharts adds per chart row) a row.
+  payload: unknown;
 }
+const isActionMarker = (p: unknown): p is ActionMarker => typeof p === 'object' && p !== null && 'action' in p;
 
 /**
  * One line chart for a single metric family, one line per (container,
@@ -369,6 +372,9 @@ function MetricChartCard({
               animationEasing="ease-out"
               shape={(rawProps: unknown) => {
                 const { cx, cy, payload } = rawProps as ActionShapeProps;
+                // Besides the action markers, Recharts also passes this shape
+                // one entry per chart row (no action, no y, so cy is null).
+                if (!isActionMarker(payload)) return <g />;
                 if (hiddenSeriesKeys.has(payload.toolId)) return <g />;
                 const onClick = () => onPickAction({ action: payload.action, toolName: payload.toolName, color: payload.color });
                 // A small lightning bolt (the History feed's action icon) on
