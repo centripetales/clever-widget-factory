@@ -3,7 +3,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Pencil, Check, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ComposedChart, Line, Scatter, ReferenceArea, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
 import { apiService } from '@/lib/apiService';
@@ -28,7 +30,6 @@ import {
   RANGE_OPTIONS,
   SeriesInfo,
   actionText,
-  actionTypeLabel,
   applyCoverageEdit,
   buildMetricChart,
   formatManila,
@@ -73,8 +74,8 @@ function MetricChartCard({
   hiddenSeriesKeys: Set<string>;
   toggleSeries: (key: string) => void;
   onPickObservation: (toolId: string, obs: GroupObservation, seriesName: string, color: string) => void;
-  onPickAction: (payload: { action: GroupAction; toolName: string; color: string }) => void;
-  onPickExperience: (experienceId: string) => void;
+  onPickAction: (payload: { action: GroupAction; toolId: string; toolName: string; color: string }) => void;
+  onPickExperience: (experienceId: string, toolId: string) => void;
   hideContainerName?: boolean;
 }) {
   const { metric, experienceBands, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
@@ -272,7 +273,7 @@ function MetricChartCard({
                 strokeOpacity={hiddenSeriesKeys.has(band.toolId) ? 0 : 0.4}
                 strokeDasharray={band.open ? '4 3' : undefined}
                 style={{ cursor: 'pointer' }}
-                onClick={() => onPickExperience(band.id)}
+                onClick={() => onPickExperience(band.id, band.toolId)}
               />
             ))}
             {chartSeries.map((s) => (
@@ -376,7 +377,7 @@ function MetricChartCard({
                 // one entry per chart row (no action, no y, so cy is null).
                 if (!isActionMarker(payload)) return <g />;
                 if (hiddenSeriesKeys.has(payload.toolId)) return <g />;
-                const onClick = () => onPickAction({ action: payload.action, toolName: payload.toolName, color: payload.color });
+                const onClick = () => onPickAction({ action: payload.action, toolId: payload.toolId, toolName: payload.toolName, color: payload.color });
                 // A small lightning bolt (the History feed's action icon) on
                 // a white disc so it reads over the band and the grid.
                 // Filled when the action belongs to an experience, an
@@ -421,6 +422,53 @@ function MetricChartCard({
   );
 }
 
+// One state inside the experience dialog: when, what was written, its
+// readings, and its photos.
+function ExperienceStateView({ obs }: { obs: GroupObservation }) {
+  return (
+    <div className="rounded-md border p-3 space-y-2 text-sm">
+      <p className="text-xs text-muted-foreground">
+        {formatManila(obs.observed_at, MANILA_DATETIME_OPTS)} · {obs.observed_by_name}
+      </p>
+      {obs.observation_text && <p>{obs.observation_text}</p>}
+      {obs.metrics && obs.metrics.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {obs.metrics.map((m) => (
+            <Badge key={m.metric_id} variant="secondary" className="text-xs">
+              {m.metric_name}: {m.value}{m.unit ? ` ${m.unit}` : ''}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {obs.photos && obs.photos.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {obs.photos.map((photo) => (
+            <PhotoThumb
+              key={photo.id}
+              href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+              src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+              alt={photo.photo_description || 'Photo'}
+              className="w-24 h-24 rounded border"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExperienceActionView({ action }: { action: GroupAction }) {
+  return (
+    <div className="rounded-md border p-3 space-y-1 text-sm">
+      <p className="font-medium">{action.title}</p>
+      <p className="text-xs text-muted-foreground">
+        {formatManila(action.completed_at || action.created_at, MANILA_DATE_OPTS)}
+      </p>
+      <p>{actionText(action)}</p>
+    </div>
+  );
+}
+
 // Cap on popup thumbnails warmed when the tab opens.
 const MAX_PRELOADED_THUMBNAILS = 60;
 
@@ -453,6 +501,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   // click/tap is the one interaction that works on both.
   const [selectedObservation, setSelectedObservation] = useState<{ obs: GroupObservation; toolName: string; color: string; priorActions: GroupAction[] } | null>(null);
   const [selectedAction, setSelectedAction] = useState<{ action: GroupAction; toolName: string; color: string } | null>(null);
+  const [selectedExperience, setSelectedExperience] = useState<{ experienceId: string; toolId: string; toolName: string; color: string } | null>(null);
   const [editingCoverage, setEditingCoverage] = useState(false);
   const [coverageDraft, setCoverageDraft] = useState('');
   const [coverageError, setCoverageError] = useState<string | null>(null);
@@ -652,6 +701,25 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     );
   }
 
+  // An action that belongs to an experience opens the whole experience; a
+  // standalone action opens just itself.
+  const pickAction = (payload: { action: GroupAction; toolId: string; toolName: string; color: string }) => {
+    const experience = containers
+      ?.find((c) => c.toolId === payload.toolId)
+      ?.experiences.find((e) => e.action_ids.includes(payload.action.id));
+    if (experience) {
+      setSelectedExperience({ experienceId: experience.id, toolId: payload.toolId, toolName: payload.toolName, color: payload.color });
+    } else {
+      setSelectedAction(payload);
+    }
+  };
+
+  const pickExperience = (experienceId: string, toolId: string) => {
+    const s = series.find((x) => x.toolId === toolId);
+    if (!s) return;
+    setSelectedExperience({ experienceId, toolId, toolName: s.name, color: s.color });
+  };
+
   const toggleSeries = (key: string) => {
     setHiddenSeriesKeys((prev) => {
       const next = new Set(prev);
@@ -690,8 +758,8 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
               hiddenSeriesKeys={hiddenSeriesKeys}
               toggleSeries={toggleSeries}
               onPickObservation={selectObservation}
-              onPickAction={setSelectedAction}
-              onPickExperience={(id) => navigate(`/experiences/${id}`)}
+              onPickAction={pickAction}
+              onPickExperience={pickExperience}
               hideContainerName={hideContainerName}
             />
           ))
@@ -703,13 +771,6 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
           inline while the finger is already gone). */}
       <Dialog open={!!selectedObservation} onOpenChange={(open) => !open && setSelectedObservation(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          {/* Bigger, unambiguous touch target than the default close button. */}
-          <DialogClose
-            className="absolute right-3 top-3 rounded-full p-2 z-10 hover:bg-accent"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </DialogClose>
           {selectedObservation && (
             <>
               <DialogHeader>
@@ -839,28 +900,64 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!selectedExperience} onOpenChange={(open) => !open && setSelectedExperience(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          {selectedExperience && (() => {
+            const container = containers?.find((c) => c.toolId === selectedExperience.toolId);
+            const experience = container?.experiences.find((e) => e.id === selectedExperience.experienceId);
+            if (!container || !experience) return null;
+            const byTime = (a: GroupObservation, b: GroupObservation) =>
+              new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime();
+            const statesFor = (ids: string[]) =>
+              ids.map((id) => container.observations.find((o) => o.id === id)).filter((o): o is GroupObservation => !!o).sort(byTime);
+            const actions = experience.action_ids
+              .map((id) => container.actions.find((a) => a.id === id))
+              .filter((a): a is GroupAction => !!a);
+            const initialStates = statesFor(experience.initial_state_ids);
+            const finalStates = statesFor(experience.final_state_ids);
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle style={{ color: selectedExperience.color }}>{selectedExperience.toolName} — Experience</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Initial state</h3>
+                    {initialStates.length > 0
+                      ? initialStates.map((o) => <ExperienceStateView key={o.id} obs={o} />)
+                      : <p className="text-sm text-muted-foreground">No starting state recorded.</p>}
+                  </section>
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Action(s)</h3>
+                    {actions.length > 0
+                      ? actions.map((a) => <ExperienceActionView key={a.id} action={a} />)
+                      : <p className="text-sm text-muted-foreground">No actions attached.</p>}
+                  </section>
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Final state</h3>
+                    {finalStates.length > 0
+                      ? finalStates.map((o) => <ExperienceStateView key={o.id} obs={o} />)
+                      : <p className="text-sm text-muted-foreground">No outcome observed yet.</p>}
+                  </section>
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/experiences/${experience.id}`)}>
+                    Open experience
+                  </Button>
+                </div>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!selectedAction} onOpenChange={(open) => !open && setSelectedAction(null)}>
         <DialogContent className="max-w-md">
-          {/* Same reasoning as the observation dialog above — a bigger,
-              unambiguous touch target than the default close button. */}
-          <DialogClose
-            className="absolute right-3 top-3 rounded-full p-2 z-10 hover:bg-accent"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </DialogClose>
           {selectedAction && (
             <>
               <DialogHeader>
                 <DialogTitle style={{ color: selectedAction.color }}>{selectedAction.toolName}</DialogTitle>
               </DialogHeader>
               <div className="space-y-1.5 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{selectedAction.action.title}</span>
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground border rounded px-1.5 py-0.5">
-                    {actionTypeLabel(selectedAction.action)}
-                  </span>
-                </div>
+                <p className="font-medium">{selectedAction.action.title}</p>
                 <p className="text-muted-foreground">
                   {formatManila(selectedAction.action.completed_at || selectedAction.action.created_at, MANILA_DATE_OPTS)}
                 </p>

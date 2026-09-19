@@ -144,12 +144,6 @@ export function applyCoverageEdit(obs: GroupObservation, value: number): GroupOb
   };
 }
 
-// "transformative" = an actual intervention that changes the system (add
-// manure, move something); "entropy_reduction" = pure information-gathering
-// (a measurement, a reading) — see scripts/azolla-experience-form.js.
-export function actionTypeLabel(a: GroupAction): 'intervention' | 'measurement' {
-  return a.scoring_data?.action_type === 'entropy_reduction' ? 'measurement' : 'intervention';
-}
 export function actionText(a: GroupAction): string {
   return a.claim || a.scoring_data?.what_was_done || a.description || a.title;
 }
