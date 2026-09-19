@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Plus } from 'lucide-react';
 import { useMetrics, useCreateMetric, useUpdateMetric, useDeleteMetric } from '@/hooks/metrics/useMetrics';
 import { MetricCard } from './MetricCard';
-import { MetricDialog } from './MetricDialog';
+import { MetricDialog, type MetricFormData } from './MetricDialog';
 import type { Metric } from '@/lib/metricsApi';
 
 interface MetricsSectionProps {
@@ -19,13 +19,7 @@ export function MetricsSection({ toolId }: MetricsSectionProps) {
   const updateMetric = useUpdateMetric(toolId);
   const deleteMetric = useDeleteMetric(toolId);
 
-  const handleSave = (data: {
-    name: string;
-    unit?: string;
-    benchmark_value?: number;
-    details?: string;
-    active?: boolean;
-  }) => {
+  const handleSave = (data: MetricFormData) => {
     if (editingMetric) {
       updateMetric.mutate(
         { metricId: editingMetric.metric_id, data },

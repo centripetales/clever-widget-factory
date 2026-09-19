@@ -191,6 +191,7 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
   const { data: metrics } = useMetrics(toolId || '');
   const hasMetrics = !!metrics?.some(metric => metric.active !== false);
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
+  const [metricErrors, setMetricErrors] = useState(false);
   // Existing snapshots for whichever observation is currently being edited —
   // query is inert (enabled: false) while nothing is being edited.
   const { data: existingSnapshots } = useSnapshots(editingStateId || undefined);
@@ -332,6 +333,15 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
   };
 
   const handleSubmit = async () => {
+    if (metricErrors) {
+      toast({
+        title: 'Check the metric values',
+        description: 'One or more metric values are outside what that metric accepts.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     // Validate: require at least one of (text OR photo)
     if (stateText.trim().length === 0 && photos.length === 0) {
       toast({
@@ -666,7 +676,7 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
                   <CardTitle className="text-base">Metrics</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <MetricsInput toolId={toolId} values={metricValues} onChange={setMetricValues} />
+                  <MetricsInput toolId={toolId} values={metricValues} onChange={setMetricValues} onErrorsChange={setMetricErrors} />
                 </CardContent>
               </Card>
             )}
