@@ -260,3 +260,62 @@ describe('buildMetricChart experience connectors', () => {
     expect(buildMetricChart([c], series, { name: 'Temperature', unit: 'C' }).experienceLinks).toEqual([]);
   });
 });
+
+describe('buildMetricChart legend', () => {
+  const two = [
+    { toolId: 't1', name: 'Rotary Composter', color: '#f00' },
+    { toolId: 't2', name: 'Chicken Coop', color: '#00f' },
+  ];
+  const oneSeries = [two[0]];
+  const containerWith = (toolId: string, name: string, observations: GroupObservation[]): GroupContainer => ({
+    ...container(observations), toolId, toolName: name,
+  });
+  const reading = (id: string, name: string, value: string) => obs(id, '2026-09-01T00:00:00Z', [{ name, value }]);
+
+  it('shows a sensor row for a single container, colored by sensor, and no container row', () => {
+    const c = container([obs('a', '2026-09-01T00:00:00Z', [
+      { name: 'Ammonia: Smell', value: '4' },
+    ])]);
+    const { legend, chartSeries } = buildMetricChart([c], oneSeries, { name: 'Ammonia', unit: null });
+    expect(legend.sensors.map((x) => x.label)).toEqual(['Smell']);
+    expect(legend.containers).toEqual([]);
+    expect(chartSeries[0].marker).toBe('circle');
+  });
+
+  it('has no legend at all for one container with no sensor', () => {
+    const c = container([reading('a', 'Coverage %', '40')]);
+    const { legend } = buildMetricChart([c], oneSeries, { name: 'Coverage %', unit: '%' });
+    expect(legend).toEqual({ sensors: [], containers: [] });
+  });
+
+  it('gives every container its own marker shape and a colored chip when there is no sensor', () => {
+    const a = containerWith('t1', 'Rotary Composter', [reading('a', 'Temp', '40')]);
+    const b = containerWith('t2', 'Chicken Coop', [reading('b', 'Temp', '30')]);
+    const { legend, chartSeries } = buildMetricChart([a, b], two, { name: 'Temp', unit: null });
+    expect(legend.sensors).toEqual([]);
+    expect(legend.containers.map((x) => [x.label, x.marker, x.color])).toEqual([
+      ['Rotary Composter', 'circle', '#f00'],
+      ['Chicken Coop', 'square', '#00f'],
+    ]);
+    expect(chartSeries.map((s) => s.marker)).toEqual(['circle', 'square']);
+  });
+
+  it('colors by sensor across containers and keeps the container chips neutral', () => {
+    const a = containerWith('t1', 'Rotary Composter', [reading('a', 'Temp: Probe', '40')]);
+    const b = containerWith('t2', 'Chicken Coop', [reading('b', 'Temp: Probe', '30'), reading('c', 'Temp: IR Gun', '31')]);
+    const { legend, chartSeries } = buildMetricChart([a, b], two, { name: 'Temp', unit: null });
+    expect(legend.sensors.map((x) => x.label)).toEqual(['IR Gun', 'Probe']);
+    expect(legend.containers.every((x) => x.color === null)).toBe(true);
+    const probeColors = new Set(chartSeries.filter((s) => s.sensor === 'Probe').map((s) => s.color));
+    expect(probeColors.size).toBe(1);
+    expect(chartSeries.find((s) => s.sensor === 'Probe' && s.toolId === 't1')!.label).toBe('Rotary Composter — Probe');
+  });
+
+  it('lets a chip toggle every line of its sensor or container', () => {
+    const a = containerWith('t1', 'Rotary Composter', [reading('a', 'Temp: Probe', '40')]);
+    const b = containerWith('t2', 'Chicken Coop', [reading('b', 'Temp: Probe', '30')]);
+    const { legend } = buildMetricChart([a, b], two, { name: 'Temp', unit: null });
+    expect(legend.sensors[0].seriesKeys).toEqual(['t1::Probe', 't2::Probe']);
+    expect(legend.containers[0]).toMatchObject({ seriesKeys: ['t1::Probe'], toolIds: ['t1'] });
+  });
+});

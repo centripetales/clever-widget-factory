@@ -223,11 +223,38 @@ export interface DiscoveredMetric {
 // anywhere in this metric family, matching every chart's original
 // behavior) or one (container, subtype) pair once a family has any
 // "Family: Subtype"-named metric in it — see parseMetricName above.
+export type MarkerShape = 'circle' | 'square' | 'triangle' | 'diamond';
+const MARKER_SHAPES: MarkerShape[] = ['circle', 'square', 'triangle', 'diamond'];
+
+// One toggle in the legend. `seriesKeys` are the lines it controls and
+// `toolIds` the containers whose action markers go with it.
+export interface LegendChip {
+  id: string;
+  label: string;
+  // null: drawn neutral, because color is carrying the other dimension.
+  color: string | null;
+  marker: MarkerShape;
+  seriesKeys: string[];
+  toolIds: string[];
+}
+
+// Two dimensions: the sensor (color) and the container (marker shape).
+// Either row is empty when it would only ever show one value.
+export interface ChartLegend {
+  sensors: LegendChip[];
+  containers: LegendChip[];
+}
+
 export interface ChartSeriesInfo {
   key: string;
   toolId: string;
   subtype: string | null;
+  // "Container" or "Container — Sensor"; used where a single name is needed
+  // (popup titles).
   label: string;
+  sensor: string | null;
+  containerName: string;
+  marker: MarkerShape;
   color: string;
   unit: string | null;
   // Which Y-axis this line plots against -- 'left' unless this family has
@@ -276,6 +303,7 @@ export interface MetricChartBundle {
   metric: DiscoveredMetric;
   experienceBands: ExperienceBand[];
   experienceLinks: ExperienceLink[];
+  legend: ChartLegend;
   coveredLines: CoveredLine[];
   chartData: ChartRow[];
   actionMarkers: { timestamp: number; y: number; toolId: string; color: string; toolName: string; action: GroupAction; inExperience: boolean }[];
@@ -489,33 +517,52 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
   const axisForUnit = new Map<string | null, 'left' | 'right'>();
   distinctUnits.forEach((u, i) => axisForUnit.set(u, i === 0 ? 'left' : 'right'));
 
-  let paletteIndex = 0;
+  // Sensors (the "Family: Sensor" part of a metric name) take the color,
+  // shared across containers; containers take the marker shape, but only
+  // when more than one is on the chart.
+  const sensorLabelOf = (subtype: string | null) => subtype ?? metric.name;
+  const sortedSensors = hasSubtypes
+    ? Array.from(new Set(Array.from(seriesMeta.values()).map((m) => sensorLabelOf(m.subtype)))).sort((a, b) => a.localeCompare(b))
+    : [];
+  const containerOrder = Array.from(distinctToolIds);
+  const markerFor = (toolId: string): MarkerShape =>
+    containerOrder.length > 1 ? MARKER_SHAPES[containerOrder.indexOf(toolId) % MARKER_SHAPES.length] : 'circle';
+
   const chartSeries: ChartSeriesInfo[] = Array.from(seriesMeta.entries()).map(([key, { toolId, subtype, unit }]) => {
     const containerSeries = series.find((s) => s.toolId === toolId);
+    const containerName = containerSeries?.name ?? toolId;
     const resolvedUnit = normalizeUnit(unit);
     const yAxisId = axisForUnit.get(resolvedUnit) ?? 'left';
+    const marker = markerFor(toolId);
     if (!hasSubtypes) {
-      // No subtype anywhere in this family (the common case) -- keep
-      // exactly today's per-container identity: same color and label on
-      // every chart, so "the same farmer/tool always reads as the same
-      // color" invariant holds regardless of which chart you're looking at.
-      return { key, toolId, subtype: null, label: containerSeries?.name ?? toolId, color: containerSeries?.color ?? LINE_COLORS[0], unit: resolvedUnit, yAxisId };
+      // No sensor anywhere in this family (the common case): color is the
+      // container's, the same on every chart, so the same container always
+      // reads as the same color.
+      return { key, toolId, subtype: null, label: containerName, sensor: null, containerName, marker, color: containerSeries?.color ?? LINE_COLORS[0], unit: resolvedUnit, yAxisId };
     }
-    const color = LINE_COLORS[paletteIndex++ % LINE_COLORS.length];
-    // With the container's own name already moved into the chart title
-    // (soloContainer, used below), repeating it in every series label too
-    // would read like three tools being compared instead of one tool's
-    // several measurement approaches -- so it's dropped here. A
-    // subtype-less reading (someone's older un-tagged "Moisture" entry,
-    // say) falls back to the bare family name instead of the container
-    // name for the same reason.
-    const label = soloContainer
-      ? subtype ?? metric.name
-      : subtype
-        ? `${containerSeries?.name ?? toolId} — ${subtype}`
-        : containerSeries?.name ?? toolId;
-    return { key, toolId, subtype, label, color, unit: resolvedUnit, yAxisId };
+    const sensor = sensorLabelOf(subtype);
+    const color = LINE_COLORS[sortedSensors.indexOf(sensor) % LINE_COLORS.length];
+    return { key, toolId, subtype, label: `${containerName} — ${sensor}`, sensor, containerName, marker, color, unit: resolvedUnit, yAxisId };
   });
+  const legend: ChartLegend = {
+    sensors: sortedSensors.map((sensor) => {
+      const mine = chartSeries.filter((s) => s.sensor === sensor);
+      return { id: sensor, label: sensor, color: mine[0].color, marker: 'circle', seriesKeys: mine.map((s) => s.key), toolIds: [] };
+    }),
+    containers: containerOrder.length > 1
+      ? containerOrder.map((toolId) => {
+          const mine = chartSeries.filter((s) => s.toolId === toolId);
+          return {
+            id: toolId,
+            label: mine[0].containerName,
+            color: hasSubtypes ? null : mine[0].color,
+            marker: markerFor(toolId),
+            seriesKeys: mine.map((s) => s.key),
+            toolIds: [toolId],
+          };
+        })
+      : [],
+  };
   const seriesByKey = new Map(chartSeries.map((s) => [s.key, s]));
 
   const toTimestamp = (iso: string) => (applyCutoff ? manilaDayKey(iso) : new Date(iso).getTime());
@@ -655,5 +702,5 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
       });
   });
 
-  return { metric, experienceBands, experienceLinks, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
+  return { metric, experienceBands, experienceLinks, legend, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
 }

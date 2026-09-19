@@ -19,6 +19,8 @@ import { useMemberSettings, useUpdateMemberSettings, type MetricsChartRange } fr
 import {
   ChartRow,
   ChartSeriesInfo,
+  LegendChip,
+  MarkerShape,
   DiscoveredMetric,
   GroupAction,
   GroupContainer,
@@ -55,6 +57,26 @@ interface ActionShapeProps {
 }
 const isActionMarker = (p: unknown): p is ActionMarker => typeof p === 'object' && p !== null && 'action' in p;
 
+// One data-point shape. Containers are told apart by shape (color belongs to
+// the sensor); the legend draws the same shapes.
+function MarkerGlyph({
+  shape, cx, cy, r, fill, stroke, strokeWidth, onClick,
+}: {
+  shape: MarkerShape; cx: number; cy: number; r: number; fill: string; stroke: string; strokeWidth: number; onClick?: () => void;
+}) {
+  const props = { fill, stroke, strokeWidth, style: onClick ? { cursor: 'pointer' } : undefined, onClick };
+  switch (shape) {
+    case 'square':
+      return <rect x={cx - r} y={cy - r} width={2 * r} height={2 * r} {...props} />;
+    case 'triangle':
+      return <polygon points={`${cx},${cy - r * 1.2} ${cx - r * 1.15},${cy + r * 0.95} ${cx + r * 1.15},${cy + r * 0.95}`} {...props} />;
+    case 'diamond':
+      return <polygon points={`${cx},${cy - r * 1.3} ${cx + r * 1.3},${cy} ${cx},${cy + r * 1.3} ${cx - r * 1.3},${cy}`} {...props} />;
+    default:
+      return <circle cx={cx} cy={cy} r={r} {...props} />;
+  }
+}
+
 /**
  * One line chart for a single metric family, one line per (container,
  * subtype) pair actually observed — the rendering half of
@@ -72,12 +94,12 @@ function MetricChartCard({
 }: {
   bundle: MetricChartBundle;
   hiddenSeriesKeys: Set<string>;
-  toggleSeries: (key: string) => void;
+  toggleSeries: (keys: string[]) => void;
   onPickObservation: (toolId: string, obs: GroupObservation, seriesName: string, color: string) => void;
   onPickAction: (payload: { action: GroupAction; toolId: string; toolName: string; color: string }) => void;
   hideContainerName?: boolean;
 }) {
-  const { metric, experienceBands, experienceLinks, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
+  const { metric, experienceBands, experienceLinks, legend, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
   const isCoverage = metric.name === 'Coverage %';
 
   // Recharts' own automatic brush-to-chart data slicing (an uncontrolled
@@ -232,29 +254,51 @@ function MetricChartCard({
               />
             )}
             <Legend
-              content={() => (
-                <div className="flex flex-wrap justify-center gap-2 pt-3">
-                  {chartSeries.map((s) => {
-                    const active = !hiddenSeriesKeys.has(s.key);
-                    return (
-                      <button
-                        key={s.key}
-                        type="button"
-                        onClick={() => toggleSeries(s.key)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
-                        style={{
-                          background: active ? `${s.color}1a` : 'transparent',
-                          border: `1px solid ${active ? `${s.color}66` : 'hsl(var(--border))'}`,
-                          color: active ? s.color : 'hsl(var(--muted-foreground))',
-                        }}
-                      >
-                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: active ? s.color : 'hsl(var(--muted-foreground))' }} />
-                        {s.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              content={() => {
+                const chipRow = (label: string, chips: LegendChip[]) =>
+                  chips.length === 0 ? null : (
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+                      {chips.map((chip) => {
+                        const active = chip.seriesKeys.some((k) => !hiddenSeriesKeys.has(k));
+                        const color = chip.color ?? 'hsl(var(--foreground))';
+                        return (
+                          <button
+                            key={chip.id}
+                            type="button"
+                            onClick={() => toggleSeries([...chip.seriesKeys, ...chip.toolIds])}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
+                            style={{
+                              background: active && chip.color ? `${chip.color}1a` : 'transparent',
+                              border: `1px solid ${active ? (chip.color ? `${chip.color}66` : 'hsl(var(--border))') : 'hsl(var(--border))'}`,
+                              color: active ? color : 'hsl(var(--muted-foreground))',
+                            }}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+                              <MarkerGlyph
+                                shape={chip.marker}
+                                cx={6}
+                                cy={6}
+                                r={3.5}
+                                fill={active ? color : 'hsl(var(--muted-foreground))'}
+                                stroke="none"
+                                strokeWidth={0}
+                              />
+                            </svg>
+                            {chip.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                if (legend.sensors.length === 0 && legend.containers.length === 0) return null;
+                return (
+                  <div className="flex flex-col items-center gap-2 pt-3">
+                    {chipRow('Sensor', legend.sensors)}
+                    {chipRow('Container', legend.containers)}
+                  </div>
+                );
+              }}
             />
             {/* Thin connectors from each action marker down to its
                 experience's initial and final readings. */}
@@ -296,17 +340,9 @@ function MetricChartCard({
                   if (!obs || payload[s.key] === undefined) return <g key={`dot-${s.key}-${index}`} />;
                   const onPick = () => onPickObservation(s.toolId, obs, s.label, s.color);
                   return (
-                    <circle
-                      key={`dot-${s.key}-${index}`}
-                      cx={cx}
-                      cy={cy}
-                      r={5}
-                      fill={s.color}
-                      stroke="#fff"
-                      strokeWidth={1.5}
-                      style={{ cursor: 'pointer' }}
-                      onClick={onPick}
-                    />
+                    <g key={`dot-${s.key}-${index}`}>
+                      <MarkerGlyph shape={s.marker} cx={cx} cy={cy} r={5} fill={s.color} stroke="#fff" strokeWidth={1.5} onClick={onPick} />
+                    </g>
                   );
                 }}
                 activeDot={(rawProps: unknown) => {
@@ -315,17 +351,9 @@ function MetricChartCard({
                   if (!obs || payload[s.key] === undefined) return <g key={`active-dot-${s.key}-${index}`} />;
                   const onPick = () => onPickObservation(s.toolId, obs, s.label, s.color);
                   return (
-                    <circle
-                      key={`active-dot-${s.key}-${index}`}
-                      cx={cx}
-                      cy={cy}
-                      r={7}
-                      fill={s.color}
-                      stroke="#fff"
-                      strokeWidth={2}
-                      style={{ cursor: 'pointer' }}
-                      onClick={onPick}
-                    />
+                    <g key={`active-dot-${s.key}-${index}`}>
+                      <MarkerGlyph shape={s.marker} cx={cx} cy={cy} r={7} fill={s.color} stroke="#fff" strokeWidth={2} onClick={onPick} />
+                    </g>
                   );
                 }}
               />
@@ -640,9 +668,9 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     return containers.map((c, i) => ({
       toolId: c.toolId,
       // Privacy: label by phone number (payment-roster convention, see
-      // scripts/azolla-weekly-heatmap.js) rather than name — except Stefan
-      // and Mae, who keep their first name since they aren't tracked by phone.
-      name: c.sourcePhone || c.toolName.split(/['’]s\b/i)[0].trim().split(' ')[0],
+      // scripts/azolla-weekly-heatmap.js) rather than name; a container with
+      // no phone (Stefan's and Mae's own) uses its own name.
+      name: c.sourcePhone || c.toolName,
       color: LINE_COLORS[i % LINE_COLORS.length],
     }));
   }, [containers]);
@@ -707,11 +735,16 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     }
   };
 
-  const toggleSeries = (key: string) => {
+  // Turns a group of lines (one sensor, or one container) all off, or all
+  // back on when they were already all off.
+  const toggleSeries = (keys: string[]) => {
     setHiddenSeriesKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      const allHidden = keys.every((k) => next.has(k));
+      for (const k of keys) {
+        if (allHidden) next.delete(k);
+        else next.add(k);
+      }
       return next;
     });
   };
