@@ -344,7 +344,9 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = updated_by || authContext.cognito_user_id;
+      // Identity comes from the authenticated session only; a client-sent
+      // created_by/updated_by (destructured out above) is ignored.
+      const userId = authContext.cognito_user_id;
       if (!userId) {
         return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to update an action' }) };
       }
@@ -643,7 +645,9 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = created_by || updated_by || authContext.cognito_user_id;
+      // Identity comes from the authenticated session only; a client-sent
+      // created_by/updated_by (destructured out above) is ignored.
+      const userId = authContext.cognito_user_id;
       if (!userId) {
         return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to create or update an action' }) };
       }
