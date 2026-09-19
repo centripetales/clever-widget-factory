@@ -9,7 +9,7 @@ import { apiService } from '@/lib/apiService';
 import { useGroupSnapshots } from '@/hooks/useGroupSnapshots';
 import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
 import { PhotoThumb } from '@/components/shared/PhotoThumb';
-import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getThumbnailUrl, getImageUrl, getOriginalUrl, preloadImages } from '@/lib/imageUtils';
 import { useAuth } from '@/hooks/useCognitoAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useMemberSettings, useUpdateMemberSettings, type MetricsChartRange } from '@/hooks/useMemberSettings';
@@ -884,6 +884,9 @@ function MetricChartCard({
   );
 }
 
+// Cap on popup thumbnails warmed when the tab opens.
+const MAX_PRELOADED_THUMBNAILS = 60;
+
 /**
  * One chart per distinct metric name recorded across every container
  * sharing this org (matching scripts/azolla-coverage-chart.py's original
@@ -1068,6 +1071,22 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     if (!filteredContainers) return [];
     return metricsPresent.map((metric) => buildMetricChart(filteredContainers, series, metric));
   }, [filteredContainers, series, metricsPresent]);
+
+  // This component only mounts when its tab is opened, so warming the
+  // popup thumbnails here (newest first, within the selected range) means the
+  // tiles are already cached by the time a chart point is clicked.
+  useEffect(() => {
+    if (!filteredContainers) return;
+    const photos = filteredContainers
+      .flatMap((c) => c.observations)
+      .sort((a, b) => new Date(b.observed_at).getTime() - new Date(a.observed_at).getTime())
+      .flatMap((o) => o.photos || []);
+    const urls = photos
+      .map((p) => getThumbnailUrl(p.photo_url))
+      .filter((u): u is string => !!u)
+      .slice(0, MAX_PRELOADED_THUMBNAILS);
+    return preloadImages(urls);
+  }, [filteredContainers]);
 
   if (loading) {
     return (

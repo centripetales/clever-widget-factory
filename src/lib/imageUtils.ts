@@ -122,3 +122,30 @@ export function getThumbnailUrl(urlOrKey: string | null | undefined): string | n
   // For other paths, return original URL
   return getImageUrl(urlOrKey);
 }
+
+const preloadedUrls = new Set<string>();
+
+/**
+ * Warm the browser HTTP cache for these image URLs, in small batches during
+ * idle time so it never competes with rendering. Already-warmed URLs are
+ * skipped. Returns a cancel function.
+ */
+export function preloadImages(urls: string[], batchSize = 6): () => void {
+  const pending = urls.filter((u) => u && !preloadedUrls.has(u));
+  let cancelled = false;
+  const schedule = (fn: () => void) =>
+    typeof requestIdleCallback === 'function' ? requestIdleCallback(fn) : setTimeout(fn, 50);
+
+  const next = () => {
+    if (cancelled) return;
+    for (const url of pending.splice(0, batchSize)) {
+      preloadedUrls.add(url);
+      new Image().src = url;
+    }
+    if (pending.length > 0) schedule(next);
+  };
+  schedule(next);
+  return () => {
+    cancelled = true;
+  };
+}
