@@ -335,7 +335,10 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = updated_by || authContext.cognito_user_id || require('crypto').randomUUID();
+      const userId = updated_by || authContext.cognito_user_id;
+      if (!userId) {
+        return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to update an action' }) };
+      }
       const orgId = accessibleOrgIds[0];
       
       // Get current action state before update
@@ -631,7 +634,10 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = created_by || updated_by || authContext.cognito_user_id || require('crypto').randomUUID();
+      const userId = created_by || updated_by || authContext.cognito_user_id;
+      if (!userId) {
+        return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to create or update an action' }) };
+      }
       const orgId = accessibleOrgIds[0] || organizationId;
       
       // Helper function to handle companion state and risk assessments
