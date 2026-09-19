@@ -154,6 +154,15 @@ export function actionText(a: GroupAction): string {
   return a.claim || a.scoring_data?.what_was_done || a.description || a.title;
 }
 
+// One experience's member ids; the chart draws it as a band from its initial
+// state to its final state, with its actions marked on it.
+export interface GroupExperience {
+  id: string;
+  initial_state_ids: string[];
+  final_state_ids: string[];
+  action_ids: string[];
+}
+
 export interface GroupContainer {
   toolId: string;
   toolName: string;
@@ -162,6 +171,7 @@ export interface GroupContainer {
   sourcePhone: string | null;
   observations: GroupObservation[];
   actions: GroupAction[];
+  experiences: GroupExperience[];
 }
 
 // Ten hues 36° apart at a mid lightness so every series stays distinct
@@ -230,10 +240,31 @@ export interface AxisInfo {
   domain: [number, number];
 }
 
+// A translucent span on the chart: one experience from its earliest initial
+// state to its latest final state. `open` when it has no final state yet, in
+// which case it runs to the newest reading.
+export interface ExperienceBand {
+  id: string;
+  toolId: string;
+  color: string;
+  start: number;
+  end: number;
+  open: boolean;
+}
+
+// An extra solid line drawn over the part of a series that lies inside an
+// experience band; the base line is dashed wherever no experience covers it.
+export interface CoveredLine {
+  key: string;
+  seriesKey: string;
+}
+
 export interface MetricChartBundle {
   metric: DiscoveredMetric;
+  experienceBands: ExperienceBand[];
+  coveredLines: CoveredLine[];
   chartData: ChartRow[];
-  actionMarkers: { timestamp: number; y: number; toolId: string; color: string; toolName: string; action: GroupAction }[];
+  actionMarkers: { timestamp: number; y: number; toolId: string; color: string; toolName: string; action: GroupAction; inExperience: boolean }[];
   // Explicit [min, max] rather than trusting Recharts' 'auto' keyword to
   // scale itself — with a real metric name (unlike the always-backend-
   // validated Coverage %), a bad manually-entered value (seen in practice:
@@ -321,6 +352,55 @@ export function collectContainerPoints(
     }
   }
   return points.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// The bands for one container on one metric family's chart. An experience
+// only appears where one of its initial/final states has a reading of this
+// family, so a band always means "this experience measured this metric".
+// `toTimestamp` maps an ISO time onto the chart's own x positions (Coverage %
+// plots by Manila day, everything else at exact time).
+function collectExperienceBands(
+  container: GroupContainer,
+  familyName: string,
+  color: string,
+  toTimestamp: (iso: string) => number,
+  newestTimestamp: number,
+  applyCutoff: boolean
+): ExperienceBand[] {
+  const familyLower = familyName.trim().toLowerCase();
+  const obsById = new Map(container.observations.map((o) => [o.id, o]));
+  const actionById = new Map(container.actions.map((a) => [a.id, a]));
+  const hasReading = (o: GroupObservation) =>
+    (o.metrics || []).some(
+      (m) => parseMetricName(m.metric_name).family.trim().toLowerCase() === familyLower && Number.isFinite(Number(m.value))
+    );
+
+  const bands: ExperienceBand[] = [];
+  for (const exp of container.experiences) {
+    const initial = exp.initial_state_ids.map((id) => obsById.get(id)).filter((o): o is GroupObservation => !!o);
+    const final = exp.final_state_ids.map((id) => obsById.get(id)).filter((o): o is GroupObservation => !!o);
+    if (![...initial, ...final].some(hasReading)) continue;
+
+    const initialTimes = initial.map((o) => toTimestamp(o.observed_at));
+    const finalTimes = final.map((o) => toTimestamp(o.observed_at));
+    const actionTimes = exp.action_ids
+      .map((id) => actionById.get(id))
+      .filter((a): a is GroupAction => !!a)
+      .map((a) => toTimestamp(a.completed_at || a.created_at));
+
+    const startCandidates = initialTimes.length ? initialTimes : actionTimes.length ? actionTimes : finalTimes;
+    if (startCandidates.length === 0) continue;
+    let start = Math.min(...startCandidates);
+    const open = finalTimes.length === 0;
+    let end = open ? Math.max(newestTimestamp, start) : Math.max(...finalTimes);
+    if (end < start) [start, end] = [end, start];
+    if (applyCutoff) {
+      start = Math.max(start, CHART_START_MS);
+      if (end < start) continue;
+    }
+    bands.push({ id: exp.id, toolId: container.toolId, color, start, end, open });
+  }
+  return bands;
 }
 
 // Builds one metric's chart data across every container — the same logic
@@ -424,6 +504,13 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
   });
   const seriesByKey = new Map(chartSeries.map((s) => [s.key, s]));
 
+  const toTimestamp = (iso: string) => (applyCutoff ? manilaDayKey(iso) : new Date(iso).getTime());
+  const newestTimestamp = allPoints.reduce((max, { point }) => Math.max(max, point.timestamp), -Infinity);
+  const experienceBands = containers.flatMap((c) =>
+    collectExperienceBands(c, metric.name, series.find((x) => x.toolId === c.toolId)?.color ?? LINE_COLORS[0], toTimestamp, newestTimestamp, applyCutoff)
+  );
+  const coveredLineKeys = new Map<string, CoveredLine>();
+
   const rows = new Map<number, ChartRow>();
   const axisRange = new Map<'left' | 'right', { min: number; max: number }>();
   for (const { container, point } of allPoints) {
@@ -431,6 +518,12 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
     const row = rows.get(point.timestamp) || { timestamp: point.timestamp, date: formatManila(point.timestamp, MANILA_DATE_OPTS) };
     row[seriesKey] = point.value;
     row[`${seriesKey}__obs`] = point.obs;
+    for (const band of experienceBands) {
+      if (band.toolId !== container.toolId || point.timestamp < band.start || point.timestamp > band.end) continue;
+      const key = `${seriesKey}__cov__${band.id}`;
+      row[key] = point.value;
+      coveredLineKeys.set(key, { key, seriesKey });
+    }
     rows.set(point.timestamp, row);
     const yAxisId = seriesByKey.get(seriesKey)!.yAxisId;
     const range = axisRange.get(yAxisId) ?? { min: Infinity, max: -Infinity };
@@ -480,51 +573,27 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
   const rightAxis: AxisInfo | null =
     distinctUnits.length > 1 ? { unit: distinctUnits[1] ?? null, domain: domainFor(axisRange.get('right')) } : null;
 
-  // A marker per action, placed directly on that person's own line (at the
-  // value nearest the action's date) rather than a separate lane — so "what
-  // did they do before that jump" reads straight off the curve. Reuses the
-  // same points collectContainerPoints built for the line above, so a ring
-  // always lands exactly on a plotted point, not some intermediate raw
-  // value the line itself doesn't show. Skipped entirely once this family
-  // has subtypes OR a second axis: an action isn't naturally "about" one
-  // subtype/unit over another (which line would a ring on "Moisture" even
-  // belong to -- squeeze test or IR meter?), and a single Scatter layer
-  // can only bind to one Y-axis, so mixed-axis markers would plot wrong
-  // anyway.
-  const actionMarkers = hasSubtypes || rightAxis ? [] : containers.flatMap((c) => {
+  // A marker per action, pinned to the top of the plot at the action's real
+  // time — an action isn't a value, so it sits on the time axis, not on the
+  // line (a value-anchored ring floated off the line between readings).
+  // Skipped for a container that never records this metric: it has no line
+  // to be an event on.
+  const actionsInExperience = new Set(containers.flatMap((c) => c.experiences.flatMap((e) => e.action_ids)));
+  const actionMarkers = containers.flatMap((c) => {
     const s = series.find((x) => x.toolId === c.toolId)!;
-    const points = collectContainerPoints(c, metric.name, applyCutoff);
-
-    // A container that never records this metric at all has no line to
-    // ring a marker onto — unlike Coverage % (which every azolla container
-    // tracks, so this case never came up for it), a metric like a
-    // composter's Temperature may only ever apply to one container.
-    // Fabricating a y=0 marker for every other container's actions instead
-    // of skipping them is what produced a wall of rings sitting on the
-    // axis floor and, worse, dragging the domain calc down with them.
-    if (points.length === 0) return [];
-
-    const yForTimestamp = (t: number): number => {
-      const next = points.find((p) => p.timestamp >= t);
-      if (next) return next.value;
-      return points[points.length - 1].value;
-    };
-
+    if (collectContainerPoints(c, metric.name, applyCutoff).length === 0) return [];
     return (c.actions || [])
       .filter((a) => !applyCutoff || new Date(a.completed_at || a.created_at).getTime() >= CHART_START_MS)
-      .map((a) => {
-        const actionDate = a.completed_at || a.created_at;
-        // Coverage % still rounds to its day bucket, matching the line's
-        // own day-bucketed points; every other metric places the ring at
-        // the action's real timestamp, matching the line's now-unbucketed
-        // points.
-        const timestamp = applyCutoff ? manilaDayKey(actionDate) : new Date(actionDate).getTime();
-        // Centered on the actual data point — the marker is a hollow ring
-        // (fill="none"), so it rings the dot rather than covering it.
-        const y = yForTimestamp(timestamp);
-        return { timestamp, y, toolId: c.toolId, color: s.color, toolName: s.name, action: a };
-      });
+      .map((a) => ({
+        timestamp: toTimestamp(a.completed_at || a.created_at),
+        y: leftAxis.domain[1],
+        toolId: c.toolId,
+        color: s.color,
+        toolName: s.name,
+        action: a,
+        inExperience: actionsInExperience.has(a.id),
+      }));
   });
 
-  return { metric, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
+  return { metric, experienceBands, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
 }

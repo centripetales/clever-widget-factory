@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Loader2, Pencil, Check, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ComposedChart, Line, Scatter, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
+import { ComposedChart, Line, Scatter, ReferenceArea, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
 import { apiService } from '@/lib/apiService';
 import { useGroupSnapshots } from '@/hooks/useGroupSnapshots';
 import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
@@ -62,6 +63,7 @@ function MetricChartCard({
   toggleSeries,
   onPickObservation,
   onPickAction,
+  onPickExperience,
   hideContainerName,
 }: {
   bundle: MetricChartBundle;
@@ -69,9 +71,10 @@ function MetricChartCard({
   toggleSeries: (key: string) => void;
   onPickObservation: (toolId: string, obs: GroupObservation, seriesName: string, color: string) => void;
   onPickAction: (payload: { action: GroupAction; toolName: string; color: string }) => void;
+  onPickExperience: (experienceId: string) => void;
   hideContainerName?: boolean;
 }) {
-  const { metric, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
+  const { metric, experienceBands, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
   const isCoverage = metric.name === 'Coverage %';
 
   // Recharts' own automatic brush-to-chart data slicing (an uncontrolled
@@ -152,7 +155,7 @@ function MetricChartCard({
               date labels (angle=-45, textAnchor="end") extend past their
               tick's x position, and without this room they (and the first
               point's glow) got clipped by the chart's SVG edge. */}
-          <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 40, bottom: 20 }}>
+          <ComposedChart data={chartData} margin={{ top: 16, right: 30, left: 40, bottom: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
             <XAxis
               dataKey="timestamp"
@@ -250,6 +253,25 @@ function MetricChartCard({
                 </div>
               )}
             />
+            {/* One translucent band per experience, from its initial state
+                to its final state (dashed edge and open-ended when it has no
+                final state yet). Click to open the experience. */}
+            {experienceBands.map((band) => (
+              <ReferenceArea
+                key={`band-${band.id}`}
+                yAxisId="left"
+                x1={band.start}
+                x2={band.end}
+                ifOverflow="hidden"
+                fill={band.color}
+                fillOpacity={hiddenSeriesKeys.has(band.toolId) ? 0 : 0.12}
+                stroke={band.color}
+                strokeOpacity={hiddenSeriesKeys.has(band.toolId) ? 0 : 0.4}
+                strokeDasharray={band.open ? '4 3' : undefined}
+                style={{ cursor: 'pointer' }}
+                onClick={() => onPickExperience(band.id)}
+              />
+            ))}
             {chartSeries.map((s) => (
               <Line
                 key={s.key}
@@ -258,6 +280,9 @@ function MetricChartCard({
                 name={s.label}
                 stroke={s.color}
                 strokeWidth={2}
+                // Dashed wherever no experience explains the movement; the
+                // covered stretches are redrawn solid on top (below).
+                strokeDasharray={experienceBands.length > 0 ? '5 4' : undefined}
                 connectNulls
                 hide={hiddenSeriesKeys.has(s.key)}
                 // A toggled-back-on series fully remounts (hide returns
@@ -308,6 +333,24 @@ function MetricChartCard({
                 }}
               />
             ))}
+            {coveredLines.map((cl) => {
+              const s = chartSeries.find((x) => x.key === cl.seriesKey);
+              if (!s || hiddenSeriesKeys.has(s.key)) return null;
+              return (
+                <Line
+                  key={cl.key}
+                  yAxisId={s.yAxisId}
+                  dataKey={cl.key}
+                  stroke={s.color}
+                  strokeWidth={2}
+                  connectNulls
+                  dot={false}
+                  activeDot={false}
+                  isAnimationActive={false}
+                  legendType="none"
+                />
+              );
+            })}
             <Scatter
               yAxisId="left"
               // Always the full array, never filtered by hiddenSeriesKeys —
@@ -328,17 +371,22 @@ function MetricChartCard({
                 const { cx, cy, payload } = rawProps as ActionShapeProps;
                 if (hiddenSeriesKeys.has(payload.toolId)) return <g />;
                 const onClick = () => onPickAction({ action: payload.action, toolName: payload.toolName, color: payload.color });
+                // A small lightning bolt (the History feed's action icon) on
+                // a white disc so it reads over the band and the grid.
+                // Filled when the action belongs to an experience, an
+                // outline when it doesn't.
                 return (
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r={10}
-                    fill="none"
-                    stroke={payload.color}
-                    strokeWidth={2}
-                    style={{ cursor: 'pointer' }}
-                    onClick={onClick}
-                  />
+                  <g style={{ cursor: 'pointer' }} onClick={onClick}>
+                    <circle cx={cx} cy={cy} r={9} fill="#fff" stroke={payload.color} strokeWidth={1.5} />
+                    <path
+                      d="M 1.5 -6 L -4 1 L -0.5 1 L -1.5 6 L 4 -1 L 0.5 -1 Z"
+                      transform={`translate(${cx} ${cy})`}
+                      fill={payload.inExperience ? payload.color : 'none'}
+                      stroke={payload.color}
+                      strokeWidth={1}
+                      strokeLinejoin="round"
+                    />
+                  </g>
                 );
               }}
             />
@@ -390,6 +438,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   // same rule ToolDetails.tsx's canEditObservation uses).
   const { isAdmin } = useOrganization();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { data: containersData, isLoading: loading, error: loadError } = useGroupSnapshots(orgId);
   const containers = containersData ?? null;
   const error = loadError ? (loadError as Error).message || 'Failed to load group data' : null;
@@ -636,6 +685,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
               toggleSeries={toggleSeries}
               onPickObservation={selectObservation}
               onPickAction={setSelectedAction}
+              onPickExperience={(id) => navigate(`/experiences/${id}`)}
               hideContainerName={hideContainerName}
             />
           ))

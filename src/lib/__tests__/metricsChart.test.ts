@@ -29,6 +29,7 @@ const container = (observations: GroupObservation[]): GroupContainer => ({
   sourcePhone: null,
   observations,
   actions: [],
+  experiences: [],
 });
 
 describe('manilaDayKey', () => {
@@ -144,5 +145,58 @@ describe('buildMetricChart', () => {
     expect(bundle.chartSeries.map((s) => s.yAxisId).sort()).toEqual(['left', 'right']);
     expect(bundle.rightAxis).not.toBeNull();
     expect(bundle.titlePrefix).toBe('Rotary');
+  });
+});
+
+describe('buildMetricChart experience bands', () => {
+  const series = [{ toolId: 't1', name: 'Rotary', color: '#f00' }];
+  const temp = (id: string, at: string, value: string) => obs(id, at, [{ name: 'Temperature', value, unit: 'C' }]);
+  const action = (id: string, at: string) => ({
+    id, title: 'Add sawdust', description: null, status: 'completed', created_at: at, completed_at: at, claim: null, scoring_data: null,
+  });
+
+  it('draws a band from the initial state to the final state and covers the readings inside it', () => {
+    const c = container([
+      temp('a', '2026-09-01T00:00:00Z', '61'),
+      temp('b', '2026-09-03T00:00:00Z', '57'),
+      temp('c', '2026-09-08T00:00:00Z', '50'),
+    ]);
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: ['b'], action_ids: [] }];
+    const bundle = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' });
+
+    expect(bundle.experienceBands).toHaveLength(1);
+    const band = bundle.experienceBands[0];
+    expect(band.start).toBe(new Date('2026-09-01T00:00:00Z').getTime());
+    expect(band.end).toBe(new Date('2026-09-03T00:00:00Z').getTime());
+    expect(band.open).toBe(false);
+    expect(bundle.coveredLines).toEqual([{ key: 't1__cov__e1', seriesKey: 't1' }]);
+    const covered = bundle.chartData.filter((r) => r['t1__cov__e1'] !== undefined);
+    expect(covered.map((r) => r['t1__cov__e1'])).toEqual([61, 57]);
+  });
+
+  it('runs an experience with no final state to the newest reading and marks it open', () => {
+    const c = container([temp('a', '2026-09-01T00:00:00Z', '61'), temp('b', '2026-09-05T00:00:00Z', '58')]);
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: [], action_ids: [] }];
+    const [band] = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' }).experienceBands;
+    expect(band.open).toBe(true);
+    expect(band.end).toBe(new Date('2026-09-05T00:00:00Z').getTime());
+  });
+
+  it('skips an experience whose end states have no reading of this metric', () => {
+    const c = container([
+      obs('a', '2026-09-01T00:00:00Z', [{ name: 'Moisture', value: '3' }]),
+      temp('t', '2026-09-02T00:00:00Z', '60'),
+    ]);
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: [], action_ids: [] }];
+    expect(buildMetricChart([c], series, { name: 'Temperature', unit: 'C' }).experienceBands).toEqual([]);
+  });
+
+  it('pins every action to the top of the axis and flags those that belong to an experience', () => {
+    const c = container([temp('a', '2026-09-01T00:00:00Z', '61'), temp('b', '2026-09-03T00:00:00Z', '57')]);
+    c.actions = [action('x1', '2026-09-02T00:00:00Z'), action('x2', '2026-09-02T12:00:00Z')];
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: ['b'], action_ids: ['x1'] }];
+    const bundle = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' });
+    expect(bundle.actionMarkers.map((m) => [m.action.id, m.inExperience])).toEqual([['x1', true], ['x2', false]]);
+    expect(bundle.actionMarkers.every((m) => m.y === bundle.leftAxis.domain[1])).toBe(true);
   });
 });

@@ -85,5 +85,7 @@ export const organizationsQueryKey = () => ['organizations'];
 // Tool & Part History query keys
 export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];
 export const toolSharesQueryKey = (toolId: string) => ['tool_shares', toolId];
-export const groupSnapshotsQueryKey = (orgId: string) => ['group_snapshots', orgId];
+// 'v2': the response gained `experiences`; the version keeps a persisted cache
+// entry from before that from being read as the new shape.
+export const groupSnapshotsQueryKey = (orgId: string) => ['group_snapshots', 'v2', orgId];
 export const partHistoryQueryKey = (partId: string) => ['part_history', partId];
