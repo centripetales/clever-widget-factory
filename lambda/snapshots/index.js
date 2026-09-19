@@ -10,6 +10,19 @@ const headers = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
 };
 
+// Returns an error message when `value` doesn't fit the metric's type and
+// range, or null when it does. Mirrors src/lib/metricValue.ts.
+function validateMetricValue(metric, value) {
+  const text = String(value).trim();
+  if (text === '') return 'A value is required';
+  if (metric.value_type === 'text') return null;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return `${metric.name} must be a number`;
+  if (metric.min_value !== null && n < Number(metric.min_value)) return `${metric.name} must be at least ${metric.min_value}`;
+  if (metric.max_value !== null && n > Number(metric.max_value)) return `${metric.name} must be at most ${metric.max_value}`;
+  return null;
+}
+
 exports.handler = async (event) => {
   const { httpMethod, pathParameters, path } = event;
 
@@ -131,7 +144,7 @@ async function createSnapshot(event, stateId, authContext, headers) {
 
     // Verify metric belongs to organization
     const metricCheckSql = `
-      SELECT organization_id
+      SELECT organization_id, name, value_type, min_value, max_value
       FROM metrics
       WHERE metric_id = ${formatSqlValue(metric_id)}::uuid
     `;
@@ -146,6 +159,12 @@ async function createSnapshot(event, stateId, authContext, headers) {
     if (metricResult.rows[0].organization_id !== authContext.organization_id) {
       await client.query('ROLLBACK');
       return errorResponse(403, 'Metric does not belong to your organization', headers);
+    }
+
+    const valueError = validateMetricValue(metricResult.rows[0], value);
+    if (valueError) {
+      await client.query('ROLLBACK');
+      return errorResponse(400, valueError, headers);
     }
 
     const sql = `
@@ -190,9 +209,10 @@ async function updateSnapshot(event, snapshotId, authContext, headers) {
 
     // Verify snapshot belongs to organization (via state)
     const checkSql = `
-      SELECT ms.snapshot_id, s.organization_id
+      SELECT ms.snapshot_id, s.organization_id, m.name, m.value_type, m.min_value, m.max_value
       FROM metric_snapshots ms
       JOIN states s ON ms.state_id = s.id
+      JOIN metrics m ON ms.metric_id = m.metric_id
       WHERE ms.snapshot_id = ${formatSqlValue(snapshotId)}::uuid
     `;
     
@@ -206,6 +226,12 @@ async function updateSnapshot(event, snapshotId, authContext, headers) {
     if (checkResult.rows[0].organization_id !== authContext.organization_id) {
       await client.query('ROLLBACK');
       return errorResponse(403, 'Snapshot does not belong to your organization', headers);
+    }
+
+    const valueError = validateMetricValue(checkResult.rows[0], value);
+    if (valueError) {
+      await client.query('ROLLBACK');
+      return errorResponse(400, valueError, headers);
     }
 
     const updates = [];
