@@ -1047,7 +1047,15 @@ export function ActionForm({
       const actionStatus = formData.status || 'not_started';
 
       // Get current user ID
-      const userId = user?.id || '00000000-0000-0000-0000-000000000000';
+      const userId = user?.id;
+      if (!userId) {
+        toast({
+          title: "Error",
+          description: "You must be signed in to save an action",
+          variant: "destructive"
+        });
+        return;
+      }
 
       const actionData: any = {
         title: formData.title.trim(),

@@ -24,6 +24,15 @@ const dbConfig = {
   }
 };
 
+// The authenticated user's id, or an error — never a placeholder id, which
+// would be written to the database as if it were a real user.
+function requireCognitoUserId(authContext) {
+  if (!authContext.cognito_user_id) {
+    throw new Error('Authenticated user id is required');
+  }
+  return authContext.cognito_user_id;
+}
+
 // Helper to execute SQL and return JSON
 async function queryJSON(sql) {
   const client = new Client(dbConfig);
@@ -260,7 +269,7 @@ exports.handler = async (event) => {
         stateId = require('crypto').randomUUID();
         const createStateSql = `
           INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-          VALUES ('${stateId}', '${organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+          VALUES ('${stateId}', '${organizationId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
         `;
         await queryJSON(createStateSql);
         
@@ -384,7 +393,7 @@ exports.handler = async (event) => {
           stateId = require('crypto').randomUUID();
           const createStateSql = `
             INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-            VALUES ('${stateId}', '${orgId || organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+            VALUES ('${stateId}', '${orgId || organizationId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
           `;
           await queryJSON(createStateSql);
           
@@ -663,7 +672,7 @@ exports.handler = async (event) => {
           stateId = require('crypto').randomUUID();
           const createStateSql = `
             INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-            VALUES ('${stateId}', '${orgId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+            VALUES ('${stateId}', '${orgId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
           `;
           await queryJSON(createStateSql);
           
