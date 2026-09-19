@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
 import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
 import { offlineQueryConfig } from '@/lib/queryConfig';
-import type { GroupContainer } from '@/components/shared/GroupMetricsGrid';
+import type { GroupContainer } from '@/lib/metricsChart';
 
 export const fetchGroupSnapshots = async (orgId: string): Promise<GroupContainer[]> => {
   const res = await apiService.get<{ containers: GroupContainer[] }>(`/organizations/${orgId}/coverage-snapshots`);
