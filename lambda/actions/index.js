@@ -631,7 +631,7 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = created_by || updated_by || require('crypto').randomUUID();
+      const userId = created_by || updated_by || authContext.cognito_user_id || require('crypto').randomUUID();
       const orgId = accessibleOrgIds[0] || organizationId;
       
       // Helper function to handle companion state and risk assessments
