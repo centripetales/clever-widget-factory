@@ -241,8 +241,10 @@ export default function ExperiencePage() {
     const actions = (experience.components?.actions || [])
       .map((c) => c.action_id).filter(Boolean) as string[];
 
-    setInitialStateIds(initial);
-    setFinalStateIds(final);
+    // Same default-to-an-editable-card as a new experience, so an existing
+    // one with no outcome (or start) yet can still have one added.
+    setInitialStateIds(initial.length ? initial : [PENDING_STATE_ID.initial_states]);
+    setFinalStateIds(final.length ? final : [PENDING_STATE_ID.final_states]);
     setActionIds(actions);
 
     const edits: Record<string, string> = {};
