@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ComposedChart, Line, Scatter, ReferenceLine, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
+import { ComposedChart, ScatterChart, Line, Scatter, ReferenceLine, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
 import { apiService } from '@/lib/apiService';
 import { useGroupSnapshots } from '@/hooks/useGroupSnapshots';
 import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
@@ -20,6 +20,9 @@ import {
   ChartRow,
   ChartSeriesInfo,
   LegendChip,
+  PresenceBundle,
+  buildPresenceChart,
+  discoverMetrics,
   MarkerShape,
   DiscoveredMetric,
   GroupAction,
@@ -218,6 +221,7 @@ function MetricChartCard({
               axisLine={{ stroke: 'hsl(var(--border))' }}
               tickLine={{ stroke: 'hsl(var(--border))' }}
               domain={leftAxis.domain}
+              ticks={leftAxis.ticks}
               // Ticks interpolated across a padded floating-point domain
               // land on values like 40.999999999994 — round for display,
               // the underlying data stays exact.
@@ -244,6 +248,7 @@ function MetricChartCard({
                 axisLine={{ stroke: 'hsl(var(--border))' }}
                 tickLine={{ stroke: 'hsl(var(--border))' }}
                 domain={rightAxis.domain}
+                ticks={rightAxis.ticks}
                 tickFormatter={(v: number) => Number(v.toFixed(2)).toString()}
                 label={{
                   value: rightAxis.unit ?? '',
@@ -469,6 +474,83 @@ function ExperienceActionView({ action }: { action: GroupAction }) {
   );
 }
 
+// A timeline for a text metric: one row per container, a dot wherever an
+// observation wrote something down. Click a dot to read it.
+function PresenceChartCard({
+  bundle,
+  onPickObservation,
+}: {
+  bundle: PresenceBundle;
+  onPickObservation: (toolId: string, obs: GroupObservation, seriesName: string, color: string) => void;
+}) {
+  const { metric, rows, points } = bundle;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const times = points.map((p) => p.timestamp);
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  const ticks: number[] = [];
+  for (let t = min; t <= max; t += 7 * dayMs) ticks.push(t);
+  if (ticks[ticks.length - 1] !== max) ticks.push(max);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{metric.name} Over Time</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={90 + rows.length * 44}>
+          <ScatterChart margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+            <XAxis
+              type="number"
+              dataKey="timestamp"
+              domain={[min - 2 * dayMs, max + 2 * dayMs]}
+              ticks={ticks}
+              tickFormatter={(ts: number) => formatManila(ts, MANILA_DATE_OPTS)}
+              tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+              axisLine={{ stroke: 'hsl(var(--border))' }}
+              tickLine={{ stroke: 'hsl(var(--border))' }}
+              angle={-45}
+              textAnchor="end"
+              height={60}
+            />
+            <YAxis
+              type="number"
+              dataKey="y"
+              domain={[-0.5, rows.length - 0.5]}
+              ticks={rows.map((r) => r.y)}
+              tickFormatter={(y: number) => rows.find((r) => r.y === y)?.label ?? ''}
+              tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+              axisLine={{ stroke: 'hsl(var(--border))' }}
+              tickLine={false}
+              width={140}
+            />
+            <Scatter
+              data={points}
+              isAnimationActive={false}
+              shape={(rawProps: unknown) => {
+                const { cx, cy, payload } = rawProps as { cx: number; cy: number; payload: PresenceBundle['points'][number] };
+                return (
+                  <MarkerGlyph
+                    shape="circle"
+                    cx={cx}
+                    cy={cy}
+                    r={6}
+                    fill={payload.color}
+                    stroke="#fff"
+                    strokeWidth={1.5}
+                    onClick={() => onPickObservation(payload.toolId, payload.obs, payload.label, payload.color)}
+                  />
+                );
+              }}
+            />
+          </ScatterChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Cap on popup thumbnails warmed when the tab opens.
 const MAX_PRELOADED_THUMBNAILS = 60;
 
@@ -618,25 +700,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   // farmer or a composter operator happens to track shows up here
   // automatically, no per-metric wiring needed. Grouped case-insensitively
   // so e.g. "moisture: ..." and "Moisture: ..." still land on one chart.
-  const metricsPresent = useMemo<DiscoveredMetric[]>(() => {
-    if (!filteredContainers) return [];
-    const families = new Map<string, { name: string; unit: string | null }>();
-    for (const c of filteredContainers) {
-      for (const o of c.observations) {
-        for (const m of o.metrics || []) {
-          const { family } = parseMetricName(m.metric_name);
-          const key = family.toLowerCase();
-          if (!families.has(key)) families.set(key, { name: family, unit: m.unit });
-        }
-      }
-    }
-    return Array.from(families.values())
-      .sort((a, b) => {
-        if (a.name === 'Coverage %') return -1;
-        if (b.name === 'Coverage %') return 1;
-        return a.name.localeCompare(b.name);
-      });
-  }, [filteredContainers]);
+  const metricsPresent = useMemo(() => (filteredContainers ? discoverMetrics(filteredContainers) : []), [filteredContainers]);
 
   // One color per container, computed from the full (unfiltered) container
   // list so a color never reassigns when the time range changes — shared
@@ -654,9 +718,13 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     }));
   }, [containers]);
 
-  const metricCharts = useMemo<MetricChartBundle[]>(() => {
+  const metricCharts = useMemo(() => {
     if (!filteredContainers) return [];
-    return metricsPresent.map((metric) => buildMetricChart(filteredContainers, series, metric));
+    return metricsPresent.map((metric) =>
+      metric.kind === 'text'
+        ? ({ kind: 'presence', bundle: buildPresenceChart(filteredContainers, series, metric) } as const)
+        : ({ kind: 'number', bundle: buildMetricChart(filteredContainers, series, metric) } as const)
+    );
   }, [filteredContainers, series, metricsPresent]);
 
   // This component only mounts when its tab is opened, so warming the
@@ -750,17 +818,21 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
             </CardContent>
           </Card>
         ) : (
-          metricCharts.map((bundle) => (
-            <MetricChartCard
-              key={bundle.metric.name}
-              bundle={bundle}
-              hiddenSeriesKeys={hiddenSeriesKeys}
-              toggleSeries={toggleSeries}
-              onPickObservation={selectObservation}
-              onPickAction={pickAction}
-              hideContainerName={hideContainerName}
-            />
-          ))
+          metricCharts.map((chart) =>
+            chart.kind === 'presence' ? (
+              <PresenceChartCard key={chart.bundle.metric.name} bundle={chart.bundle} onPickObservation={selectObservation} />
+            ) : (
+              <MetricChartCard
+                key={chart.bundle.metric.name}
+                bundle={chart.bundle}
+                hiddenSeriesKeys={hiddenSeriesKeys}
+                toggleSeries={toggleSeries}
+                onPickObservation={selectObservation}
+                onPickAction={pickAction}
+                hideContainerName={hideContainerName}
+              />
+            )
+          )
         )}
       </div>
 

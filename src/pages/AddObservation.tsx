@@ -253,6 +253,7 @@ export default function AddObservation() {
     return `${year}-${month}-${day}T${hours}:${minutes}`;
   });
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
+  const [metricErrors, setMetricErrors] = useState(false);
 
   // Pre-populate form fields when editing an existing state
   useEffect(() => {
@@ -303,7 +304,16 @@ export default function AddObservation() {
     const hasText = observationText.trim().length > 0;
     const hasPhotos = photos.some(p => (p.photo_url || p.file) && !p.isUploading);
     const hasMetrics = Object.values(metricValues).some(value => value.trim().length > 0);
-    
+
+    if (metricErrors) {
+      toast({
+        title: 'Check the metric values',
+        description: 'One or more metric values are outside what that metric accepts.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     if (!hasText && !hasPhotos && !hasMetrics) {
       toast({
         title: 'Validation Error',
@@ -870,6 +880,7 @@ export default function AddObservation() {
               toolId={toolId}
               values={metricValues}
               onChange={setMetricValues}
+              onErrorsChange={setMetricErrors}
             />
           </CardContent>
         </Card>

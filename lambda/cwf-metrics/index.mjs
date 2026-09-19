@@ -20,6 +20,35 @@ async function executeQuery(query, params = []) {
   }
 }
 
+// Parses the optional numeric range/benchmark fields: undefined, null and ''
+// mean "not set" (0 is a real value, unlike the `|| null` this replaces).
+function toNumberOrNull(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new Error(`${field} must be a number`);
+  return n;
+}
+
+const VALUE_TYPES = ['number', 'text'];
+
+// Validates the type/range fields of a metric create or update body and
+// returns them ready to store.
+function parseValueTypeFields(body) {
+  const value_type = body.value_type;
+  if (!VALUE_TYPES.includes(value_type)) {
+    throw new Error(`value_type must be one of: ${VALUE_TYPES.join(', ')}`);
+  }
+  const min_value = toNumberOrNull(body.min_value, 'min_value');
+  const max_value = toNumberOrNull(body.max_value, 'max_value');
+  if (value_type === 'text' && (min_value !== null || max_value !== null)) {
+    throw new Error('A text metric cannot have a min or max value');
+  }
+  if (min_value !== null && max_value !== null && min_value > max_value) {
+    throw new Error('min_value cannot be greater than max_value');
+  }
+  return { value_type, min_value, max_value };
+}
+
 export const handler = async (event) => {
   console.log('Event:', JSON.stringify(event, null, 2));
 
@@ -124,7 +153,8 @@ export const handler = async (event) => {
               ) as photos,
               (
                 SELECT json_agg(json_build_object(
-                  'metric_id', ms.metric_id, 'metric_name', m.name, 'value', ms.value, 'unit', m.unit
+                  'metric_id', ms.metric_id, 'metric_name', m.name, 'value', ms.value, 'unit', m.unit,
+                  'value_type', m.value_type, 'min_value', m.min_value, 'max_value', m.max_value
                 ))
                 FROM metric_snapshots ms JOIN metrics m ON ms.metric_id = m.metric_id
                 WHERE ms.state_id = s.id AND m.active
@@ -457,7 +487,7 @@ export const handler = async (event) => {
     // GET /api/tools/{id}/metrics - List all metrics for a tool
     if (httpMethod === 'GET' && toolId && !metricId) {
       const result = await executeQuery(
-        `SELECT metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id
+        `SELECT metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id
          FROM metrics
          WHERE tool_id = $1 AND organization_id = $2
          ORDER BY created_at DESC`,
@@ -484,11 +514,20 @@ export const handler = async (event) => {
         };
       }
 
+      let typeFields;
+      let benchmark;
+      try {
+        typeFields = parseValueTypeFields(body);
+        benchmark = toNumberOrNull(benchmark_value, 'benchmark_value');
+      } catch (err) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: err.message }) };
+      }
+
       const result = await executeQuery(
-        `INSERT INTO metrics (tool_id, name, unit, benchmark_value, details, organization_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id`,
-        [toolId, name.trim(), unit || null, benchmark_value || null, details || null, organizationId]
+        `INSERT INTO metrics (tool_id, name, unit, benchmark_value, details, value_type, min_value, max_value, organization_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+        [toolId, name.trim(), unit || null, benchmark, details || null, typeFields.value_type, typeFields.min_value, typeFields.max_value, organizationId]
       );
 
       return {
@@ -511,12 +550,37 @@ export const handler = async (event) => {
         };
       }
 
+      let typeFields;
+      let benchmark;
+      try {
+        typeFields = parseValueTypeFields(body);
+        benchmark = toNumberOrNull(benchmark_value, 'benchmark_value');
+      } catch (err) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: err.message }) };
+      }
+
+      // A metric that already has readings keeps its type, so existing
+      // values can't be left stranded under the wrong one.
+      const current = await executeQuery(
+        `SELECT value_type, (SELECT COUNT(*) FROM metric_snapshots WHERE metric_id = $1) AS readings
+         FROM metrics WHERE metric_id = $1 AND tool_id = $2 AND organization_id = $3`,
+        [metricId, toolId, organizationId]
+      );
+      if (current.rows.length > 0 && current.rows[0].value_type !== typeFields.value_type && Number(current.rows[0].readings) > 0) {
+        return {
+          statusCode: 400,
+          headers: corsHeaders,
+          body: JSON.stringify({ error: 'The type of a metric that already has readings cannot be changed' })
+        };
+      }
+
       const result = await executeQuery(
         `UPDATE metrics
-         SET name = $1, unit = $2, benchmark_value = $3, details = $4, active = $5
-         WHERE metric_id = $6 AND tool_id = $7 AND organization_id = $8
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, created_at, organization_id`,
-        [name.trim(), unit || null, benchmark_value || null, details || null, active !== false, metricId, toolId, organizationId]
+         SET name = $1, unit = $2, benchmark_value = $3, details = $4, active = $5,
+             value_type = $6, min_value = $7, max_value = $8
+         WHERE metric_id = $9 AND tool_id = $10 AND organization_id = $11
+         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+        [name.trim(), unit || null, benchmark, details || null, active !== false, typeFields.value_type, typeFields.min_value, typeFields.max_value, metricId, toolId, organizationId]
       );
 
       if (result.rows.length === 0) {

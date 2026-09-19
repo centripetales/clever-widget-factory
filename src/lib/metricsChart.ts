@@ -61,6 +61,10 @@ export interface GroupMetric {
   metric_name: string;
   value: string;
   unit: string | null;
+  value_type: 'number' | 'text';
+  // The metric's allowed range, when it has one.
+  min_value: number | null;
+  max_value: number | null;
 }
 
 export interface GroupObservation {
@@ -111,7 +115,7 @@ export function mergeObservations(obsList: GroupObservation[]): GroupObservation
     const values = readings.map((m) => Number(m.value));
     const max = values.length ? Math.max(...values) : 0;
     const unit = readings.find((m) => m.unit)?.unit ?? null;
-    return { metric_id: `merged-${readings[0]?.metric_id ?? name}`, metric_name: name, value: max.toFixed(2), unit };
+    return { metric_id: `merged-${readings[0]?.metric_id ?? name}`, metric_name: name, value: max.toFixed(2), unit, value_type: 'number', min_value: readings[0]?.min_value ?? null, max_value: readings[0]?.max_value ?? null };
   });
   const first = sorted[0];
   const last = sorted[sorted.length - 1];
@@ -268,6 +272,9 @@ export interface ChartSeriesInfo {
 export interface AxisInfo {
   unit: string | null;
   domain: [number, number];
+  // Set when the metric has a range: whole steps across it instead of ticks
+  // picked from the padded domain.
+  ticks?: number[];
 }
 
 // A thin connector from an action's marker (top of the plot) to one of its
@@ -317,6 +324,9 @@ export interface ContainerPoint {
   value: number;
   subtype: string | null;
   unit: string | null;
+  // The metric's allowed range, carried so the axis can use it.
+  min: number | null;
+  max: number | null;
   obs: GroupObservation;
 }
 
@@ -353,7 +363,7 @@ export function collectContainerPoints(
     for (const [day, obsList] of byDay) {
       const merged = obsList.length === 1 ? obsList[0] : mergeObservations(obsList);
       const reading = merged.metrics!.find((m) => m.metric_name === familyName)!;
-      points.push({ timestamp: day, value: Number(reading.value), subtype: null, unit: reading.unit, obs: merged });
+      points.push({ timestamp: day, value: Number(reading.value), subtype: null, unit: reading.unit, min: reading.min_value, max: reading.max_value, obs: merged });
     }
     return points.sort((a, b) => a.timestamp - b.timestamp);
   }
@@ -367,12 +377,110 @@ export function collectContainerPoints(
     for (const reading of obs.metrics || []) {
       const parsed = parseMetricName(reading.metric_name);
       if (parsed.family.trim().toLowerCase() !== familyLower) continue;
-      if (!Number.isFinite(Number(reading.value))) continue;
+      if (reading.value_type === 'text' || !Number.isFinite(Number(reading.value))) continue;
       const timestamp = new Date(obs.observed_at).getTime();
-      points.push({ timestamp, value: Number(reading.value), subtype: parsed.subtype, unit: reading.unit, obs });
+      points.push({ timestamp, value: Number(reading.value), subtype: parsed.subtype, unit: reading.unit, min: reading.min_value, max: reading.max_value, obs });
     }
   }
   return points.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// Ticks across a metric's range: every whole number for a small integer
+// range (0-5), otherwise five even steps.
+export function rangeTicks(min: number, max: number): number[] {
+  if (Number.isInteger(min) && Number.isInteger(max) && max - min <= 10) {
+    return Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  }
+  return Array.from({ length: 5 }, (_, i) => Number((min + ((max - min) * i) / 4).toFixed(2)));
+}
+
+export interface DiscoveredFamily extends DiscoveredMetric {
+  // 'text' when every reading of the family is a text metric.
+  kind: 'number' | 'text';
+}
+
+// Every distinct metric family recorded across the containers (the part of a
+// name before a "Family: Sensor" colon, or the whole name), grouped
+// case-insensitively: Coverage % first, the rest alphabetical.
+export function discoverMetrics(containers: GroupContainer[]): DiscoveredFamily[] {
+  const families = new Map<string, { name: string; unit: string | null; hasNumber: boolean }>();
+  for (const c of containers) {
+    for (const o of c.observations) {
+      for (const m of o.metrics || []) {
+        const { family } = parseMetricName(m.metric_name);
+        const key = family.toLowerCase();
+        const entry = families.get(key) ?? { name: family, unit: m.unit, hasNumber: false };
+        if (m.value_type === 'number') entry.hasNumber = true;
+        families.set(key, entry);
+      }
+    }
+  }
+  return Array.from(families.values())
+    .map(({ name, unit, hasNumber }): DiscoveredFamily => ({ name, unit, kind: hasNumber ? 'number' : 'text' }))
+    .sort((a, b) => {
+      if (a.name === 'Coverage %') return -1;
+      if (b.name === 'Coverage %') return 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+// One row per container that has any text reading of the family, one dot per
+// observation with something written: a timeline of when it was seen.
+export interface PresenceRow {
+  toolId: string;
+  label: string;
+  color: string;
+  y: number;
+}
+export interface PresencePoint {
+  key: string;
+  timestamp: number;
+  y: number;
+  toolId: string;
+  color: string;
+  label: string;
+  text: string;
+  obs: GroupObservation;
+}
+export interface PresenceBundle {
+  metric: DiscoveredMetric;
+  rows: PresenceRow[];
+  points: PresencePoint[];
+}
+
+export function buildPresenceChart(containers: GroupContainer[], series: SeriesInfo[], metric: DiscoveredMetric): PresenceBundle {
+  const familyLower = metric.name.trim().toLowerCase();
+  const perContainer = containers
+    .map((c) => {
+      const s = series.find((x) => x.toolId === c.toolId)!;
+      const seen = c.observations.flatMap((obs) => {
+        const parts = (obs.metrics || [])
+          .filter((m) => m.value_type === 'text' && parseMetricName(m.metric_name).family.trim().toLowerCase() === familyLower && m.value.trim() !== '')
+          .map((m) => {
+            const { subtype } = parseMetricName(m.metric_name);
+            return subtype ? `${subtype}: ${m.value.trim()}` : m.value.trim();
+          });
+        return parts.length ? [{ obs, text: parts.join('; ') }] : [];
+      });
+      return { s, seen };
+    })
+    .filter((x) => x.seen.length > 0);
+
+  // First container on top: the axis counts upward.
+  const rows: PresenceRow[] = perContainer.map(({ s }, i) => ({
+    toolId: s.toolId,
+    label: s.name,
+    color: s.color,
+    y: perContainer.length - 1 - i,
+  }));
+  const points: PresencePoint[] = perContainer.flatMap(({ s, seen }, i) =>
+    seen.map(({ obs, text }) => {
+      const timestamp = new Date(obs.observed_at).getTime();
+      return { key: `${s.toolId}:${obs.id}`, timestamp, y: rows[i].y, toolId: s.toolId, color: s.color, label: s.name, text, obs };
+    })
+  );
+  points.sort((a, b) => a.timestamp - b.timestamp);
+  return { metric, rows, points };
 }
 
 // Builds one metric's chart data across every container — the same logic
@@ -498,6 +606,8 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
   const toTimestamp = (iso: string) => (applyCutoff ? manilaDayKey(iso) : new Date(iso).getTime());
   const rows = new Map<number, ChartRow>();
   const axisRange = new Map<'left' | 'right', { min: number; max: number }>();
+  // The metric range shared by every reading on an axis, if there is one.
+  const axisBounds = new Map<'left' | 'right', { min: number | null; max: number | null; consistent: boolean }>();
   for (const { container, point } of allPoints) {
     const seriesKey = point.subtype ? `${container.toolId}::${point.subtype}` : container.toolId;
     const row = rows.get(point.timestamp) || { timestamp: point.timestamp, date: formatManila(point.timestamp, MANILA_DATE_OPTS) };
@@ -505,6 +615,9 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
     row[`${seriesKey}__obs`] = point.obs;
     rows.set(point.timestamp, row);
     const yAxisId = seriesByKey.get(seriesKey)!.yAxisId;
+    const bounds = axisBounds.get(yAxisId);
+    if (!bounds) axisBounds.set(yAxisId, { min: point.min, max: point.max, consistent: true });
+    else if (bounds.min !== point.min || bounds.max !== point.max) bounds.consistent = false;
     const range = axisRange.get(yAxisId) ?? { min: Infinity, max: -Infinity };
     if (point.value < range.min) range.min = point.value;
     if (point.value > range.max) range.max = point.value;
@@ -545,12 +658,19 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
     if (range.min === range.max) return [range.min - 1, range.max + 1];
     return [range.min - (range.max - range.min) * 0.1, range.max + (range.max - range.min) * 0.1];
   };
-  const leftAxis: AxisInfo = {
-    unit: distinctUnits[0] ?? null,
-    domain: applyCutoff ? [0, 100] : domainFor(axisRange.get('left')),
+  // A metric with a range (0-5 smell strength, 0-100 coverage) plots on that
+  // range, with a little room so the extremes aren't flush against the edge;
+  // otherwise the axis fits the data.
+  const axisFor = (yAxisId: 'left' | 'right', unit: string | null): AxisInfo => {
+    const bounds = axisBounds.get(yAxisId);
+    if (bounds?.consistent && bounds.min !== null && bounds.max !== null && bounds.max > bounds.min) {
+      const pad = (bounds.max - bounds.min) * 0.05;
+      return { unit, domain: [bounds.min - pad, bounds.max + pad], ticks: rangeTicks(bounds.min, bounds.max) };
+    }
+    return { unit, domain: domainFor(axisRange.get(yAxisId)) };
   };
-  const rightAxis: AxisInfo | null =
-    distinctUnits.length > 1 ? { unit: distinctUnits[1] ?? null, domain: domainFor(axisRange.get('right')) } : null;
+  const leftAxis: AxisInfo = axisFor('left', distinctUnits[0] ?? null);
+  const rightAxis: AxisInfo | null = distinctUnits.length > 1 ? axisFor('right', distinctUnits[1] ?? null) : null;
 
   // A marker per action, pinned to the top of the plot at the action's real
   // time — an action isn't a value, so it sits on the time axis, not on the

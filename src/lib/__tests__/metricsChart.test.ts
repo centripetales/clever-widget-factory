@@ -5,6 +5,9 @@ import {
   mergeObservations,
   observationDisplayTime,
   rangeStartMs,
+  rangeTicks,
+  discoverMetrics,
+  buildPresenceChart,
   buildMetricChart,
   collectContainerPoints,
   CHART_START_MS,
@@ -12,14 +15,24 @@ import {
   type GroupObservation,
 } from '../metricsChart';
 
-const obs = (id: string, observed_at: string, metrics: { name: string; value: string; unit?: string }[]): GroupObservation => ({
+type TestReading = { name: string; value: string; unit?: string; type?: 'number' | 'text'; min?: number; max?: number };
+
+const obs = (id: string, observed_at: string, metrics: TestReading[]): GroupObservation => ({
   id,
   observation_text: null,
   observed_by: 'u1',
   observed_by_name: 'U',
   observed_at,
   photos: null,
-  metrics: metrics.map((m) => ({ metric_id: `m-${m.name}`, metric_name: m.name, value: m.value, unit: m.unit ?? null })),
+  metrics: metrics.map((m) => ({
+    metric_id: `m-${m.name}`,
+    metric_name: m.name,
+    value: m.value,
+    unit: m.unit ?? null,
+    value_type: m.type ?? 'number',
+    min_value: m.min ?? null,
+    max_value: m.max ?? null,
+  })),
 });
 
 const container = (observations: GroupObservation[]): GroupContainer => ({
@@ -257,5 +270,66 @@ describe('buildMetricChart legend', () => {
     const { legend } = buildMetricChart([a, b], two, { name: 'Temp', unit: null });
     expect(legend.sensors[0].seriesKeys).toEqual(['t1::Probe', 't2::Probe']);
     expect(legend.containers[0]).toMatchObject({ seriesKeys: ['t1::Probe'], toolIds: ['t1'] });
+  });
+});
+
+describe('metric ranges on the axis', () => {
+  const series = [{ toolId: 't1', name: 'Rotary', color: '#f00' }];
+  const smell = (id: string, at: string, v: string) => obs(id, at, [{ name: 'Ammonia', value: v, min: 0, max: 5 }]);
+
+  it('plots a metric with a range on that range, with whole-number ticks', () => {
+    const c = container([smell('a', '2026-09-01T00:00:00Z', '5'), smell('b', '2026-09-03T00:00:00Z', '4')]);
+    const { leftAxis } = buildMetricChart([c], series, { name: 'Ammonia', unit: null });
+    expect(leftAxis.ticks).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(leftAxis.domain[0]).toBeCloseTo(-0.25);
+    expect(leftAxis.domain[1]).toBeCloseTo(5.25);
+  });
+
+  it('fits the data when the readings disagree about the range or have none', () => {
+    const c = container([
+      obs('a', '2026-09-01T00:00:00Z', [{ name: 'Ammonia', value: '5', min: 0, max: 5 }]),
+      obs('b', '2026-09-03T00:00:00Z', [{ name: 'Ammonia', value: '4', min: 0, max: 10 }]),
+    ]);
+    expect(buildMetricChart([c], series, { name: 'Ammonia', unit: null }).leftAxis.ticks).toBeUndefined();
+    const plain = container([obs('a', '2026-09-01T00:00:00Z', [{ name: 'Ammonia', value: '5' }])]);
+    expect(buildMetricChart([plain], series, { name: 'Ammonia', unit: null }).leftAxis.ticks).toBeUndefined();
+  });
+
+  it('spaces a wide range in five even steps', () => {
+    expect(rangeTicks(0, 100)).toEqual([0, 25, 50, 75, 100]);
+    expect(rangeTicks(0, 5)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe('text metrics', () => {
+  const series = [{ toolId: 't1', name: 'Doe 1', color: '#f00' }, { toolId: 't2', name: 'Doe 2', color: '#00f' }];
+  const sign = (id: string, at: string, text: string) => obs(id, at, [{ name: 'Estrus Signs', value: text, type: 'text' }]);
+
+  it('discovers a family as text only when every reading is text', () => {
+    const c = container([sign('a', '2026-09-01T00:00:00Z', 'discharge'), obs('n', '2026-09-01T00:00:00Z', [{ name: 'Temp', value: '40' }])]);
+    expect(discoverMetrics([c])).toEqual([
+      { name: 'Estrus Signs', unit: null, kind: 'text' },
+      { name: 'Temp', unit: null, kind: 'number' },
+    ]);
+  });
+
+  it('builds a timeline row per container that has readings, first container on top', () => {
+    const a = { ...container([sign('a', '2026-09-01T00:00:00Z', 'discharge'), sign('b', '2026-09-03T00:00:00Z', 'tail flicking')]), toolId: 't1' };
+    const b = { ...container([sign('c', '2026-09-02T00:00:00Z', 'mounting')]), toolId: 't2' };
+    const none = { ...container([obs('x', '2026-09-02T00:00:00Z', [{ name: 'Temp', value: '40' }])]), toolId: 't3' };
+    const bundle = buildPresenceChart([a, b, none], [...series, { toolId: 't3', name: 'Doe 3', color: '#0f0' }], { name: 'Estrus Signs', unit: null });
+    expect(bundle.rows.map((r) => [r.label, r.y])).toEqual([['Doe 1', 1], ['Doe 2', 0]]);
+    expect(bundle.points.map((p) => [p.label, p.text])).toEqual([
+      ['Doe 1', 'discharge'],
+      ['Doe 2', 'mounting'],
+      ['Doe 1', 'tail flicking'],
+    ]);
+  });
+
+  it('ignores blank text and keeps text readings out of a number chart', () => {
+    const c = container([sign('a', '2026-09-01T00:00:00Z', '   ')]);
+    expect(buildPresenceChart([c], [series[0]], { name: 'Estrus Signs', unit: null }).points).toEqual([]);
+    const mixed = container([obs('a', '2026-09-01T00:00:00Z', [{ name: 'Estrus Signs', value: '12', type: 'text' }])]);
+    expect(collectContainerPoints(mixed, 'Estrus Signs', false)).toEqual([]);
   });
 });
