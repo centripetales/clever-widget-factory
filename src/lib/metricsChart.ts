@@ -164,14 +164,11 @@ export interface GroupContainer {
   actions: GroupAction[];
 }
 
-// Neon hues evenly spaced around the color wheel (36° apart, fixed
-// saturation/lightness) so all 10 stay distinguishable even with every
-// series shown at once — same "glows on black" spirit as Energeia's
-// PERSON_COLORS, but that palette only guarantees 4 distinct colors before
-// repeating similar hues (it was built for ≤4 primary people + filler).
+// Ten hues 36° apart at a mid lightness so every series stays distinct
+// against a white card and in print (the old neon set only worked on black).
 export const LINE_COLORS = [
-  '#FF2828', '#FFA928', '#D4FF28', '#53FF28', '#28FF7E',
-  '#28FEFF', '#287EFF', '#5328FF', '#D428FF', '#FF28A9',
+  '#d92626', '#d97a06', '#a3a30a', '#2fa32f', '#0f9e5e',
+  '#0e9aa3', '#1f6fd9', '#5a2fd9', '#a02fd9', '#d92f8c',
 ];
 
 export const RANGE_OPTIONS: { value: MetricsChartRange; label: string }[] = [

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Pencil, Check, X } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ComposedChart, Line, Scatter, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
@@ -140,42 +140,20 @@ function MetricChartCard({
       : actionMarkers.filter((m) => m.timestamp >= rangeStart && m.timestamp <= rangeEnd);
 
   return (
-    <Card
-      className="border-0 rounded-xl overflow-hidden relative"
-      style={{ background: 'radial-gradient(ellipse at 50% 0%, #0a0a18 0%, #020408 65%)' }}
-    >
-      {/* CSS starfield — same idea as OikonomiaBackground's Three.js scene,
-          done cheaply here since this is a 2D recharts panel, not a canvas. */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-60"
-        style={{
-          backgroundImage: [
-            'radial-gradient(1px 1px at 10% 15%, #fff, transparent)',
-            'radial-gradient(1px 1px at 25% 60%, #fff, transparent)',
-            'radial-gradient(1.5px 1.5px at 40% 25%, #fff, transparent)',
-            'radial-gradient(1px 1px at 55% 80%, #fff, transparent)',
-            'radial-gradient(1px 1px at 70% 10%, #fff, transparent)',
-            'radial-gradient(1.5px 1.5px at 85% 55%, #fff, transparent)',
-            'radial-gradient(1px 1px at 95% 30%, #fff, transparent)',
-            'radial-gradient(1px 1px at 15% 90%, #fff, transparent)',
-            'radial-gradient(1px 1px at 60% 45%, #fff, transparent)',
-            'radial-gradient(1px 1px at 30% 5%, #fff, transparent)',
-          ].join(', '),
-        }}
-      />
-      <div className="relative px-5 pt-4 pb-2 text-center">
-        <h2 className="text-white font-semibold tracking-tight" style={{ fontSize: '1.05rem', letterSpacing: '-0.01em' }}>
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">
           {!hideContainerName && titlePrefix ? `${titlePrefix} — ` : ''}{metric.name} Over Time
-        </h2>
-      </div>
-      <CardContent className="relative">
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
         <ResponsiveContainer width="100%" height={480}>
           {/* left/right margin wider than default: the first/last rotated
               date labels (angle=-45, textAnchor="end") extend past their
               tick's x position, and without this room they (and the first
               point's glow) got clipped by the chart's SVG edge. */}
-          <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 30, bottom: 45 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,229,255,0.12)" />
+          <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 40, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
             <XAxis
               dataKey="timestamp"
               type="number"
@@ -199,30 +177,29 @@ function MetricChartCard({
               }
               ticks={weekTicks}
               tickFormatter={(ts: number) => formatManila(ts, MANILA_DATE_OPTS)}
-              tick={{ fontSize: 11, fill: '#94a3b8' }}
-              axisLine={{ stroke: 'rgba(0,229,255,0.25)' }}
-              tickLine={{ stroke: 'rgba(0,229,255,0.25)' }}
+              tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+              axisLine={{ stroke: 'hsl(var(--border))' }}
+              tickLine={{ stroke: 'hsl(var(--border))' }}
               angle={-45}
               textAnchor="end"
               height={60}
-              label={{ value: 'Date', position: 'insideBottom', offset: -40, style: { fontSize: 12, fill: '#64748b' } }}
             />
             <YAxis
               yAxisId="left"
-              tick={{ fontSize: 11, fill: '#94a3b8' }}
-              axisLine={{ stroke: 'rgba(0,229,255,0.25)' }}
-              tickLine={{ stroke: 'rgba(0,229,255,0.25)' }}
+              tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+              axisLine={{ stroke: 'hsl(var(--border))' }}
+              tickLine={{ stroke: 'hsl(var(--border))' }}
               domain={leftAxis.domain}
               // Ticks interpolated across a padded floating-point domain
               // land on values like 40.999999999994 — round for display,
               // the underlying data stays exact.
               tickFormatter={isCoverage ? undefined : (v: number) => Number(v.toFixed(2)).toString()}
-              unit={leftAxis.unit ?? undefined}
               label={{
-                value: rightAxis ? `${metric.name}${leftAxis.unit ? ` (${leftAxis.unit})` : ''}` : metric.name,
+                value: `${metric.name}${leftAxis.unit && !isCoverage ? ` (${leftAxis.unit})` : ''}`,
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: 12, fill: '#64748b', textAnchor: 'middle' },
+                offset: -15,
+                style: { fontSize: 12, fill: 'hsl(var(--muted-foreground))', textAnchor: 'middle' },
               }}
             />
             {/* A second Y-axis only ever appears when this family's
@@ -235,17 +212,16 @@ function MetricChartCard({
               <YAxis
                 yAxisId="right"
                 orientation="right"
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                axisLine={{ stroke: 'rgba(255,169,40,0.35)' }}
-                tickLine={{ stroke: 'rgba(255,169,40,0.35)' }}
+                tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                axisLine={{ stroke: 'hsl(var(--border))' }}
+                tickLine={{ stroke: 'hsl(var(--border))' }}
                 domain={rightAxis.domain}
                 tickFormatter={(v: number) => Number(v.toFixed(2)).toString()}
-                unit={rightAxis.unit ?? undefined}
                 label={{
                   value: rightAxis.unit ?? '',
                   angle: 90,
                   position: 'insideRight',
-                  style: { fontSize: 12, fill: '#64748b', textAnchor: 'middle' },
+                  style: { fontSize: 12, fill: 'hsl(var(--muted-foreground))', textAnchor: 'middle' },
                 }}
               />
             )}
@@ -261,12 +237,12 @@ function MetricChartCard({
                         onClick={() => toggleSeries(s.key)}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
                         style={{
-                          background: active ? `${s.color}1a` : 'rgba(255,255,255,0.03)',
-                          border: `1px solid ${active ? `${s.color}55` : 'rgba(255,255,255,0.1)'}`,
-                          color: active ? s.color : '#4b5563',
+                          background: active ? `${s.color}1a` : 'transparent',
+                          border: `1px solid ${active ? `${s.color}66` : 'hsl(var(--border))'}`,
+                          color: active ? s.color : 'hsl(var(--muted-foreground))',
                         }}
                       >
-                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: active ? s.color : '#4b5563' }} />
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: active ? s.color : 'hsl(var(--muted-foreground))' }} />
                         {s.label}
                       </button>
                     );
@@ -304,9 +280,9 @@ function MetricChartCard({
                       cy={cy}
                       r={5}
                       fill={s.color}
-                      stroke="#020408"
+                      stroke="#fff"
                       strokeWidth={1.5}
-                      style={{ cursor: 'pointer', filter: `drop-shadow(0 0 3px ${s.color}aa)` }}
+                      style={{ cursor: 'pointer' }}
                       onClick={onPick}
                     />
                   );
@@ -323,9 +299,9 @@ function MetricChartCard({
                       cy={cy}
                       r={7}
                       fill={s.color}
-                      stroke="#020408"
+                      stroke="#fff"
                       strokeWidth={2}
-                      style={{ cursor: 'pointer', filter: `drop-shadow(0 0 6px ${s.color})` }}
+                      style={{ cursor: 'pointer' }}
                       onClick={onPick}
                     />
                   );
@@ -360,7 +336,7 @@ function MetricChartCard({
                     fill="none"
                     stroke={payload.color}
                     strokeWidth={2}
-                    style={{ cursor: 'pointer', filter: `drop-shadow(0 0 4px ${payload.color})` }}
+                    style={{ cursor: 'pointer' }}
                     onClick={onClick}
                   />
                 );
@@ -380,8 +356,8 @@ function MetricChartCard({
               dataKey="timestamp"
               onChange={handleBrushChange}
               height={20}
-              stroke="rgba(0,229,255,0.4)"
-              fill="rgba(10,10,24,0.6)"
+              stroke="hsl(var(--border))"
+              fill="hsl(var(--muted))"
               tickFormatter={(ts: number) => formatManila(ts, MANILA_DATE_OPTS)}
             />
           </ComposedChart>
@@ -417,7 +393,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   const { data: containersData, isLoading: loading, error: loadError } = useGroupSnapshots(orgId);
   const containers = containersData ?? null;
   const error = loadError ? (loadError as Error).message || 'Failed to load group data' : null;
-  // Set on click, rendered as a popup dialog (see the dark-styled Dialog
+  // Set on click, rendered as a popup dialog (see the Dialog
   // below) — a hover-preview doesn't have a touch-device equivalent, so
   // click/tap is the one interaction that works on both.
   const [selectedObservation, setSelectedObservation] = useState<{ obs: GroupObservation; toolName: string; color: string; priorActions: GroupAction[] } | null>(null);
@@ -668,25 +644,12 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
 
       {/* Click-triggered popup (not hover — hover has no equivalent on
           touch, so a mobile tap needs to open something, not preview it
-          inline while the finger is already gone). Styled to match the
-          chart's dark theme instead of the default light Dialog. */}
+          inline while the finger is already gone). */}
       <Dialog open={!!selectedObservation} onOpenChange={(open) => !open && setSelectedObservation(null)}>
-        <DialogContent
-          className="max-w-2xl max-h-[85vh] overflow-y-auto border-0"
-          style={{
-            background: 'radial-gradient(ellipse at 50% 0%, #0a0a18 0%, #020408 65%)',
-            boxShadow: selectedObservation ? `0 0 32px ${selectedObservation.color}33` : undefined,
-          }}
-        >
-          {/* The Dialog's own built-in close button inherits the light
-              theme's dark text color with no override here, so it renders
-              invisible against this black background — easy to miss on
-              desktop (tap-outside still closes it) but a real problem on
-              mobile, where there's no "outside" to tap. This one is sized
-              for a thumb, not a cursor. */}
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          {/* Bigger, unambiguous touch target than the default close button. */}
           <DialogClose
-            className="absolute right-3 top-3 rounded-full p-2 z-10"
-            style={{ background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
+            className="absolute right-3 top-3 rounded-full p-2 z-10 hover:bg-accent"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -703,29 +666,29 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                     above), so observed_by_name would otherwise duplicate it
                     ("Stefan" title + "Stefan Hamilton" right below it). */}
                 {!selectedObservation.obs.observed_by_name.startsWith(selectedObservation.toolName) && (
-                  <p className="font-medium text-slate-200">{selectedObservation.obs.observed_by_name}</p>
+                  <p className="font-medium text-foreground">{selectedObservation.obs.observed_by_name}</p>
                 )}
-                <p className="text-slate-500">{formatManila(selectedObservation.obs.observed_at, MANILA_DATETIME_OPTS)}</p>
+                <p className="text-muted-foreground">{formatManila(selectedObservation.obs.observed_at, MANILA_DATETIME_OPTS)}</p>
                 {selectedObservation.obs.mergedIds && (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     Combined from {selectedObservation.obs.mergedIds.length} check-ins this day — showing each metric's max.
                   </p>
                 )}
               </div>
               {selectedObservation.obs.observation_text && (
-                <p className="text-sm text-slate-200">{selectedObservation.obs.observation_text}</p>
+                <p className="text-sm text-foreground">{selectedObservation.obs.observation_text}</p>
               )}
               {selectedObservation.obs.metrics && selectedObservation.obs.metrics.length > 0 && (
                 <div
-                  className="p-2 rounded text-sm space-y-0.5"
-                  style={{ background: 'rgba(0,229,255,0.06)', border: '1px solid rgba(0,229,255,0.2)' }}
+                  className="p-2 rounded text-sm space-y-0.5 bg-muted/50 border"
+
                 >
                   {selectedObservation.obs.metrics.map((m) => {
                     const isCoverage = m.metric_name === 'Coverage %';
                     if (isCoverage && editingCoverage) {
                       return (
                         <div key={m.metric_id} className="flex items-center gap-1.5">
-                          <span className="font-medium text-cyan-300">{m.metric_name}:</span>
+                          <span className="font-medium">{m.metric_name}:</span>
                           <input
                             type="number"
                             min={0}
@@ -738,15 +701,15 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                               if (e.key === 'Enter') saveCoverage();
                               if (e.key === 'Escape') setEditingCoverage(false);
                             }}
-                            className="w-16 px-1 py-0.5 rounded text-cyan-100"
-                            style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(0,229,255,0.4)' }}
+                            className="w-16 px-1 py-0.5 rounded border bg-background"
+
                           />
-                          <span className="text-cyan-400/80">{m.unit}</span>
+                          <span className="text-muted-foreground">{m.unit}</span>
                           <button
                             type="button"
                             onClick={saveCoverage}
                             disabled={savingCoverage}
-                            className="ml-1 text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                            className="ml-1 text-emerald-600 hover:text-emerald-500 disabled:opacity-50"
                             aria-label="Save"
                           >
                             {savingCoverage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -755,7 +718,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                             type="button"
                             onClick={() => setEditingCoverage(false)}
                             disabled={savingCoverage}
-                            className="text-slate-500 hover:text-slate-300 disabled:opacity-50"
+                            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
                             aria-label="Cancel"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -765,8 +728,8 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                     }
                     return (
                       <div key={m.metric_id} className="flex items-center gap-1.5">
-                        <span className="font-medium text-cyan-300">{m.metric_name}:</span>{' '}
-                        <span className="text-cyan-400/80">{m.value}{m.unit}</span>
+                        <span className="font-medium">{m.metric_name}:</span>{' '}
+                        <span className="text-muted-foreground">{m.value}{m.unit}</span>
                         {isCoverage && canEditObservation(selectedObservation.obs) && (
                           <button
                             type="button"
@@ -775,7 +738,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                               setCoverageError(null);
                               setEditingCoverage(true);
                             }}
-                            className="text-cyan-500/60 hover:text-cyan-300"
+                            className="text-muted-foreground hover:text-foreground"
                             aria-label="Edit coverage"
                           >
                             <Pencil className="h-3 w-3" />
@@ -785,7 +748,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                     );
                   })}
                   {editingCoverage && coverageError && (
-                    <p className="text-xs text-red-400">{coverageError}</p>
+                    <p className="text-xs text-destructive">{coverageError}</p>
                   )}
                 </div>
               )}
@@ -798,17 +761,17 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
                         src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
                         alt={photo.photo_description || 'Observation photo'}
                         className={`w-28 h-28 flex-shrink-0 rounded border ${
-                          selectedObservation.priorActions.length > 0 ? 'border-2 border-purple-500' : 'border-white/10'
+                          selectedObservation.priorActions.length > 0 ? 'border-2 border-purple-500' : 'border-border'
                         }`}
                       />
                       <div className="pt-1">
                         {photo.captured_at && (
-                          <p className="text-xs text-slate-500">
+                          <p className="text-xs text-muted-foreground">
                             {formatManila(photo.captured_at, MANILA_DATETIME_OPTS)}
                           </p>
                         )}
                         {photo.photo_description && (
-                          <p className="text-sm text-slate-400">{photo.photo_description}</p>
+                          <p className="text-sm text-muted-foreground">{photo.photo_description}</p>
                         )}
                       </div>
                     </div>
