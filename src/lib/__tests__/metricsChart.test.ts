@@ -215,4 +215,48 @@ describe('observationDisplayTime', () => {
     expect(observationDisplayTime(withPhotos([null]))).toBe('2026-09-16T13:03:00Z');
     expect(observationDisplayTime(obs('o', '2026-09-16T13:03:00Z', []))).toBe('2026-09-16T13:03:00Z');
   });
+
+});
+
+describe('buildMetricChart experience connectors', () => {
+  const series = [{ toolId: 't1', name: 'Rotary', color: '#f00' }];
+  const temp = (id: string, at: string, value: string) => obs(id, at, [{ name: 'Temperature', value, unit: 'C' }]);
+  const action = (id: string, at: string) => ({
+    id, title: 'Add sawdust', description: null, status: 'completed', created_at: at, completed_at: at, claim: null, scoring_data: null,
+  });
+
+  it('connects an action marker to its experience\'s initial and final readings, and only those', () => {
+    const c = container([
+      temp('a', '2026-09-01T00:00:00Z', '61'),
+      temp('b', '2026-09-03T00:00:00Z', '57'),
+      temp('other', '2026-09-05T00:00:00Z', '50'),
+    ]);
+    c.actions = [action('x1', '2026-09-02T00:00:00Z')];
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: ['b'], action_ids: ['x1'] }];
+    const bundle = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' });
+    const marker = bundle.actionMarkers[0];
+    expect(bundle.experienceLinks.map((l) => [l.to.x, l.to.y])).toEqual([
+      [new Date('2026-09-01T00:00:00Z').getTime(), 61],
+      [new Date('2026-09-03T00:00:00Z').getTime(), 57],
+    ]);
+    expect(bundle.experienceLinks.every((l) => l.from.x === marker.timestamp && l.from.y === marker.y)).toBe(true);
+  });
+
+  it('attaches a state with no reading of the metric to the nearest reading in time', () => {
+    const c = container([
+      temp('a', '2026-09-01T00:00:00Z', '61'),
+      temp('last', '2026-09-03T09:00:00Z', '57'),
+      obs('final', '2026-09-03T12:00:00Z', [{ name: 'Moisture', value: '2' }]),
+    ]);
+    c.actions = [action('x1', '2026-09-02T00:00:00Z')];
+    c.experiences = [{ id: 'e1', initial_state_ids: ['a'], final_state_ids: ['final'], action_ids: ['x1'] }];
+    const links = buildMetricChart([c], series, { name: 'Temperature', unit: 'C' }).experienceLinks;
+    expect(links.map((l) => l.to.y)).toEqual([61, 57]);
+  });
+
+  it('draws no connectors for an action that is not in an experience', () => {
+    const c = container([temp('a', '2026-09-01T00:00:00Z', '61'), temp('b', '2026-09-03T00:00:00Z', '57')]);
+    c.actions = [action('x2', '2026-09-02T00:00:00Z')];
+    expect(buildMetricChart([c], series, { name: 'Temperature', unit: 'C' }).experienceLinks).toEqual([]);
+  });
 });

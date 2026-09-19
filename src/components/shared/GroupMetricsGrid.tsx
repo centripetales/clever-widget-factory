@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ComposedChart, Line, Scatter, ReferenceArea, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
+import { ComposedChart, Line, Scatter, ReferenceLine, XAxis, YAxis, Legend, ResponsiveContainer, CartesianGrid, Brush } from 'recharts';
 import { apiService } from '@/lib/apiService';
 import { useGroupSnapshots } from '@/hooks/useGroupSnapshots';
 import { groupSnapshotsQueryKey } from '@/lib/queryKeys';
@@ -68,7 +68,6 @@ function MetricChartCard({
   toggleSeries,
   onPickObservation,
   onPickAction,
-  onPickExperience,
   hideContainerName,
 }: {
   bundle: MetricChartBundle;
@@ -76,10 +75,9 @@ function MetricChartCard({
   toggleSeries: (key: string) => void;
   onPickObservation: (toolId: string, obs: GroupObservation, seriesName: string, color: string) => void;
   onPickAction: (payload: { action: GroupAction; toolId: string; toolName: string; color: string }) => void;
-  onPickExperience: (experienceId: string, toolId: string) => void;
   hideContainerName?: boolean;
 }) {
-  const { metric, experienceBands, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
+  const { metric, experienceBands, experienceLinks, coveredLines, chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix } = bundle;
   const isCoverage = metric.name === 'Coverage %';
 
   // Recharts' own automatic brush-to-chart data slicing (an uncontrolled
@@ -258,23 +256,17 @@ function MetricChartCard({
                 </div>
               )}
             />
-            {/* One translucent band per experience, from its initial state
-                to its final state (dashed edge and open-ended when it has no
-                final state yet). Click to open the experience. */}
-            {experienceBands.map((band) => (
-              <ReferenceArea
-                key={`band-${band.id}`}
+            {/* Thin connectors from each action marker down to its
+                experience's initial and final readings. */}
+            {experienceLinks.map((link) => (
+              <ReferenceLine
+                key={link.key}
                 yAxisId="left"
-                x1={band.start}
-                x2={band.end}
+                segment={[link.from, link.to]}
+                stroke={link.color}
+                strokeOpacity={hiddenSeriesKeys.has(link.toolId) ? 0 : 0.5}
+                strokeDasharray="3 3"
                 ifOverflow="hidden"
-                fill={band.color}
-                fillOpacity={hiddenSeriesKeys.has(band.toolId) ? 0 : 0.12}
-                stroke={band.color}
-                strokeOpacity={hiddenSeriesKeys.has(band.toolId) ? 0 : 0.4}
-                strokeDasharray={band.open ? '4 3' : undefined}
-                style={{ cursor: 'pointer' }}
-                onClick={() => onPickExperience(band.id, band.toolId)}
               />
             ))}
             {chartSeries.map((s) => (
@@ -715,12 +707,6 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
     }
   };
 
-  const pickExperience = (experienceId: string, toolId: string) => {
-    const s = series.find((x) => x.toolId === toolId);
-    if (!s) return;
-    setSelectedExperience({ experienceId, toolId, toolName: s.name, color: s.color });
-  };
-
   const toggleSeries = (key: string) => {
     setHiddenSeriesKeys((prev) => {
       const next = new Set(prev);
@@ -760,7 +746,6 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
               toggleSeries={toggleSeries}
               onPickObservation={selectObservation}
               onPickAction={pickAction}
-              onPickExperience={pickExperience}
               hideContainerName={hideContainerName}
             />
           ))

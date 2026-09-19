@@ -255,6 +255,16 @@ export interface ExperienceBand {
   open: boolean;
 }
 
+// A thin connector from an action's marker (top of the plot) to one of its
+// experience's initial/final readings, in left-axis coordinates.
+export interface ExperienceLink {
+  key: string;
+  toolId: string;
+  color: string;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+}
+
 // An extra solid line drawn over the part of a series that lies inside an
 // experience band; the base line is dashed wherever no experience covers it.
 export interface CoveredLine {
@@ -265,6 +275,7 @@ export interface CoveredLine {
 export interface MetricChartBundle {
   metric: DiscoveredMetric;
   experienceBands: ExperienceBand[];
+  experienceLinks: ExperienceLink[];
   coveredLines: CoveredLine[];
   chartData: ChartRow[];
   actionMarkers: { timestamp: number; y: number; toolId: string; color: string; toolName: string; action: GroupAction; inExperience: boolean }[];
@@ -598,5 +609,51 @@ export function buildMetricChart(containers: GroupContainer[], series: SeriesInf
       }));
   });
 
-  return { metric, experienceBands, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
+  // From each action marker down to its experience's initial and final
+  // readings. A reading on the right axis is mapped onto the left axis's
+  // scale, since the connector is drawn in left-axis coordinates.
+  const toLeftAxis = (value: number, yAxisId: 'left' | 'right'): number => {
+    if (yAxisId === 'left' || !rightAxis) return value;
+    const [rMin, rMax] = rightAxis.domain;
+    const [lMin, lMax] = leftAxis.domain;
+    return lMin + ((value - rMin) / (rMax - rMin)) * (lMax - lMin);
+  };
+  // Each end state attaches to the reading nearest it in time on every line
+  // of its container, so a state that has no reading of this metric (e.g. a
+  // photo-only outcome) still connects to the dot that stands for it.
+  const experienceLinks: ExperienceLink[] = actionMarkers.flatMap((marker) => {
+    const c = containers.find((x) => x.toolId === marker.toolId)!;
+    return c.experiences
+      .filter((e) => e.action_ids.includes(marker.action.id))
+      .flatMap((e) => {
+        const links = new Map<string, ExperienceLink>();
+        for (const stateId of [...e.initial_state_ids, ...e.final_state_ids]) {
+          const state = c.observations.find((o) => o.id === stateId);
+          if (!state) continue;
+          const stateTime = toTimestamp(state.observed_at);
+          const nearestBySeries = new Map<string, ContainerPoint>();
+          for (const { container, point } of allPoints) {
+            if (container !== c) continue;
+            const seriesKey = point.subtype ? `${c.toolId}::${point.subtype}` : c.toolId;
+            const best = nearestBySeries.get(seriesKey);
+            if (!best || Math.abs(point.timestamp - stateTime) < Math.abs(best.timestamp - stateTime)) {
+              nearestBySeries.set(seriesKey, point);
+            }
+          }
+          for (const [seriesKey, point] of nearestBySeries) {
+            const key = `${e.id}:${marker.action.id}:${seriesKey}:${point.timestamp}`;
+            links.set(key, {
+              key,
+              toolId: c.toolId,
+              color: marker.color,
+              from: { x: marker.timestamp, y: marker.y },
+              to: { x: point.timestamp, y: toLeftAxis(point.value, seriesByKey.get(seriesKey)!.yAxisId) },
+            });
+          }
+        }
+        return Array.from(links.values());
+      });
+  });
+
+  return { metric, experienceBands, experienceLinks, coveredLines: Array.from(coveredLineKeys.values()), chartData, actionMarkers, leftAxis, rightAxis, chartSeries, titlePrefix: soloContainer?.toolName ?? null };
 }
