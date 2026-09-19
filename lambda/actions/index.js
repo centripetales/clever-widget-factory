@@ -24,6 +24,15 @@ const dbConfig = {
   }
 };
 
+// The authenticated user's id, or an error — never a placeholder id, which
+// would be written to the database as if it were a real user.
+function requireCognitoUserId(authContext) {
+  if (!authContext.cognito_user_id) {
+    throw new Error('Authenticated user id is required');
+  }
+  return authContext.cognito_user_id;
+}
+
 // Helper to execute SQL and return JSON
 async function queryJSON(sql) {
   const client = new Client(dbConfig);
@@ -260,7 +269,7 @@ exports.handler = async (event) => {
         stateId = require('crypto').randomUUID();
         const createStateSql = `
           INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-          VALUES ('${stateId}', '${organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+          VALUES ('${stateId}', '${organizationId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
         `;
         await queryJSON(createStateSql);
         
@@ -335,7 +344,12 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = updated_by || authContext.cognito_user_id || require('crypto').randomUUID();
+      // Identity comes from the authenticated session only; a client-sent
+      // created_by/updated_by (destructured out above) is ignored.
+      const userId = authContext.cognito_user_id;
+      if (!userId) {
+        return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to update an action' }) };
+      }
       const orgId = accessibleOrgIds[0];
       
       // Get current action state before update
@@ -381,7 +395,7 @@ exports.handler = async (event) => {
           stateId = require('crypto').randomUUID();
           const createStateSql = `
             INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-            VALUES ('${stateId}', '${orgId || organizationId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+            VALUES ('${stateId}', '${orgId || organizationId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
           `;
           await queryJSON(createStateSql);
           
@@ -631,7 +645,12 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const { id, created_by, updated_by, updated_at, completed_at, is_exploration, exploration_code, shared_with_partners, ...actionData } = body;
       
-      const userId = created_by || updated_by || require('crypto').randomUUID();
+      // Identity comes from the authenticated session only; a client-sent
+      // created_by/updated_by (destructured out above) is ignored.
+      const userId = authContext.cognito_user_id;
+      if (!userId) {
+        return { statusCode: 401, headers, body: JSON.stringify({ error: 'Authenticated user id is required to create or update an action' }) };
+      }
       const orgId = accessibleOrgIds[0] || organizationId;
       
       // Helper function to handle companion state and risk assessments
@@ -657,7 +676,7 @@ exports.handler = async (event) => {
           stateId = require('crypto').randomUUID();
           const createStateSql = `
             INSERT INTO states (id, organization_id, state_text, captured_by, captured_at)
-            VALUES ('${stateId}', '${orgId}', 'Shared narrative and impact overview for action', '${authContext.cognito_user_id || '00000000-0000-0000-0000-000000000000'}', NOW())
+            VALUES ('${stateId}', '${orgId}', 'Shared narrative and impact overview for action', '${requireCognitoUserId(authContext)}', NOW())
           `;
           await queryJSON(createStateSql);
           

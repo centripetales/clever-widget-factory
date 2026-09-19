@@ -139,6 +139,19 @@ export const handler = async (event) => {
           ) t`,
           [tool.tool_id]
         );
+        // Each experience's member ids, so the chart can draw it as a band
+        // from its initial state to its final state with its actions on it.
+        const experiences = await executeQuery(
+          `SELECT e.id::text,
+             COALESCE(json_agg(ec.state_id::text) FILTER (WHERE ec.component_type = 'initial_state'), '[]'::json) AS initial_state_ids,
+             COALESCE(json_agg(ec.state_id::text) FILTER (WHERE ec.component_type = 'final_state'), '[]'::json) AS final_state_ids,
+             COALESCE(json_agg(ec.action_id::text) FILTER (WHERE ec.component_type = 'action'), '[]'::json) AS action_ids
+           FROM experiences e
+           JOIN experience_components ec ON ec.experience_id = e.id
+           WHERE e.entity_type = 'tool' AND e.entity_id::text = $1
+           GROUP BY e.id`,
+          [tool.tool_id]
+        );
         containers.push({
           toolId: tool.tool_id,
           toolName: tool.tool_name,
@@ -146,7 +159,8 @@ export const handler = async (event) => {
           sourceOrgName: tool.source_org_name,
           sourcePhone: tool.source_phone,
           observations: obs.rows[0].json_agg,
-          actions: actions.rows
+          actions: actions.rows,
+          experiences: experiences.rows
         });
       }
 

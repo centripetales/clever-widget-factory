@@ -292,6 +292,13 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE sl.entity_type = 'tool' AND sl.entity_id::text = '${escapeLiteral(toolId)}'
+          -- A state that an experience uses as its initial or final state
+          -- is shown in the Experiences tab; History is the observation
+          -- feed, so showing it here too duplicated its photos.
+          AND NOT EXISTS (
+            SELECT 1 FROM experience_components ec
+            WHERE ec.state_id = s.id AND ec.component_type IN ('initial_state', 'final_state')
+          )
           -- Previously excluded when also linked to an action, on the theory
           -- that the action's own card would represent it. In practice the
           -- action_id -> state_id links here have no attribution of their

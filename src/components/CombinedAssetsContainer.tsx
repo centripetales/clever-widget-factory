@@ -730,8 +730,8 @@ export const CombinedAssetsContainer = () => {
         </Button>
       </div>
 
-      {/* Recently viewed -- jump straight back to the last couple of items
-          without re-filtering, regardless of the current search/filter state */}
+      {/* Recently viewed -- shortcut that filters the list to the item, so its
+          card (and its actions) is one click away */}
       {recentAssets.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-muted-foreground">Recently viewed:</span>
@@ -743,7 +743,7 @@ export const CombinedAssetsContainer = () => {
                 variant="outline"
                 size="sm"
                 className="h-8 gap-2"
-                onClick={() => handleShowAssetDetails(asset)}
+                onClick={() => setSearchTerm(asset.name)}
               >
                 {thumbnailUrl ? (
                   <img src={thumbnailUrl} alt="" className="h-5 w-5 rounded object-cover" />

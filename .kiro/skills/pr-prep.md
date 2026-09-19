@@ -47,6 +47,23 @@ Search `src/` and `lambda/` for debug logging:
 
 Report: ✅ Clean or ⚠️ list files with debug logs.
 
+## Step 4b: Pattern Alignment
+
+Review only what this branch changed (`git diff main --name-only -- 'src/' 'lambda/'`, plus untracked files) against existing app patterns. For each finding, cite the file and line, and name the existing file that shows the established pattern. Judge by reading the neighbors, not just grepping — a hit is a prompt to look, not automatically a violation.
+
+- **Server state goes through TanStack Query.** Flag new `apiService.get/post/put/delete` calls inside components or pages (especially in `useEffect` + `useState`, or with hand-rolled loading/error state). Expected: a hook in `src/hooks/` using `useQuery`/`useMutation` (see `hooks/metrics/useMetrics.ts`, `hooks/useMemberSettings.ts`).
+- **Query keys are centralized.** New keys should come from `src/lib/queryKeys.ts`, not inline arrays.
+- **Mutations update the cache.** A mutation should invalidate (or optimistically update) every query showing the same data, not patch component-local state.
+- **Load-time cost.** Data a screen always needs on open should be prefetchable/cached (see the prefetch in `pages/Dashboard.tsx`), so tabs and lists don't pop in or flash spinners on every visit.
+- **Shared code, not copies.** Before accepting a new helper/component, search for an existing one (`src/components/shared/`, `src/lib/`, `src/hooks/`) that already does the job (e.g. `PhotoThumb`, `imageUtils`).
+- **File placement and size.** Pure logic (data shaping, formatting, chart building) belongs in `src/lib/` or a hook, not inline in a large component file. Flag new or grown files that mix fetching, data shaping and rendering, and pure logic added with no test.
+- **Typing.** No new `any` / `as any` (CLAUDE.md); flag each one added.
+- **Styling.** Theme tokens and existing `ui/*` components, not hard-coded colors (`text-slate-*`, `text-white`, `bg-[#...]`) where the surrounding UI uses tokens. Layouts must work at mobile width (this app is used in the field).
+- **Domain rules.** Flag hard-coded org/pilot-specific dates, metric names or IDs in shared components; they should be data or config.
+- **Database changes.** Smart diffing only (update/delete/insert); no delete-all-then-reinsert (CLAUDE.md).
+
+Report: ✅ Aligned or ⚠️ list each divergence with file:line and the pattern it departs from. Divergences are warnings for the user to accept or fix, not automatic blockers.
+
 ## Step 5: RDS Backup
 
 Always run the backup script before any PR:
@@ -101,6 +118,7 @@ Build:          ✅ / ❌
 Security:       ✅ / ⚠️
 Temp Files:     ✅ / ⚠️
 Console Logs:   ✅ / ⚠️
+Patterns:       ✅ / ⚠️
 DB Backup:      ✅ / ❌
 Schema Diagram: ✅ / ⏭️ (skipped - no migrations)
 ```

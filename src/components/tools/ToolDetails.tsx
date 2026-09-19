@@ -18,7 +18,6 @@ import { Tool } from "@/hooks/tools/useToolsData";
 import { HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { ToolStatusBadge } from "./ToolStatusBadge";
 import { ExperiencesTab } from "./ExperiencesTab";
-import { useExperiences } from "@/hooks/useExperiences";
 import { useEffect, useMemo, useState } from "react";
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { PhotoThumb } from "@/components/shared/PhotoThumb";
@@ -28,9 +27,12 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { useOrganization } from "@/hooks/useOrganization";
 import { useStateMutations } from "@/hooks/useStates";
 import { useToast } from "@/hooks/use-toast";
-import { apiService, deleteExperience } from "@/lib/apiService";
+import { apiService } from "@/lib/apiService";
 import { useQueryClient } from "@tanstack/react-query";
-import { toolHistoryQueryKey, experiencesQueryKey } from "@/lib/queryKeys";
+import { toolHistoryQueryKey, experiencesQueryKey, groupSnapshotsQueryKey } from "@/lib/queryKeys";
+import { offlineQueryConfig } from "@/lib/queryConfig";
+import { useToolShares } from "@/hooks/useToolShares";
+import { fetchGroupSnapshots } from "@/hooks/useGroupSnapshots";
 
 interface ToolDetailsProps {
   tool: Tool;
@@ -60,7 +62,7 @@ export const ToolDetails = ({
   // AlertDialog-based confirm, not window.confirm() — native dialogs are
   // suppressed in some embedded/preview browser contexts, where confirm()
   // silently returns false and the delete never fires.
-  const [deleteConfirm, setDeleteConfirm] = useState<{ kind: 'observation' | 'action' | 'experience'; id: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ kind: 'observation' | 'action'; id: string } | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
@@ -73,48 +75,18 @@ export const ToolDetails = ({
   // somewhere (POST /shares) — the tab surfaces where that share leads, not a
   // hardcoded program name, so it works for whichever org(s) this container
   // happens to be shared into.
-  const [shares, setShares] = useState<{ target_org_id: string; target_org_name: string }[]>([]);
+  const { data: sharesData } = useToolShares(tool.id);
+  const shares = useMemo(() => sharesData ?? [], [sharesData]);
   useEffect(() => {
-    apiService.get<{ shares: { target_org_id: string; target_org_name: string }[] }>(`/shares/tool/${tool.id}`)
-      .then((res) => setShares(res.shares || []))
-      .catch(() => setShares([]));
-  }, [tool.id]);
-
-  // Experiences this history feed's observations/actions may already belong
-  // to — used only to badge/link them in place, not to filter them out. The
-  // History tab stays a complete record; Experiences is the write-up view.
-  const { data: experiencesRes } = useExperiences({ entity_type: 'tool', entity_id: tool.id });
-  const experiences = useMemo(() => experiencesRes?.data || [], [experiencesRes]);
-  // Role kept alongside the experience id so a group can always be ordered
-  // initial state → action → final state, regardless of which photo or note
-  // was actually captured/uploaded first (an initial-state photo is often
-  // added after the fact).
-  const stateToExperience = useMemo(() => {
-    const map = new Map<string, { experienceId: string; role: 'initial_state' | 'final_state' }>();
-    experiences.forEach((exp) => {
-      (exp.components?.initial_states || []).forEach((c) => {
-        if (c.state_id) map.set(c.state_id, { experienceId: exp.id, role: 'initial_state' });
+    // Warm the Metrics tab's data so it's ready by the time the tab is opened.
+    for (const share of shares) {
+      queryClient.prefetchQuery({
+        queryKey: groupSnapshotsQueryKey(share.target_org_id),
+        queryFn: () => fetchGroupSnapshots(share.target_org_id),
+        ...offlineQueryConfig,
       });
-      (exp.components?.final_states || []).forEach((c) => {
-        if (c.state_id) map.set(c.state_id, { experienceId: exp.id, role: 'final_state' });
-      });
-    });
-    return map;
-  }, [experiences]);
-  const stateToExperienceId = useMemo(() => {
-    const map = new Map<string, string>();
-    stateToExperience.forEach(({ experienceId }, stateId) => map.set(stateId, experienceId));
-    return map;
-  }, [stateToExperience]);
-  const actionToExperienceId = useMemo(() => {
-    const map = new Map<string, string>();
-    experiences.forEach((exp) => {
-      (exp.components?.actions || []).forEach((c) => {
-        if (c.action_id) map.set(c.action_id, exp.id);
-      });
-    });
-    return map;
-  }, [experiences]);
+    }
+  }, [shares, queryClient]);
 
   const canEditObservation = (record: ObservationHistoryEntry): boolean => {
     if (!user) return false;
@@ -129,7 +101,7 @@ export const ToolDetails = ({
       // this History-tab flow — so it silently no-ops here. Invalidate
       // explicitly, same as handleDeleteAction below. Also covers
       // experiences, since a deleted observation can be a state member of
-      // one (the "Part of experience" grouping above).
+      // one (shown in the Experiences tab).
       queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(tool.id) });
       queryClient.invalidateQueries({ queryKey: experiencesQueryKey({ entity_type: 'tool', entity_id: tool.id }) });
       toast({ title: 'Observation deleted', description: 'The observation has been deleted successfully.' });
@@ -154,20 +126,6 @@ export const ToolDetails = ({
     } catch (error) {
       console.error('Failed to delete action:', error);
       toast({ title: 'Error', description: 'Failed to delete action. Please try again.', variant: 'destructive' });
-    } finally {
-      setDeleteConfirm(null);
-    }
-  };
-
-  const handleDeleteExperience = async (experienceId: string) => {
-    try {
-      await deleteExperience(experienceId);
-      queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(tool.id) });
-      queryClient.invalidateQueries({ queryKey: experiencesQueryKey({ entity_type: 'tool', entity_id: tool.id }) });
-      toast({ title: 'Experience deleted', description: 'The states and actions themselves are untouched.' });
-    } catch (error) {
-      console.error('Failed to delete experience:', error);
-      toast({ title: 'Error', description: 'Failed to delete experience. Please try again.', variant: 'destructive' });
     } finally {
       setDeleteConfirm(null);
     }
@@ -214,47 +172,19 @@ export const ToolDetails = ({
     return 'border-2 border-slate-200 shadow-sm';
   };
 
-  // An experience's state/action/state don't have to be chronologically
-  // adjacent in the feed (an action can be from days before its final
-  // state) — so instead of only boxing runs that happen to sit next to each
-  // other, every record belonging to one experience is pulled into a single
-  // group wherever it appears, positioned by its most recent member's date.
-  type TimelineItem =
-    | { kind: 'single'; record: HistoryEntry; date: number }
-    | { kind: 'group'; experienceId: string; records: HistoryEntry[]; date: number };
-
-  const timelineItems = useMemo<TimelineItem[]>(() => {
+  // History is a complete, flat record of observations and human actions;
+  // experiences are written up (and shown) in the Experiences tab.
+  const timelineItems = useMemo<HistoryEntry[]>(() => {
     const recordDate = (r: HistoryEntry) =>
       new Date('observed_at' in r ? r.observed_at : 'shared_at' in r ? r.shared_at : r.changed_at).getTime();
-    // Within a group, always initial state → action → final state — a
-    // person can add or edit the initial-state photo well after the fact,
-    // so capture date is not a reliable stand-in for narrative order.
-    const roleRank = (r: HistoryEntry): number => {
-      if (isObservation(r)) return stateToExperience.get(r.id)?.role === 'final_state' ? 2 : 0;
-      return 1;
-    };
-    const groups = new Map<string, HistoryEntry[]>();
-    const singles: HistoryEntry[] = [];
-
-    toolHistory.forEach((record) => {
-      const experienceId = isObservation(record)
-        ? stateToExperienceId.get(record.id)
-        : isAssetHistory(record) && record.action_id
-        ? actionToExperienceId.get(record.action_id)
-        : undefined;
-      if (experienceId) {
-        if (!groups.has(experienceId)) groups.set(experienceId, []);
-        groups.get(experienceId)!.push(record);
-      } else {
-        // History is meant to read as observations and human actions — a
-        // standalone action that's either bare (no evidence attached) or
-        // was written by the batch extraction script doesn't belong here.
-        // Both stay real rows in the database either way (an auto-generated
-        // action can still feed things like a coverage-over-time chart) —
-        // this only keeps them out of this feed. Once grouped into an
-        // experience (handled above, before reaching this branch), a
-        // person has deliberately adopted it into a real write-up, so it's
-        // exempt from both checks.
+    // History is meant to read as observations and human actions — a
+    // standalone action that's either bare (no evidence attached) or
+    // was written by the batch extraction script doesn't belong here.
+    // Both stay real rows in the database either way (an auto-generated
+    // action can still feed things like a coverage-over-time chart) —
+    // this only keeps them out of this feed.
+    return toolHistory
+      .filter((record) => {
         const isBareAction =
           isAssetHistory(record) &&
           record.change_type === 'action_created' &&
@@ -263,48 +193,12 @@ export const ToolDetails = ({
           isAssetHistory(record) &&
           record.change_type === 'action_created' &&
           !!record.action_is_auto_generated;
-        if (!isBareAction && !isAutoGeneratedAction) singles.push(record);
-      }
-    });
+        return !isBareAction && !isAutoGeneratedAction;
+      })
+      .sort((a, b) => recordDate(b) - recordDate(a));
+  }, [toolHistory]);
 
-    const items: TimelineItem[] = singles.map((record) => ({
-      kind: 'single',
-      record,
-      date: recordDate(record),
-    }));
-    groups.forEach((records, experienceId) => {
-      const sorted = [...records].sort((a, b) => {
-        const rankDiff = roleRank(a) - roleRank(b);
-        return rankDiff !== 0 ? rankDiff : recordDate(a) - recordDate(b);
-      });
-      items.push({
-        kind: 'group',
-        experienceId,
-        records: sorted,
-        date: Math.max(...records.map(recordDate)),
-      });
-    });
-
-    items.sort((a, b) => b.date - a.date);
-    return items;
-  }, [toolHistory, stateToExperienceId, actionToExperienceId, stateToExperience]);
-
-  // The earliest EXIF/file date among a record's evidence photos, when any
-  // were extracted — used only for records shown inside an experience box,
-  // where the record's own logged timestamp can be weeks after the event
-  // (e.g. a photo taken in the field, entered into the system much later).
-  const earliestPhotoDate = (record: HistoryEntry): string | undefined => {
-    if (isObservation(record)) {
-      const dates = (record.photos || []).map((p) => p.captured_at).filter(Boolean) as string[];
-      return dates.sort()[0];
-    }
-    if (isAssetHistory(record) && record.change_type === 'action_created') {
-      return record.action_earliest_photo_captured_at || undefined;
-    }
-    return undefined;
-  };
-
-  const renderHistoryRecord = (record: HistoryEntry, displayDate?: string, insideGroup?: boolean) => (
+  const renderHistoryRecord = (record: HistoryEntry) => (
                 <Card className={`hover:shadow-md transition-shadow overflow-hidden bg-background ${getToolCardStyle(record)}`}>
                   <CardContent className="p-4">
                     {isAssetHistory(record) ? (
@@ -321,7 +215,7 @@ export const ToolDetails = ({
                             <div>
                               <p className="font-medium">{record.user_name}</p>
                               <p className="text-sm text-muted-foreground">
-                                {new Date(displayDate || record.changed_at).toLocaleDateString()} {new Date(displayDate || record.changed_at).toLocaleTimeString()}
+                                {new Date(record.changed_at).toLocaleDateString()} {new Date(record.changed_at).toLocaleTimeString()}
                               </p>
                             </div>
                           </div>
@@ -391,14 +285,8 @@ export const ToolDetails = ({
                             {/* This action's own evidence — observations linked to it
                                 are deliberately not shown as separate standalone
                                 entries above, so without this their content (often
-                                the actual notes/photos from the day) is invisible.
-                                Suppressed inside an experience group: this action can
-                                be linked to evidence from many other points in its
-                                history, but the group's own initial/final state cards
-                                already show what's actually part of this write-up —
-                                showing all of it here made the action look like it had
-                                more attached to this experience than it really does. */}
-                            {!insideGroup && (record.action_linked_observations || []).map((obs) => (
+                                the actual notes/photos from the day) is invisible. */}
+                            {(record.action_linked_observations || []).map((obs) => (
                               (obs.state_text || (obs.metrics && obs.metrics.length > 0) || (obs.photos && obs.photos.length > 0)) && (
                                 <div key={obs.id} className="mt-2 pt-2 border-t border-purple-200 space-y-1">
                                   {obs.metrics && obs.metrics.length > 0 && (
@@ -466,7 +354,7 @@ export const ToolDetails = ({
                             <div>
                               <p className="font-medium">{record.observed_by_name}</p>
                               <p className="text-sm text-muted-foreground">
-                                {new Date(displayDate || record.created_at || record.observed_at).toLocaleDateString()} {new Date(displayDate || record.created_at || record.observed_at).toLocaleTimeString()}
+                                {new Date(record.created_at || record.observed_at).toLocaleDateString()} {new Date(record.created_at || record.observed_at).toLocaleTimeString()}
                               </p>
                             </div>
                           </div>
@@ -724,50 +612,9 @@ export const ToolDetails = ({
                     <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading history...
                   </div>
                 )}
-                {timelineItems.map((item) =>
-                  item.kind === 'single' ? (
-                    <div key={item.record.id}>{renderHistoryRecord(item.record)}</div>
-                  ) : (
-                    <div
-                      key={`experience-${item.experienceId}`}
-                      className="rounded-lg border-2 border-[#8b5a2b] bg-[#8b5a2b]/5 p-3 space-y-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <Link
-                          to={`/experiences/${item.experienceId}`}
-                          className="inline-block text-xs font-semibold text-[#8b5a2b] hover:text-[#6b4520] uppercase tracking-wide"
-                        >
-                          Experience
-                        </Link>
-                        <div className="flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/experiences/${item.experienceId}`)}
-                            className="h-7 px-2 text-[#8b5a2b] hover:text-[#6b4520] hover:bg-[#8b5a2b]/10"
-                            aria-label="Edit experience"
-                            title="Edit experience"
-                          >
-                            <Edit className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setDeleteConfirm({ kind: 'experience', id: item.experienceId })}
-                            className="h-7 px-2 text-muted-foreground/60 hover:text-red-600 hover:bg-red-50"
-                            aria-label="Delete experience"
-                            title="Delete experience — the states and actions themselves are untouched"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                      {item.records.map((record) => (
-                        <div key={record.id}>{renderHistoryRecord(record, earliestPhotoDate(record), true)}</div>
-                      ))}
-                    </div>
-                  )
-                )}
+                {timelineItems.map((record) => (
+                  <div key={record.id}>{renderHistoryRecord(record)}</div>
+                ))}
 
                 {!toolHistoryLoading && toolHistory.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">
@@ -800,12 +647,10 @@ export const ToolDetails = ({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {deleteConfirm?.kind === 'action' ? 'Delete action' : deleteConfirm?.kind === 'experience' ? 'Delete experience' : 'Delete observation'}
+              {deleteConfirm?.kind === 'action' ? 'Delete action' : 'Delete observation'}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteConfirm?.kind === 'experience'
-                ? 'Are you sure you want to delete this experience? The states and actions it links together are untouched — this only removes the write-up. This cannot be undone.'
-                : `Are you sure you want to delete this ${deleteConfirm?.kind}? This action cannot be undone.`}
+              {`Are you sure you want to delete this ${deleteConfirm?.kind}? This action cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -814,7 +659,6 @@ export const ToolDetails = ({
               onClick={() => {
                 if (!deleteConfirm) return;
                 if (deleteConfirm.kind === 'action') handleDeleteAction(deleteConfirm.id);
-                else if (deleteConfirm.kind === 'experience') handleDeleteExperience(deleteConfirm.id);
                 else handleDeleteObservation(deleteConfirm.id);
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

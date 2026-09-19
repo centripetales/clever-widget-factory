@@ -1046,9 +1046,6 @@ export function ActionForm({
 
       const actionStatus = formData.status || 'not_started';
 
-      // Get current user ID
-      const userId = user?.id || '00000000-0000-0000-0000-000000000000';
-
       const actionData: any = {
         title: formData.title.trim(),
         description: formData.description || null,
@@ -1066,8 +1063,6 @@ export function ActionForm({
         plan_commitment: formData.plan_commitment || false,
         policy_agreed_at: formData.policy_agreed_at || null,
         policy_agreed_by: formData.policy_agreed_by || null,
-        created_by: isCreating || !action?.id ? userId : (action as any).created_by || userId,
-        updated_by: userId,
       };
 
       const savedAction = await saveActionMutation.mutateAsync(isCreating || !action?.id ? actionData : { ...actionData, id: action.id });
