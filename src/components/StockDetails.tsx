@@ -9,6 +9,7 @@ import { CombinedAsset } from "@/hooks/useCombinedAssets";
 import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 
 interface StockDetailsProps {
@@ -21,6 +22,7 @@ export const StockDetails = ({
   stock,
   onBack,
 }: StockDetailsProps) => {
+  const navigate = useNavigate();
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
 
   const getStockStatusBadge = () => {
@@ -163,6 +165,17 @@ export const StockDetails = ({
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/combined-assets/parts/${stock.id}/observation`)}
+                  disabled={stock.is_shared_inbound}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add observation
+                </Button>
+              </div>
               <InventoryHistoryContent partId={stock.id} />
             </TabsContent>
           </Tabs>

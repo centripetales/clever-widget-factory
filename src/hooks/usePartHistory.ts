@@ -36,6 +36,22 @@ export interface Observation {
   } | null;
 }
 
+export interface PartAction {
+  id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  created_by_name: string;
+  linked_observations: Array<{
+    id: string;
+    state_text: string | null;
+    captured_at: string;
+    photos: Array<{ photo_url: string; photo_description: string | null }> | null;
+    metrics: Array<{ name: string; value: string; unit?: string | null }> | null;
+  }> | null;
+}
+
 export function usePartHistory(partId: string) {
   const queryClient = useQueryClient();
 
@@ -53,6 +69,7 @@ export function usePartHistory(partId: string) {
   const rawData = query.data || {};
   const partsHistory: HistoryEntry[] = rawData.history || [];
   const observationsData: Observation[] = rawData.observations || [];
+  const actions: PartAction[] = rawData.actions || [];
 
   const historyMap = new Map<string, HistoryEntry>();
   partsHistory.forEach((entry) => {
@@ -91,6 +108,7 @@ export function usePartHistory(partId: string) {
   return {
     history,
     observations,
+    actions,
     loading: query.isLoading || query.isFetching,
     fetchPartHistory,
     refetch: query.refetch,

@@ -239,7 +239,7 @@ export const CombinedAssetDialog = ({ isOpen, onClose, onSubmit, initialName = "
                 type="number"
                 step="1"
                 min="0"
-                value={formData.current_quantity}
+                value={formData.current_quantity || ""}
                 onChange={(e) => updateFormData('current_quantity', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
                 disabled={isAsset}
                 className={isAsset ? "text-muted-foreground" : ""}

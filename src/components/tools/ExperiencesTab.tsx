@@ -264,6 +264,7 @@ export function ExperiencesTab({ entityType, entityId, entityName, organizationI
     <div className="space-y-6">
       <div className="flex justify-end">
         <Button
+          variant="outline"
           size="sm"
           onClick={() => navigate(`/experiences/new?entity_type=${entityType}&entity_id=${entityId}`)}
           disabled={disabled}

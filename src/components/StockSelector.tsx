@@ -44,8 +44,8 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
   });
   const loading = false;
 
-  // Filter parts with current_quantity > 0
-  const stockItems: StockItem[] = allParts.filter((part: any) => part.current_quantity > 0);
+  // Include zero-stock parts: a negative quantity means the action produces stock
+  const stockItems: StockItem[] = allParts;
 
   // Enhanced search - search name, category, and description
   const filteredStock = stockItems.filter(item => {
@@ -81,7 +81,7 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
   };
 
   const updateQuantity = (partId: string, quantity: number) => {
-    if (quantity <= 0) {
+    if (quantity === 0) {
       removeStockItem(partId);
       return;
     }
@@ -99,7 +99,7 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
     
     // Parse and update the actual quantity if valid
     const numValue = parseFloat(value);
-    if (!isNaN(numValue) && numValue > 0) {
+    if (!isNaN(numValue) && numValue !== 0) {
       updateQuantity(partId, numValue);
     }
   };
@@ -107,7 +107,7 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
   const handleQuantityBlur = (partId: string, value: string) => {
     // On blur, ensure we have a valid value
     const numValue = parseFloat(value);
-    if (isNaN(numValue) || numValue <= 0) {
+    if (isNaN(numValue) || numValue === 0) {
       updateQuantity(partId, 0.1);
       setInputValues(prev => ({ ...prev, [partId]: '0.1' }));
     } else {
@@ -133,7 +133,6 @@ export function StockSelector({ selectedStock, onStockChange, onStockClick }: St
               <div className="flex items-center gap-2">
                 <Input
                   type="number"
-                  min="0.01"
                   step="0.01"
                   value={inputValues[stockItem.part_id] ?? stockItem.quantity.toString()}
                   onChange={(e) => handleQuantityChange(stockItem.part_id, e.target.value)}

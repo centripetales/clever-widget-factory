@@ -198,18 +198,21 @@ export async function processStockConsumption(
       try {
         await apiService.post('/parts_history', {
           part_id: stockItem.part_id,
-          change_type: 'quantity_remove',
+          change_type: stockItem.quantity < 0 ? 'quantity_add' : 'quantity_remove',
           old_quantity: oldQuantity,
           new_quantity: newQuantity,
           quantity_change: -stockItem.quantity,
           changed_by: userId,
-          change_reason: `Used for action: ${actionTitle} - ${stockItem.quantity} ${stockItem.part_name}`,
+          change_reason: stockItem.quantity < 0
+            ? `Produced by action: ${actionTitle} - ${-stockItem.quantity} ${stockItem.part_name}`
+            : `Used for action: ${actionTitle} - ${stockItem.quantity} ${stockItem.part_name}`,
           action_id: actionId, // Link to the action for auditability
         });
       } catch (historyError) {
         console.error('Error creating parts history:', historyError);
         // Don't throw - the main operation succeeded
       }
+      queryClient.invalidateQueries({ queryKey: ['part_history', stockItem.part_id] });
     } catch (error) {
       console.error(`Error processing stock item ${stockItem.part_id}:`, error);
       throw error;

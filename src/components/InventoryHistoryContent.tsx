@@ -12,7 +12,7 @@ interface InventoryHistoryContentProps {
 }
 
 export function InventoryHistoryContent({ partId, observationsOnly = false }: InventoryHistoryContentProps) {
-  const { history, observations, loading } = usePartHistory(partId);
+  const { history, observations, actions, loading } = usePartHistory(partId);
 
   const getChangeIcon = (changeType: string) => {
     switch (changeType) {
@@ -75,7 +75,7 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
     );
   }
 
-  if ((history.length === 0 && observations.length === 0) || (observationsOnly && observations.length === 0)) {
+  if ((history.length === 0 && observations.length === 0 && actions.length === 0) || (observationsOnly && observations.length === 0)) {
     return <div className="text-center py-8 text-muted-foreground">No history records found for this item.</div>;
   }
 
@@ -177,6 +177,55 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
               </Card>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {!observationsOnly && actions.length > 0 && (
+        <div>
+          <h3 className="font-semibold text-lg mb-3 flex items-center gap-2">
+            <Badge variant="secondary" className="bg-purple-100 text-purple-800">{actions.length}</Badge>
+            Actions
+          </h3>
+          <div className="space-y-3">
+            {actions.map((action) => (
+              <Card key={action.id} className="p-4 overflow-hidden border-2 border-purple-500 shadow-lg shadow-purple-200/50 bg-background">
+                <CardContent className="p-0 space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="bg-purple-100 text-purple-800">{action.status}</Badge>
+                      <span className="font-medium">{action.title}</span>
+                    </div>
+                    <span className="text-sm text-muted-foreground">{format(new Date(action.completed_at || action.created_at), 'PPpp')}</span>
+                  </div>
+                  {action.linked_observations?.map((obs) => (
+                    <div key={obs.id} className="text-sm space-y-2">
+                      {obs.state_text && <p>{obs.state_text}</p>}
+                      {obs.metrics?.map((m, i) => (
+                        <div key={i} className="text-xs"><span className="font-medium">{m.name}:</span> {m.value}{m.unit ? ` ${m.unit}` : ''}</div>
+                      ))}
+                      {obs.photos && obs.photos.length > 0 && (
+                        <div className="grid grid-cols-2 gap-2">
+                          {obs.photos.map((photo, i) => (
+                            <a key={i} href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''} target="_blank" rel="noopener noreferrer">
+                              <img
+                                src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                alt={photo.photo_description || 'Observation photo'}
+                                className="w-full h-32 object-cover rounded border"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <Button variant="outline" size="sm" onClick={() => window.open(`/actions#${action.id}`, '_blank')} className="h-8 text-xs">
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    View Action
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </div>
       )}
