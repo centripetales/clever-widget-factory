@@ -558,7 +558,38 @@ exports.handler = async (event) => {
           a.title,
           a.status,
           a.created_at,
-          COALESCE(om.full_name, 'System') as created_by_name
+          a.completed_at,
+          COALESCE(om.full_name, 'System') as created_by_name,
+          -- Same shape as the tool history's linked_observations: the
+          -- action's own evidence, surfaced on the action entry.
+          (
+            SELECT json_agg(json_build_object(
+              'id', s_linked.id,
+              'state_text', s_linked.state_text,
+              'captured_at', s_linked.captured_at,
+              'photos', (
+                SELECT json_agg(json_build_object(
+                  'photo_url', sp_linked.photo_url,
+                  'photo_description', sp_linked.photo_description
+                ) ORDER BY sp_linked.photo_order)
+                FROM state_photos sp_linked
+                WHERE sp_linked.state_id = s_linked.id
+              ),
+              'metrics', (
+                SELECT json_agg(json_build_object(
+                  'name', m_linked.name,
+                  'value', ms_linked.value,
+                  'unit', m_linked.unit
+                ))
+                FROM metric_snapshots ms_linked
+                JOIN metrics m_linked ON m_linked.metric_id = ms_linked.metric_id
+                WHERE ms_linked.state_id = s_linked.id
+              )
+            ) ORDER BY s_linked.captured_at)
+            FROM state_links sl_linked
+            JOIN states s_linked ON s_linked.id = sl_linked.state_id
+            WHERE sl_linked.entity_type = 'action' AND sl_linked.entity_id = a.id
+          ) as linked_observations
         FROM actions a
         LEFT JOIN LATERAL (
           SELECT full_name FROM organization_members
@@ -566,6 +597,7 @@ exports.handler = async (event) => {
           LIMIT 1
         ) om ON true
         WHERE a.asset_id::text = '${escapeLiteral(partId)}'
+           OR a.required_stock::jsonb @> '[{"part_id": "${escapeLiteral(partId)}"}]'::jsonb
         ORDER BY a.created_at DESC
       ) t;`;
       const actionsResult = await queryJSON(actionsSql);
