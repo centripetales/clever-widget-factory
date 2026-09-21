@@ -1,4 +1,4 @@
-import { ArrowLeft, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2, Route } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2, Route } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -606,6 +606,17 @@ export const ToolDetails = ({
             </TabsContent>
 
             <TabsContent value="history" className="space-y-4">
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/combined-assets/tools/${tool.id}/observation`)}
+                  disabled={tool.is_shared_inbound}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add observation
+                </Button>
+              </div>
               <div className="space-y-4">
                 {toolHistoryLoading && toolHistory.length === 0 && (
                   <div className="flex items-center justify-center py-8 text-muted-foreground">

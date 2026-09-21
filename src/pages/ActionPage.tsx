@@ -35,8 +35,12 @@ export default function ActionPage() {
     // container's History tab) over the generic list — set by callers via
     // Link `state={{ from: ... }}`.
     const from = (location.state as { from?: string } | null)?.from;
-    if (from) {
-      navigate(from);
+    const hasHistory = window.history.state && window.history.state.idx > 0;
+    if (hasHistory && from) {
+      // Pop instead of push, otherwise Back <-> Back loops between the two pages.
+      navigate(-1);
+    } else if (from) {
+      navigate(from, { replace: true });
     } else if (missionId) {
       navigate(`/missions`);
     } else {
