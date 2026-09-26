@@ -87,9 +87,13 @@ export function useCreateFinancialRecord() {
         newRecord as FinancialRecord
       );
 
-      // Background refetch for accurate running_balance
+      // Background refetch for accurate running_balance and server-computed
+      // fields the create response doesn't carry (e.g. created_by_name)
       queryClient.invalidateQueries({
         queryKey: financialRecordKeys.lists(),
+      });
+      queryClient.invalidateQueries({
+        queryKey: financialRecordKeys.detail(newRecord.id),
       });
     },
     onError: (error) => {

@@ -219,3 +219,65 @@ export async function processStockConsumption(
     }
   }
 }
+
+/**
+ * Apply an optional stock change alongside some other record (e.g. a financial
+ * transaction). Same PUT /parts + POST /parts_history mechanics as
+ * processStockConsumption, but with a caller-supplied reason instead of
+ * action-specific wording.
+ */
+export async function processStockAdjustment(
+  stockChanges: { part_id: string; quantity: number; part_name: string; }[],
+  userId: string,
+  contextLabel: string,
+  queryClient: any // TanStack QueryClient - required, parts should already be in cache
+): Promise<void> {
+  if (!stockChanges || stockChanges.length === 0) {
+    return;
+  }
+
+  const { apiService } = await import('./apiService');
+
+  for (const stockItem of stockChanges) {
+    const cachedParts = queryClient.getQueryData(['parts']) as any[] | undefined;
+
+    if (!cachedParts || !Array.isArray(cachedParts)) {
+      throw new Error(
+        `Parts data not found in TanStack Query cache. Ensure parts have been loaded before adjusting stock.`
+      );
+    }
+
+    const partData = cachedParts.find((p: any) => p.id === stockItem.part_id);
+
+    if (!partData) {
+      throw new Error(
+        `Stock item "${stockItem.part_name || 'Unknown part'}" (ID: ${stockItem.part_id}) no longer exists in inventory.`
+      );
+    }
+
+    const oldQuantity = partData.current_quantity || 0;
+    const newQuantity = Math.max(0, oldQuantity - stockItem.quantity);
+
+    await apiService.put(`/parts/${stockItem.part_id}`, {
+      current_quantity: newQuantity
+    });
+
+    try {
+      await apiService.post('/parts_history', {
+        part_id: stockItem.part_id,
+        change_type: stockItem.quantity < 0 ? 'quantity_add' : 'quantity_remove',
+        old_quantity: oldQuantity,
+        new_quantity: newQuantity,
+        quantity_change: -stockItem.quantity,
+        changed_by: userId,
+        change_reason: stockItem.quantity < 0
+          ? `Added via ${contextLabel} - ${-stockItem.quantity} ${stockItem.part_name}`
+          : `Removed via ${contextLabel} - ${stockItem.quantity} ${stockItem.part_name}`,
+      });
+    } catch (historyError) {
+      console.error('Error creating parts history:', historyError);
+    }
+    queryClient.invalidateQueries({ queryKey: ['part_history', stockItem.part_id] });
+    queryClient.invalidateQueries({ queryKey: ['parts'] });
+  }
+}
