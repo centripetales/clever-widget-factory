@@ -167,6 +167,15 @@ async function createRecord(event, authContext) {
       createdRecord.balance_after = parseFloat(balResult.rows[0].balance_after);
     }
 
+    // Look up creator name (same join GET endpoints use) so the response
+    // is immediately complete instead of relying on a later cache refetch
+    const creatorResult = await client.query(
+      'SELECT full_name FROM organization_members' +
+      ' WHERE cognito_user_id::text = $1::text AND organization_id = $2',
+      [cognitoUserId, organizationId]
+    );
+    createdRecord.created_by_name = creatorResult.rows[0]?.full_name || 'Unknown';
+
     // 2. INSERT states with state_text = description
     const stateResult = await client.query(
       `INSERT INTO states

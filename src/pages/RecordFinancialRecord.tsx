@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,25 +13,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Info } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useCreateFinancialRecord } from '@/hooks/useFinancialRecords';
 import { useToast } from '@/components/ui/use-toast';
+import { useAuth } from '@/hooks/useCognitoAuth';
+import { StockSelector } from '@/components/StockSelector';
+import { processStockAdjustment } from '@/lib/utils';
 import {
   PhotoUploadPanel,
   type PhotoItem,
 } from '@/components/shared/PhotoUploadPanel';
+
+interface SelectedStockItem {
+  part_id: string;
+  quantity: number;
+  part_name: string;
+}
 
 export default function RecordFinancialRecord() {
   const navigate = useNavigate();
   const { uploadFiles, isUploading } = useFileUpload();
   const createRecord = useCreateFinancialRecord();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'SCash' | 'GCash' | 'Wise'>('Cash');
+  const [selectedStock, setSelectedStock] = useState<SelectedStockItem[]>([]);
   const [transactionDate, setTransactionDate] = useState<string>(() => {
     const now = new Date();
     const year = now.getFullYear();
@@ -102,6 +116,24 @@ export default function RecordFinancialRecord() {
           photo_order: i,
         })) : undefined,
       });
+
+      if (selectedStock.length > 0) {
+        try {
+          await processStockAdjustment(
+            selectedStock,
+            user?.id || '',
+            `transaction: ${description.trim()}`,
+            queryClient
+          );
+        } catch (stockError) {
+          console.error('Failed to adjust stock for transaction:', stockError);
+          toast({
+            title: 'Stock update failed',
+            description: 'The transaction was saved, but the stock adjustment failed. Please update stock manually.',
+            variant: 'destructive',
+          });
+        }
+      }
 
       toast({
         title: 'Transaction saved',
@@ -194,6 +226,31 @@ export default function RecordFinancialRecord() {
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               disabled={isSaving}
+            />
+          </div>
+
+          {/* Optional stock adjustment — e.g. selling or buying inventory */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-muted-foreground">Adjust Stock</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>
+                      If this transaction involved inventory, record the change here. Enter a
+                      positive quantity to remove stock (e.g. a sale), or negative to add stock
+                      (e.g. a purchase).
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <StockSelector
+              selectedStock={selectedStock}
+              onStockChange={setSelectedStock}
             />
           </div>
 
