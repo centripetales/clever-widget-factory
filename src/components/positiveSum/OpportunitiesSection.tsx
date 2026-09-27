@@ -56,9 +56,11 @@ export function OpportunitiesSection() {
             <Card key={item.id} className="border border-border/50">
               <CardHeader className="pb-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">{isGoal ? 'Goal' : 'Option'}</Badge>
+                  {!isGoal && <Badge variant="secondary">Option</Badge>}
                   <span className="text-xs text-muted-foreground">
-                    {[item.created_by_name, item.organization_name].filter(Boolean).join(' · ')}
+                    {isGoal
+                      ? `${item.created_by_name || 'Someone'} would like this to be different`
+                      : [item.created_by_name, item.organization_name].filter(Boolean).join(' · ')}
                   </span>
                 </div>
                 <CardTitle className="text-base break-words">{item.title}</CardTitle>
@@ -66,7 +68,7 @@ export function OpportunitiesSection() {
                   {item.initial_state && <span className="block">Now: {item.initial_state}</span>}
                   {item.policy && <span className="block">How: {item.policy}</span>}
                   {item.desired_state && (
-                    <span className="block">{isGoal ? 'Wants' : 'Done when'}: {item.desired_state}</span>
+                    <span className="block">{isGoal ? 'Would like' : 'Done when'}: {item.desired_state}</span>
                   )}
                   {!isGoal && item.capacity && (
                     <span className="block">{taken} of {item.capacity} people</span>

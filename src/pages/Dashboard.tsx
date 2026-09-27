@@ -6,6 +6,7 @@ import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarC
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
 import { OpportunitiesSection } from '@/components/positiveSum/OpportunitiesSection';
+import { useAssociations } from '@/hooks/positiveSum/useAssociations';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
@@ -35,6 +36,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
 
   const { isFeatureEnabled } = useFeatureFlag();
+  const { isAssociationMember } = useAssociations();
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [lockedFeatureName, setLockedFeatureName] = useState('');
   const [disabledSectionOpen, setDisabledSectionOpen] = useState(false);
@@ -134,8 +136,7 @@ export default function Dashboard() {
       description: "Share what you can offer, ask for what you want to change.",
       icon: PositiveSumIcon,
       path: "/positive-sum",
-      color: "bg-orange-500",
-      featureKey: "positive_sum"
+      color: "bg-orange-500"
     },
     {
       title: "Sari Sari Store",
@@ -193,6 +194,7 @@ export default function Dashboard() {
       if (item.path === "/dashboard/analytics") return isLeadership;
       if (item.path === "/organization") return isLeadership;
       if (item.path === "/admin/organizations") return isSuperAdmin;
+      if (item.path === "/positive-sum") return isAssociationMember;
       return true; // Show all other items (Assets, Actions, Explorations, etc.)
     })();
     
@@ -316,7 +318,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <OpportunitiesSection />
+        {isAssociationMember && <OpportunitiesSection />}
 
         {disabledItems.length > 0 && (
           <Collapsible

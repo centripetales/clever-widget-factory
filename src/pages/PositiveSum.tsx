@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { useApproveOption, useMyPositiveSum } from '@/hooks/positiveSum/usePositiveSum';
+import { useAssociations } from '@/hooks/positiveSum/useAssociations';
 import { GoalForm } from '@/components/positiveSum/GoalForm';
 import { OfferForm } from '@/components/positiveSum/OfferForm';
 import { StatusBadge } from '@/components/positiveSum/StatusBadge';
@@ -31,6 +32,7 @@ export default function PositiveSum() {
   const { toast } = useToast();
   const { data, isLoading } = useMyPositiveSum();
   const approve = useApproveOption();
+  const { isAssociationMember } = useAssociations();
 
   const approveOption = async (optionId: string, goalId?: string) => {
     try {
@@ -59,11 +61,19 @@ export default function PositiveSum() {
         </div>
       </div>
 
+      {!isAssociationMember && (
+        <Card>
+          <CardContent className="pt-4 text-sm text-muted-foreground">
+            Positive Sum is for members of an association. Ask to join one to share and see opportunities.
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Set a goal</CardTitle>
-            <CardDescription>What you want to change, and where you want it to get to.</CardDescription>
+            <CardTitle className="text-lg">What would you like to be different?</CardTitle>
+            <CardDescription>How things are now, and how you'd like them to be.</CardDescription>
           </CardHeader>
           <CardContent><GoalForm /></CardContent>
         </Card>
@@ -95,7 +105,7 @@ export default function PositiveSum() {
                   <p className="text-xs text-muted-foreground">
                     {item.role === 'implementor'
                       ? 'Someone wants to use your offer this way.'
-                      : helpedText(item.value) ?? 'Suggested for your goal.'}
+                      : helpedText(item.value) ?? 'Suggested for something you would like to be different.'}
                   </p>
                   <Button size="sm" disabled={approve.isPending} onClick={() => approveOption(item.id)}>
                     Approve
@@ -106,8 +116,8 @@ export default function PositiveSum() {
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-semibold">My goals</h2>
-            {data.goals.length === 0 && <p className="text-sm text-muted-foreground">No goals yet.</p>}
+            <h2 className="text-lg font-semibold">What I'd like to be different</h2>
+            {data.goals.length === 0 && <p className="text-sm text-muted-foreground">Nothing yet.</p>}
             {data.goals.map(goal => (
               <Card key={goal.id}>
                 <CardContent className="pt-4 space-y-3">
@@ -115,7 +125,7 @@ export default function PositiveSum() {
                     <p className="font-medium break-words">{goal.title}</p>
                     <StatusBadge status={goal.status} />
                   </div>
-                  <ItemText item={goal} finalLabel="Desired state" />
+                  <ItemText item={goal} finalLabel="Would like" />
                   {goal.status === 'external_proposal' && (
                     <Button size="sm" variant="outline" onClick={() => navigate(`/actions/${goal.id}?maxwell=1`)}>
                       Plan with Maxwell

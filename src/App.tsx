@@ -248,9 +248,7 @@ function AppContent() {
           path="/positive-sum"
           element={
             <ProtectedRoute>
-              <FeatureGuardRoute featureKey="positive_sum" featureName="Positive Sum">
-                <PositiveSum />
-              </FeatureGuardRoute>
+              <PositiveSum />
             </ProtectedRoute>
           }
         />
