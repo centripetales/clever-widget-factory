@@ -13,6 +13,10 @@ export const toolsQueryKey = () => ['tools'];
 export const partsQueryKey = () => ['parts'];
 export const sharedToolsQueryKey = (orgId?: string) => ['shared_tools', orgId];
 
+// Positive Sum query keys
+export const positiveSumMineQueryKey = () => ['positive_sum', 'mine'];
+export const positiveSumOpportunitiesQueryKey = () => ['positive_sum', 'opportunities'];
+
 // Checkouts query key removed — checkout system deprecated
 
 export const actionScoresQueryKey = (start?: string, end?: string) => [

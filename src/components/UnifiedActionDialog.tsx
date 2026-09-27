@@ -1256,7 +1256,7 @@ export function ActionForm({
         {/* Expected State (S') */}
         <div>
           <div className="flex items-center justify-between">
-            <Label htmlFor="expectedState">Where we want to get to</Label>
+            <Label htmlFor="expectedState">Desired state</Label>
           </div>
           <Textarea
             id="expectedState"

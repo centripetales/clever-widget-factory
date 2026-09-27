@@ -25,6 +25,7 @@ import { MaxwellRecordHighlightProvider } from "@/contexts/MaxwellRecordHighligh
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import PositiveSum from "./pages/PositiveSum";
 
 
 import InventorySummary from "./pages/InventorySummary";
@@ -239,6 +240,16 @@ function AppContent() {
             <ProtectedRoute>
               <FeatureGuardRoute featureKey="actions" featureName="Actions">
                 <Actions />
+              </FeatureGuardRoute>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/positive-sum"
+          element={
+            <ProtectedRoute>
+              <FeatureGuardRoute featureKey="positive_sum" featureName="Positive Sum">
+                <PositiveSum />
               </FeatureGuardRoute>
             </ProtectedRoute>
           }

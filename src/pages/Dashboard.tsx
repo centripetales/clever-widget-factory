@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useNavigate } from 'react-router-dom';
 import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
+import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
+import { OpportunitiesSection } from '@/components/positiveSum/OpportunitiesSection';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
@@ -126,6 +128,14 @@ export default function Dashboard() {
       path: "/actions",
       color: "bg-yellow-500",
       featureKey: "actions"
+    },
+    {
+      title: "Positive Sum",
+      description: "Share what you can offer, ask for what you want to change.",
+      icon: PositiveSumIcon,
+      path: "/positive-sum",
+      color: "bg-orange-500",
+      featureKey: "positive_sum"
     },
     {
       title: "Sari Sari Store",
@@ -305,6 +315,8 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        <OpportunitiesSection />
 
         {disabledItems.length > 0 && (
           <Collapsible

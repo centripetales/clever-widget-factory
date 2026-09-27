@@ -1,0 +1,81 @@
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { useToast } from '@/hooks/use-toast';
+import { useImageUpload } from '@/hooks/useImageUpload';
+import { useOrganization } from '@/hooks/useOrganization';
+import { useCreateGoal } from '@/hooks/positiveSum/usePositiveSum';
+import { OrgPicker } from './OrgPicker';
+
+// A goal is explicit: both where things are now and where you want them.
+export function GoalForm() {
+  const { organization } = useOrganization();
+  const { toast } = useToast();
+  const { uploadImages, isUploading } = useImageUpload();
+  const createGoal = useCreateGoal();
+  const [orgId, setOrgId] = useState(organization?.id ?? '');
+  const [initialState, setInitialState] = useState('');
+  const [desiredState, setDesiredState] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+
+  const canSubmit = initialState.trim() && desiredState.trim() && (orgId || organization?.id);
+  const busy = isUploading || createGoal.isPending;
+
+  const submit = async () => {
+    try {
+      const uploaded = files.length ? await uploadImages(files) : [];
+      const attachments = (Array.isArray(uploaded) ? uploaded : [uploaded]).map(r => r.url);
+      await createGoal.mutateAsync({
+        organization_id: orgId || organization!.id,
+        initial_state: initialState.trim(),
+        desired_state: desiredState.trim(),
+        attachments,
+      });
+      setInitialState('');
+      setDesiredState('');
+      setFiles([]);
+      toast({ title: 'Goal shared', description: 'Others can now suggest options.' });
+    } catch (error) {
+      toast({ title: 'Could not save goal', description: String(error), variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label htmlFor="goal-initial">Where things are now</Label>
+        <Textarea
+          id="goal-initial"
+          placeholder="e.g. Aphids on my pineapple, about a third of the plants"
+          value={initialState}
+          onChange={e => setInitialState(e.target.value)}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="goal-photo">Photo (optional)</Label>
+        <Input
+          id="goal-photo"
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={e => setFiles(Array.from(e.target.files ?? []))}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="goal-desired">Desired state</Label>
+        <Textarea
+          id="goal-desired"
+          placeholder="e.g. Pineapple free of aphids, without synthetic sprays"
+          value={desiredState}
+          onChange={e => setDesiredState(e.target.value)}
+        />
+      </div>
+      <OrgPicker value={orgId || organization?.id || ''} onChange={setOrgId} />
+      <Button className="w-full" disabled={!canSubmit || busy} onClick={submit}>
+        {busy ? 'Saving...' : 'Share goal'}
+      </Button>
+    </div>
+  );
+}

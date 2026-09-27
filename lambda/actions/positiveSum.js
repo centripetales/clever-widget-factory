@@ -351,8 +351,10 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       const passed = new Set(records.passes.filter(p => p.person === String(userId)).map(p => p.item_id));
 
       const { rows: open } = await client.query(
-        `SELECT ${actionColumns('a')}, o.name AS organization_name FROM actions a
+        `SELECT ${actionColumns('a')}, o.name AS organization_name, om.full_name AS created_by_name FROM actions a
            JOIN organizations o ON o.id = a.organization_id
+           LEFT JOIN organization_members om
+             ON om.cognito_user_id = a.created_by::text AND om.organization_id = a.organization_id
           WHERE a.organization_id = ANY($1::uuid[]) AND a.status IN ($2, 'not_started')
           ORDER BY a.created_at DESC`,
         [memberOrgIds, OPEN_STATUS]
@@ -390,7 +392,9 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           return summarize(a, {
             kind: context ? 'option' : 'goal',
             organization_name: a.organization_name,
+            created_by_name: a.created_by_name,
             capacity: context?.capacity ?? null,
+            goal_ids: context?.goal_ids ?? [],
           });
         }),
       };
