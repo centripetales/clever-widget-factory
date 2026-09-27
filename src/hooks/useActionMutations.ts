@@ -31,7 +31,6 @@ interface MutationDebugInfo {
 interface ActionMutationContext {
   previousActions: BaseAction[] | undefined;
   previousTools?: any | undefined;
-  previousCheckouts?: any | undefined;
   mutationId: string;
   debugInfo: MutationDebugInfo;
   affectedCaches: string[]; // Track which caches were optimistically updated
@@ -215,7 +214,6 @@ export function useActionMutations() {
       // Snapshot previous state for rollback - only capture what we might modify
       const previousActions = queryClient.getQueryData<BaseAction[]>(['actions']);
       const previousTools = queryClient.getQueryData(['tools']);
-      const previousCheckouts = queryClient.getQueryData(['checkouts']);
       
       // Track which caches we're about to modify for safer rollback
       const affectedCaches: string[] = ['actions'];
@@ -242,7 +240,6 @@ export function useActionMutations() {
       return { 
         previousActions, 
         previousTools,
-        previousCheckouts,
         mutationId,
         debugInfo,
         affectedCaches,
@@ -272,62 +269,6 @@ export function useActionMutations() {
         });
       }
       
-      // Update cache with affectedResources if present (server-computed data)
-      // This ensures the cache reflects server-computed checkout status immediately
-      // Check the original response for affectedResources (not the extracted data)
-      if (response && typeof response === 'object' && 'affectedResources' in response) {
-        const affectedResources = (response as any).affectedResources;
-        
-        if (affectedResources?.tools && Array.isArray(affectedResources.tools)) {
-          // Update tools cache with server-computed checkout status
-          queryClient.setQueryData<{ data: any[] }>(['tools'], (old) => {
-            if (!old || !old.data) return old;
-            
-            const updatedTools = old.data.map(tool => {
-              const affectedTool = affectedResources.tools.find(
-                (at: any) => at.id === tool.id
-              );
-              return affectedTool || tool;
-            });
-            
-            // Add any new tools from affectedResources that aren't in cache
-            affectedResources.tools.forEach((affectedTool: any) => {
-              if (!updatedTools.find(t => t.id === affectedTool.id)) {
-                updatedTools.push(affectedTool);
-              }
-            });
-            
-            return { ...old, data: updatedTools };
-          });
-        }
-        
-        if (affectedResources?.checkouts && Array.isArray(affectedResources.checkouts)) {
-          // Update checkouts cache with server-computed data
-          queryClient.setQueryData(['checkouts'], (old: any) => {
-            if (!old || !Array.isArray(old)) return affectedResources.checkouts;
-            
-            const updatedCheckouts = old.map((checkout: any) => {
-              const affectedCheckout = affectedResources.checkouts.find(
-                (ac: any) => ac.id === checkout.id
-              );
-              return affectedCheckout || checkout;
-            });
-            
-            // Add any new checkouts from affectedResources
-            affectedResources.checkouts.forEach((affectedCheckout: any) => {
-              if (!updatedCheckouts.find((c: any) => c.id === affectedCheckout.id)) {
-                updatedCheckouts.push(affectedCheckout);
-              }
-            });
-            
-            return updatedCheckouts;
-          });
-        }
-      } else {
-        // Fallback: invalidate related resources if no affectedResources provided
-        queryClient.invalidateQueries({ queryKey: ['checkouts'] });
-        queryClient.invalidateQueries({ queryKey: ['tools'] });
-      }
     },
     
     onError: (error, _variables, context) => {

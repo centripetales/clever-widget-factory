@@ -9,7 +9,6 @@ The integration testing framework validates all 12 correctness properties (Prope
 - Optimistic updates work correctly with server responses
 - Error handling and rollback mechanisms function properly
 - Cache coordination remains consistent between client and server
-- Tool checkout workflows operate correctly end-to-end
 - Performance meets acceptable standards under various load conditions
 
 ## Test Structure
@@ -26,21 +25,10 @@ The integration testing framework validates all 12 correctness properties (Prope
    - Verifies proper rollback behavior with real server responses
    - Validates error classification and retry logic
 
-3. **Tool Checkout Workflows** (`toolCheckoutWorkflows.test.tsx`)
-   - Tests end-to-end action completion with tool assignments
-   - Verifies tool checkout status updates through real API
-   - Validates concurrent tool assignment handling
-
-4. **Offline/Online Workflows** (`offlineOnlineWorkflows.test.tsx`)
+3. **Offline/Online Workflows** (`offlineOnlineWorkflows.test.tsx`)
    - Tests network disconnection and mutation queuing
    - Verifies proper execution order when connectivity restored
    - Validates offline-first architecture patterns
-
-5. **Asset Checkout Validation** (`assetCheckoutValidation.test.tsx`)
-   - Tests specific scenario where tools added to actions should show as checked out
-   - Reproduces tool checkout issue using "Test Tool 1" to avoid conflicts with existing data
-   - Validates Combined Assets view consistency with action tool assignments
-   - Tests state persistence across page refreshes and different query methods
 
 ### Property-Based Integration Tests
 
@@ -103,8 +91,8 @@ npm run setup:test-user
 # Run all integration tests
 npm run test:integration
 
-# Run specific test (like the asset checkout validation)
-npm run test:integration -- assetCheckoutValidation.test.tsx
+# Run a specific test
+npm run test:integration -- realApiValidation.test.tsx
 ```
 
 See [docs/architecture/INTEGRATION_TESTING.md](../../../docs/architecture/INTEGRATION_TESTING.md) for current setup instructions (this file has known drift, see that doc).

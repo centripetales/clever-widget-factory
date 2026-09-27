@@ -26,7 +26,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useToolHistory } from "@/hooks/tools/useToolHistory";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { useImageUpload } from "@/hooks/useImageUpload";
-import { useOrganizationMembers } from "@/hooks/useOrganizationMembers";
 import { InventoryItemForm } from "./InventoryItemForm";
 import { getImageUrl, getThumbnailUrl } from '@/lib/imageUtils';
 import { getRecentAssetIds } from '@/lib/recentAssets';
@@ -48,7 +47,6 @@ export const CombinedAssetsContainer = () => {
   // Rest of the "Filters" panel — previously local-state-only, so navigating
   // to an asset's details page and back (a full unmount/remount of this
   // component) silently reset every one of these to its default.
-  const showMyCheckedOutParam = urlParams.get('showMyCheckedOut') === 'true';
   const showOnlyAssetsParam = viewParam === 'assets';
   const showOnlyAreasParam = viewParam === 'areas';
   const showRemovedItemsParam = urlParams.get('showRemoved') === 'true';
@@ -60,7 +58,6 @@ export const CombinedAssetsContainer = () => {
   const [searchTerm, setSearchTerm] = useState(searchParam);
   const [semanticResults, setSemanticResults] = useState<CombinedAsset[]>([]);
   const [isSemanticSearching, setIsSemanticSearching] = useState(false);
-  const [showMyCheckedOut, setShowMyCheckedOut] = useState(showMyCheckedOutParam);
   const [showLowStock, setShowLowStock] = useState(showLowStockParam);
   const [showOnlyAssets, setShowOnlyAssets] = useState(showOnlyAssetsParam);
   const [showOnlyStock, setShowOnlyStock] = useState(viewParam === 'stock');
@@ -133,19 +130,6 @@ export const CombinedAssetsContainer = () => {
   }), [searchTerm, limit, page, searchDescriptions, showLowStock, showOnlyAreas]);
   
   const { assets, sharedOrgsCounts, loading, createAsset, updateAsset, refetch, fetchAssets } = useCombinedAssets(showRemovedItems, assetsQueryOptions);
-  const { members: organizationMembers } = useOrganizationMembers();
-  const checkoutDisplayNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    organizationMembers.forEach(member => {
-      if (member.user_id) {
-        map.set(member.user_id, member.full_name);
-      }
-      if (member.id && !map.has(member.id)) {
-        map.set(member.id, member.full_name);
-      }
-    });
-    return map;
-  }, [organizationMembers]);
 
 
   useEffect(() => {
@@ -262,7 +246,6 @@ export const CombinedAssetsContainer = () => {
         newUrl.searchParams.delete('search');
       }
       if (showLowStock) newUrl.searchParams.set('showLowStock', 'true'); else newUrl.searchParams.delete('showLowStock');
-      if (showMyCheckedOut) newUrl.searchParams.set('showMyCheckedOut', 'true'); else newUrl.searchParams.delete('showMyCheckedOut');
       if (showRemovedItems) newUrl.searchParams.set('showRemoved', 'true'); else newUrl.searchParams.delete('showRemoved');
       if (searchDescriptions) newUrl.searchParams.set('searchDescriptions', 'true'); else newUrl.searchParams.delete('searchDescriptions');
       if (showOnlyStock) newUrl.searchParams.set('view', 'stock');
@@ -294,7 +277,7 @@ export const CombinedAssetsContainer = () => {
     return () => {
       if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
     };
-  }, [searchTerm, showRemovedItems, searchDescriptions, showLowStock, showMyCheckedOut, showOnlyAssets, showOnlyStock, showOnlyAreas, semanticResults.length]);
+  }, [searchTerm, showRemovedItems, searchDescriptions, showLowStock, showOnlyAssets, showOnlyStock, showOnlyAreas, semanticResults.length]);
 
   // Look up selected asset from cache (check semantic results first, then regular assets)
   const selectedAsset = selectedAssetId 
@@ -335,12 +318,6 @@ export const CombinedAssetsContainer = () => {
       if (showOnlyAssets && asset.type !== 'asset') return false;
       if (showOnlyStock && asset.type !== 'stock') return false;
 
-      // My checked out filter - only applies to assets
-      if (showMyCheckedOut) {
-        if (asset.type !== 'asset') return false;
-        if (!asset.is_checked_out || asset.checked_out_user_id !== user?.id) return false;
-      }
-
       // Issues filter - removed (issue system deprecated)
 
       // Apply search filter when Areas Only is enabled (since we skip search in useCombinedAssets)
@@ -375,7 +352,7 @@ export const CombinedAssetsContainer = () => {
     }
 
     return filtered;
-  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, showMyCheckedOut, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
+  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
 
   // Most-recently-viewed shortcut. Looked up against the full tools/parts
   // query cache (same one AssetDetailsPage reads), not the `assets` array
@@ -765,8 +742,6 @@ export const CombinedAssetsContainer = () => {
         onClearSearch={() => setSemanticResults([])}
         searchDescriptions={searchDescriptions}
         setSearchDescriptions={setSearchDescriptions}
-        showMyCheckedOut={showMyCheckedOut}
-        setShowMyCheckedOut={setShowMyCheckedOut}
         showLowStock={showLowStock}
         setShowLowStock={setShowLowStock}
         showOnlyAssets={showOnlyAssets}
@@ -794,7 +769,6 @@ export const CombinedAssetsContainer = () => {
         isAdmin={isAdmin}
         currentUserId={user?.id}
         currentUserEmail={user?.email}
-        userNameMap={checkoutDisplayNameMap}
             onView={handleShowAssetDetails}
             onEdit={handleEdit}
             onRemove={handleRemove}

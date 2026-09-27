@@ -250,7 +250,6 @@ export const EditToolForm = ({ tool, isOpen, onClose, onSubmit, isLeadership = f
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="available">Available</SelectItem>
-                  <SelectItem value="checked_out" disabled>Checked Out (automatic)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

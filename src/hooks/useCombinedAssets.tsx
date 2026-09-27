@@ -32,11 +32,6 @@ export interface CombinedAsset {
   legacy_storage_vicinity?: string;
   area_display?: string; // Computed field: parent_structure_name || legacy_storage_vicinity
   has_issues?: boolean;
-  is_checked_out?: boolean;
-  checked_out_to?: string;
-  checked_out_user_id?: string;
-  checked_out_date?: string;
-  checkout_action_id?: string;
   accountable_person_id?: string;
   accountable_person_name?: string; // Resolved name from accountable_person_id
   accountable_person_color?: string; // Favorite color of accountable person
@@ -320,7 +315,6 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         ...part,
         type: 'stock' as const,
         has_issues: assetsWithIssues.has(part.id),
-        is_checked_out: false,
         is_shared_inbound: false,
         is_shared_outbound: Boolean(part.is_shared_outbound),
       })),
@@ -328,11 +322,6 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         ...tool,
         type: 'asset' as const,
         has_issues: assetsWithIssues.has(tool.id),
-        is_checked_out: Boolean(tool.is_checked_out),
-        checked_out_user_id: tool.checked_out_user_id,
-        checked_out_to: tool.checked_out_to,
-        checked_out_date: tool.checked_out_date,
-        checkout_action_id: tool.checkout_action_id,
         is_shared_inbound: false,
         is_shared_outbound: Boolean(tool.is_shared_outbound),
       })),
@@ -341,7 +330,6 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         ...part,
         type: 'stock' as const,
         has_issues: assetsWithIssues.has(part.id),
-        is_checked_out: false,
         is_shared_inbound: true,
         is_shared_outbound: false,
       })),
@@ -349,11 +337,6 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
         ...tool,
         type: 'asset' as const,
         has_issues: assetsWithIssues.has(tool.id),
-        is_checked_out: Boolean(tool.is_checked_out),
-        checked_out_user_id: tool.checked_out_user_id,
-        checked_out_to: tool.checked_out_to,
-        checked_out_date: tool.checked_out_date,
-        checkout_action_id: tool.checkout_action_id,
         is_shared_inbound: true,
         is_shared_outbound: false,
       })),

@@ -44,32 +44,6 @@ exports.handler = async (event) => {
       const assetSql = `SELECT created_at, updated_at, serial_number FROM tools WHERE id::text = '${escapeLiteral(toolId)}';`;
       const assetResult = await queryJSON(assetSql);
       
-      // Get checkouts
-      const checkoutsSql = `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) as json_agg FROM (
-        SELECT 
-          c.id::text,
-          c.tool_id::text,
-          c.user_id::text,
-          c.checkout_date,
-          c.expected_return_date,
-          c.is_returned,
-          c.intended_usage,
-          c.notes,
-          c.action_id::text,
-          c.organization_id::text,
-          c.created_at,
-          COALESCE(om.full_name, 'Unknown User') as user_display_name
-        FROM checkouts c
-        LEFT JOIN LATERAL (
-          SELECT full_name FROM organization_members
-          WHERE cognito_user_id::text = c.user_id::text
-          LIMIT 1
-        ) om ON true
-        WHERE c.tool_id::text = '${escapeLiteral(toolId)}'
-        ORDER BY c.checkout_date DESC
-      ) t;`;
-      const checkoutsResult = await queryJSON(checkoutsSql);
-      
       // Get issues
       const issuesSql = `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) as json_agg FROM (
         SELECT 

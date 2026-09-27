@@ -27,7 +27,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { apiService, getApiData } from '@/lib/apiService';
-import { missionsQueryKey } from '@/lib/queryKeys';
+import { missionsQueryKey, toolHistoryQueryKey } from '@/lib/queryKeys';
 import {
   Paperclip,
   Calendar as CalendarIcon,
@@ -215,19 +215,15 @@ export function ActionForm({
         });
       }
 
-      // Invalidate related resources that might need background refresh (server-computed data)
-      // Only invalidate if the action actually uses tools (required_tools changed)
-      // This prevents unnecessary refetches when saving actions without tools
-      const hasTools = variables.required_tools && Array.isArray(variables.required_tools) && variables.required_tools.length > 0;
-      const hadTools = previousAction?.required_tools && Array.isArray(previousAction.required_tools) && previousAction.required_tools.length > 0;
-      const toolsChanged = hasTools || hadTools; // Invalidate if action has or had tools
-
-      if (toolsChanged) {
-        // Invalidate checkouts and tools in background (non-blocking)
-        // These will refetch when components need them, not immediately
-        queryClient.invalidateQueries({ queryKey: ['checkouts'] });
-        queryClient.invalidateQueries({ queryKey: ['tools'] });
-      }
+      // Tool history lists the actions that require a tool, so refresh it for
+      // every tool added to or removed from this action.
+      const newTools = updatedAction?.required_tools ?? variables.required_tools ?? [];
+      const oldTools = action?.required_tools ?? [];
+      new Set([...oldTools, ...newTools]).forEach(toolId => {
+        if (oldTools.includes(toolId) !== newTools.includes(toolId)) {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(toolId) });
+        }
+      });
 
       // Show appropriate toast message based on action status
       const isCompleting = variables.status === 'completed' || updatedAction?.status === 'completed';

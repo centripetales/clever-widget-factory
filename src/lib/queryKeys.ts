@@ -11,6 +11,7 @@ export const explorationByActionIdQueryKey = (actionId: string) => ['exploration
 
 export const toolsQueryKey = () => ['tools'];
 export const partsQueryKey = () => ['parts'];
+export const sharedToolsQueryKey = (orgId?: string) => ['shared_tools', orgId];
 
 // Checkouts query key removed — checkout system deprecated
 

@@ -25,20 +25,12 @@ export interface Tool {
   last_audited_at?: string;
   audit_status?: string;
   
-  // Checkout fields from Lambda API
-  is_checked_out?: boolean;
-  checked_out_user_id?: string;
-  checked_out_to?: string;
-  checked_out_date?: string;
-  expected_return_date?: string;
-  checkout_intended_usage?: string;
-  checkout_notes?: string;
-  
   // Geolocation fields populated by list API
   gps_latitude?: number;
   gps_longitude?: number;
 
   // Sharing fields
+  organization_id?: string;
   is_shared_inbound?: boolean;
   is_shared_outbound?: boolean;
 }
@@ -63,18 +55,6 @@ export const useToolsData = (showRemovedItems: boolean = false) => {
     tools = toolsData.filter((tool: Tool) => tool.status !== 'removed');
   }
 
-  // Build checkout map from tool data (checkout fields are included in the tools API response)
-  // No separate /checkouts fetch needed
-  const activeCheckouts: {[key: string]: {user_name: string, user_id: string}} = {};
-  toolsData.forEach((tool: Tool) => {
-    if (tool.is_checked_out && tool.checked_out_user_id) {
-      activeCheckouts[tool.id] = {
-        user_name: tool.checked_out_to || 'Unknown',
-        user_id: tool.checked_out_user_id
-      };
-    }
-  });
-
   const updateTool = async (toolId: string, updates: any) => {
     // TODO: Implement tool updates via AWS API
     console.warn('Tool updates not yet implemented for AWS API');
@@ -94,7 +74,6 @@ export const useToolsData = (showRemovedItems: boolean = false) => {
   return {
     tools,
     loading: false, // Data comes from cache, no loading state
-    activeCheckouts,
     fetchTools: invalidateTools, // For backward compatibility
     updateTool,
     createTool,

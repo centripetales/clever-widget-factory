@@ -78,11 +78,6 @@ const API_ENDPOINTS = [
   { path: '/organization_members', methods: ['GET', 'POST', 'OPTIONS'] },
   { path: '/profiles', methods: ['GET', 'POST', 'OPTIONS'] },
   
-  // Checkouts and Checkins
-  { path: '/checkouts', methods: ['GET', 'POST', 'OPTIONS'] },
-  { path: '/checkouts/00000000-0000-0000-0000-000000000001', methods: ['PUT', 'DELETE', 'OPTIONS'], requiresAuth: true },
-  { path: '/checkins', methods: ['POST', 'OPTIONS'] },
-  
   // Issues
   { path: '/issues', methods: ['GET', 'POST', 'OPTIONS'] },
   { path: '/issues/00000000-0000-0000-0000-000000000001', methods: ['GET', 'PUT', 'OPTIONS'], requiresAuth: true },

@@ -18,8 +18,6 @@ interface CombinedAssetFiltersProps {
   onClearSearch?: () => void;
   searchDescriptions: boolean;
   setSearchDescriptions: (show: boolean) => void;
-  showMyCheckedOut: boolean;
-  setShowMyCheckedOut: (show: boolean) => void;
   showLowStock: boolean;
   setShowLowStock: (show: boolean) => void;
   showOnlyAssets: boolean;
@@ -42,8 +40,6 @@ export const CombinedAssetFilters = ({
   onClearSearch,
   searchDescriptions,
   setSearchDescriptions,
-  showMyCheckedOut,
-  setShowMyCheckedOut,
   showLowStock,
   setShowLowStock,
   showOnlyAssets,
@@ -69,7 +65,6 @@ export const CombinedAssetFilters = ({
   );
 
   const activeFilterCount =
-    (showMyCheckedOut ? 1 : 0) +
     (showLowStock ? 1 : 0) +
     (showOnlyAssets ? 1 : 0) +
     (showOnlyStock ? 1 : 0) +
@@ -140,26 +135,6 @@ export const CombinedAssetFilters = ({
           <div className="space-y-4">
             {/* Standard toggle filters */}
             <div className="flex flex-wrap gap-4 items-center">
-
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="my-checked-out"
-                        checked={showMyCheckedOut}
-                        onCheckedChange={setShowMyCheckedOut}
-                      />
-                      <Label htmlFor="my-checked-out" className="text-sm">
-                        My Checked Out
-                      </Label>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Show only assets currently checked out to me</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
 
               <TooltipProvider>
                 <Tooltip>

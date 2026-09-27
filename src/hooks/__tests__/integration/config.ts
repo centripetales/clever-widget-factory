@@ -36,10 +36,6 @@ export interface TestToolData {
   id: string;
   name: string;
   status: 'available' | 'maintenance' | 'retired';
-  is_checked_out: boolean;
-  checked_out_user_id?: string;
-  checked_out_to?: string;
-  checked_out_date?: string;
 }
 
 // Default configuration for integration tests

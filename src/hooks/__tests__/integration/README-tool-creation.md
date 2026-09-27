@@ -9,7 +9,6 @@ The tool creation integration test validates:
 - ✅ **Authorization**: Test user has proper database permissions
 - ✅ **Tool Creation**: Can create tools through real Lambda API endpoints
 - ✅ **Permission Validation**: Comprehensive permission boundary testing
-- ✅ **Checkout State Consistency**: Validates the bug fix for tool status computation
 - ✅ **Error Handling**: Provides clear diagnostics for permission issues
 
 ## Prerequisites
@@ -86,8 +85,6 @@ When everything is set up correctly, you should see:
 ✅ All permissions are working correctly!
 🔧 Creating test tool: { name: 'Test Tool...', category: 'Test Equipment', status: 'available' }
 ✅ Test tool created successfully
-🔍 Testing checkout state consistency...
-✅ Checkout state consistency validation passed
 🧹 Cleaning up 3 created test tools...
 ✅ Integration test cleanup complete
 
@@ -150,13 +147,7 @@ The integration test is organized into several test suites:
 - Tests creating tools with complete data
 - Tests validation error handling
 
-### 3. Checkout State Validation
-- Tests initial tool state is correct (`available`, not checked out)
-- Tests checkout state consistency when tools are added to actions
-- Tests the specific bug fix: `status` should be `'checked_out'` when `is_checked_out` is `true`
-- Compares tool data across different API endpoints
-
-### 4. Error Handling and Diagnostics
+### 3. Error Handling and Diagnostics
 - Tests that clear error messages are provided for permission issues
 - Tests network error handling
 - Tests actionable remediation suggestions
@@ -212,8 +203,6 @@ The integration test requires these database tables and permissions:
 - `organizations` - Must have at least one active organization
 - `organization_members` - Test user must be added here
 - `tools` - For tool creation and management
-- `actions` - For testing checkout state consistency
-- `checkouts` - For tracking tool checkout state
 
 ### Required Permissions
 The test user needs `contributor` role which grants:
@@ -268,6 +257,5 @@ When modifying the integration tests:
 - `src/hooks/__tests__/integration/testAuth.ts` - Authentication service
 - `src/hooks/__tests__/integration/TestToolCreator.ts` - Tool creation utilities
 - `src/hooks/__tests__/integration/PermissionValidator.ts` - Permission testing
-- `src/hooks/__tests__/integration/CheckoutStateValidator.ts` - Checkout state validation
 - `scripts/setup-integration-test-user.sql` - Database setup script
 - `scripts/setup-integration-test-user.sh` - Setup automation script

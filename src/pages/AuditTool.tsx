@@ -69,21 +69,6 @@ const AuditTool = () => {
     enabled: !!toolId
   });
 
-  // Get last user who checked in this tool (within 7 days)
-  const { data: lastUser } = useQuery({
-    queryKey: ['tool-last-user', toolId],
-    queryFn: async () => {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-      const response = await apiService.get(
-        `/checkins?tool_id=${toolId}&after=${sevenDaysAgo.toISOString()}&limit=1`
-      );
-      return response.data?.[0] || null;
-    },
-    enabled: !!toolId
-  });
-
   // Submit audit mutation
   const submitAuditMutation = useMutation({
     mutationFn: async () => {
@@ -268,15 +253,6 @@ const AuditTool = () => {
                 </div>
               )}
 
-              {lastUser && (
-                <div className="bg-muted p-4 rounded-lg">
-                  <Label className="font-semibold">Last User (within 7 days)</Label>
-                  <p>{lastUser.user_name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    Checked in: {new Date(lastUser.checkin_date).toLocaleDateString()}
-                  </p>
-                </div>
-              )}
             </CardContent>
           </Card>
 
