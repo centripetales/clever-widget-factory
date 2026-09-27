@@ -27,7 +27,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { apiService, getApiData } from '@/lib/apiService';
-import { missionsQueryKey } from '@/lib/queryKeys';
+import { missionsQueryKey, toolHistoryQueryKey } from '@/lib/queryKeys';
 import {
   Paperclip,
   Calendar as CalendarIcon,
@@ -214,6 +214,16 @@ export function ActionForm({
           }
         });
       }
+
+      // Tool history lists the actions that require a tool, so refresh it for
+      // every tool added to or removed from this action.
+      const newTools = updatedAction?.required_tools ?? variables.required_tools ?? [];
+      const oldTools = action?.required_tools ?? [];
+      new Set([...oldTools, ...newTools]).forEach(toolId => {
+        if (oldTools.includes(toolId) !== newTools.includes(toolId)) {
+          queryClient.invalidateQueries({ queryKey: toolHistoryQueryKey(toolId) });
+        }
+      });
 
       // Show appropriate toast message based on action status
       const isCompleting = variables.status === 'completed' || updatedAction?.status === 'completed';
