@@ -2498,7 +2498,6 @@ exports.handler = async (event) => {
               a.status,
               a.assigned_to::text,
               a.asset_id::text,
-              a.mission_id::text,
               a.organization_id::text,
               a.created_by::text,
               a.created_at,
@@ -3455,310 +3454,6 @@ exports.handler = async (event) => {
       }
     }
 
-    // Missions endpoint
-    if (path.endsWith('/missions')) {
-      if (httpMethod === 'GET') {
-        // Use same pattern as actions/parts - build organization filter to return everything user has access to
-        const contextForFilter = {
-          ...authContext,
-          accessible_organization_ids: accessibleOrgIds,
-          permissions: authContext.permissions || []
-        };
-        const orgFilter = buildOrganizationFilter(contextForFilter, 'm');
-        
-        // Build WHERE clause - empty condition means user has data:read:all permission (return all), 
-        // otherwise filter by accessible orgs
-        const whereClause = orgFilter.condition ? `WHERE ${orgFilter.condition}` : '';
-        
-        const sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT * FROM missions m ${whereClause} ORDER BY m.created_at DESC
-        ) t;`;
-        
-        // Enhanced logging for debugging
-        console.log('Missions GET endpoint:', {
-          path,
-          organization_id: organizationId,
-          accessible_orgs: accessibleOrgIds,
-          accessible_orgs_count: accessibleOrgIds.length,
-          has_data_read_all: hasDataReadAll,
-          permissions: authContext.permissions,
-          orgFilter_condition: orgFilter.condition,
-          whereClause: whereClause,
-          sql: sql.substring(0, 300)
-        });
-        
-        try {
-          const result = await queryJSON(sql);
-          const missions = result?.[0]?.json_agg || [];
-          
-          console.log('Missions query result:', {
-            result_type: typeof result,
-            result_length: result?.length,
-            json_agg_type: typeof result?.[0]?.json_agg,
-            missions_count: missions.length,
-            first_mission_org_id: missions[0]?.organization_id || 'none',
-            first_mission_title: missions[0]?.title || 'none'
-          });
-          
-          return {
-            statusCode: 200,
-            headers,
-            body: JSON.stringify({ data: missions })
-          };
-        } catch (error) {
-          console.error('❌ ERROR: Failed to query missions:', error);
-          console.error('   SQL:', sql);
-          console.error('   Error details:', error.message, error.stack);
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ 
-              error: 'Failed to fetch missions',
-              message: error.message 
-            })
-          };
-        }
-      }
-      
-      if (httpMethod === 'POST') {
-        const body = JSON.parse(event.body || '{}');
-        const { 
-          title, 
-          problem_statement, 
-          created_by, 
-          qa_assigned_to,
-          template_id,
-          template_name,
-          template_color,
-          template_icon,
-          organization_id
-        } = body;
-        
-        if (!title || !created_by) {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ error: 'title and created_by are required' })
-          };
-        }
-        
-        // Map Cognito user ID to database user_id if needed
-        let dbUserId = created_by;
-        if (created_by.includes('-')) {
-          // If it looks like a UUID, assume it's already a database user_id
-          dbUserId = created_by;
-        } else {
-          // If it's a Cognito user ID, look up the database user_id
-          const userLookupSql = `SELECT user_id FROM organization_members WHERE cognito_user_id = '${created_by}' LIMIT 1;`;
-          const userResult = await queryJSON(userLookupSql);
-          if (userResult && userResult.length > 0) {
-            dbUserId = userResult[0].user_id;
-          } else {
-            return {
-              statusCode: 400,
-              headers,
-              body: JSON.stringify({ error: 'User not found in organization' })
-            };
-          }
-        }
-        
-        // Map qa_assigned_to if provided
-        let dbQaUserId = qa_assigned_to;
-        if (qa_assigned_to && !qa_assigned_to.includes('-')) {
-          const qaUserLookupSql = `SELECT user_id FROM organization_members WHERE cognito_user_id = '${qa_assigned_to}' LIMIT 1;`;
-          const qaUserResult = await queryJSON(qaUserLookupSql);
-          if (qaUserResult && qaUserResult.length > 0) {
-            dbQaUserId = qaUserResult[0].user_id;
-          }
-        }
-        
-        // Always use organizationId from authorizer context (not from request body)
-        // This ensures security - users can't create resources in organizations they don't belong to
-        if (!organizationId) {
-          console.error('❌ ERROR: Cannot create mission - organization_id is missing from authorizer context');
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: 'Server configuration error: organization context not available' })
-          };
-        }
-        const orgId = organizationId;
-        
-        // Include organization_id in INSERT
-        const sql = `
-          INSERT INTO missions (
-            title, 
-            problem_statement, 
-            created_by, 
-            qa_assigned_to,
-            organization_id,
-            status, 
-            template_id,
-            template_name,
-            template_color,
-            template_icon,
-            created_at, 
-            updated_at
-          ) VALUES (
-            '${title.replace(/'/g, "''")}', 
-            '${(problem_statement || '').replace(/'/g, "''")}', 
-            '${dbUserId}', 
-            ${dbQaUserId ? `'${dbQaUserId}'` : 'NULL'},
-            '${orgId}',
-            'planning',
-            ${template_id ? `'${template_id}'` : 'NULL'},
-            ${template_name ? `'${template_name.replace(/'/g, "''")}'` : 'NULL'},
-            ${template_color ? `'${template_color}'` : 'NULL'},
-            ${template_icon ? `'${template_icon}'` : 'NULL'},
-            NOW(), 
-            NOW()
-          )
-          RETURNING *;
-        `;
-        
-        console.log('SQL:', sql);
-        const result = await queryJSON(sql);
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'mission',
-            entityId: result[0].id,
-            mutationType: 'created',
-            organizationId: orgId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 201,
-          headers,
-          body: JSON.stringify({ data: result[0] })
-        };
-      }
-    }
-
-    // Missions by ID endpoint (GET, PUT, DELETE)
-    if (path.includes('/missions/') && !path.endsWith('/missions')) {
-      const missionId = path.split('/missions/')[1]?.split('/')[0]; // Extract ID, handle trailing paths
-      
-      if (httpMethod === 'GET') {
-        const orgFilter = buildOrganizationFilter(authContext, 'missions');
-        const whereClause = orgFilter.condition ? `WHERE missions.id = '${missionId}' AND ${orgFilter.condition}` : `WHERE missions.id = '${missionId}'`;
-        
-        const sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT * FROM missions ${whereClause}
-        ) t;`;
-        
-        const result = await queryJSON(sql);
-        const mission = result?.[0]?.json_agg?.[0];
-        
-        if (!mission) {
-          return {
-            statusCode: 404,
-            headers,
-            body: JSON.stringify({ error: 'Mission not found' })
-          };
-        }
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: mission })
-        };
-      }
-      
-      if (httpMethod === 'PUT') {
-        const body = JSON.parse(event.body || '{}');
-        const { id, created_by, created_at, updated_at, ...missionData } = body;
-        
-        // Build UPDATE statement
-        const updates = [];
-        for (const [key, val] of Object.entries(missionData)) {
-          if (val === undefined) continue;
-          if (val === null) updates.push(`${key} = NULL`);
-          else if (typeof val === 'string') updates.push(`${key} = '${val.replace(/'/g, "''")}'`);
-          else if (typeof val === 'boolean') updates.push(`${key} = ${val}`);
-          else updates.push(`${key} = ${val}`);
-        }
-        updates.push(`updated_at = NOW()`);
-        
-        const orgFilter = buildOrganizationFilter(authContext, 'missions');
-        const whereClause = orgFilter.condition 
-          ? `WHERE id = '${missionId}' AND ${orgFilter.condition}`
-          : `WHERE id = '${missionId}'`;
-        
-        const sql = `UPDATE missions SET ${updates.join(', ')} ${whereClause} RETURNING *;`;
-        const result = await queryJSON(sql);
-        
-        if (!result || result.length === 0) {
-          return {
-            statusCode: 404,
-            headers,
-            body: JSON.stringify({ error: 'Mission not found' })
-          };
-        }
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'mission',
-            entityId: missionId,
-            mutationType: 'updated',
-            organizationId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: result[0] })
-        };
-      }
-      
-      if (httpMethod === 'DELETE') {
-        const orgFilter = buildOrganizationFilter(authContext, 'missions');
-        const whereClause = orgFilter.condition 
-          ? `WHERE id = '${missionId}' AND ${orgFilter.condition}`
-          : `WHERE id = '${missionId}'`;
-        
-        const sql = `DELETE FROM missions ${whereClause} RETURNING id;`;
-        const result = await queryJSON(sql);
-        
-        if (!result || result.length === 0) {
-          return {
-            statusCode: 404,
-            headers,
-            body: JSON.stringify({ error: 'Mission not found' })
-          };
-        }
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'mission',
-            entityId: missionId,
-            mutationType: 'deleted',
-            organizationId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: { id: result[0].id } })
-        };
-      }
-    }
-
     // GET /actions/{id} - Get action by ID
     if (httpMethod === 'GET' && path.match(/\/actions\/[a-f0-9-]+$/)) {
       const actionId = path.split('/').pop();
@@ -3788,14 +3483,7 @@ exports.handler = async (event) => {
               'name', issue_tools.name,
               'category', issue_tools.category
             )
-          END as issue_tool,
-          CASE WHEN a.mission_id IS NOT NULL THEN
-            json_build_object(
-              'id', missions.id,
-              'title', missions.title,
-              'mission_number', missions.mission_number
-            )
-          END as mission
+          END as issue_tool
         FROM actions a
         LEFT JOIN LATERAL (
           SELECT full_name, favorite_color FROM organization_members
@@ -3812,7 +3500,6 @@ exports.handler = async (event) => {
         LEFT JOIN tools assets ON a.asset_id = assets.id
         LEFT JOIN issues linked_issue ON a.linked_issue_id = linked_issue.id
         LEFT JOIN tools issue_tools ON linked_issue.context_id = issue_tools.id AND linked_issue.context_type = 'tool'
-        LEFT JOIN missions ON a.mission_id = missions.id
         LEFT JOIN exploration e ON a.id = e.action_id
         WHERE a.id = '${escapeLiteral(actionId)}'
       ) t;`;
@@ -3890,15 +3577,7 @@ exports.handler = async (event) => {
               'name', issue_tools.name,
               'category', issue_tools.category
             )
-          END as issue_tool,
-          -- Mission details
-          CASE WHEN a.mission_id IS NOT NULL THEN
-            json_build_object(
-              'id', missions.id,
-              'title', missions.title,
-              'mission_number', missions.mission_number
-            )
-          END as mission
+          END as issue_tool
         FROM actions a
         LEFT JOIN LATERAL (
           SELECT full_name, favorite_color FROM organization_members
@@ -3915,7 +3594,6 @@ exports.handler = async (event) => {
         LEFT JOIN tools assets ON a.asset_id = assets.id
         LEFT JOIN issues linked_issue ON a.linked_issue_id = linked_issue.id
         LEFT JOIN tools issue_tools ON linked_issue.context_id = issue_tools.id AND linked_issue.context_type = 'tool'
-        LEFT JOIN missions ON a.mission_id = missions.id
         LEFT JOIN exploration e ON a.id = e.action_id
         ${whereClause} 
         ORDER BY a.updated_at DESC 
@@ -3956,7 +3634,6 @@ exports.handler = async (event) => {
         'estimated_duration',
         'required_stock',
         'attachments',
-        'mission_id',
         'asset_id',
         'linked_issue_id',
         'issue_reference',
@@ -3982,7 +3659,6 @@ exports.handler = async (event) => {
         formatSqlValue(body.estimated_duration),
         formatSqlValue(body.required_stock),
         formatSqlValue(body.attachments || []),
-        formatSqlValue(body.mission_id),
         formatSqlValue(body.asset_id),
         formatSqlValue(body.linked_issue_id),
         formatSqlValue(body.issue_reference),
@@ -4130,7 +3806,7 @@ exports.handler = async (event) => {
       const allowedFields = [
         'title', 'description', 'policy', 'assigned_to', 'status',
         'estimated_duration', 'required_stock', 'attachments',
-        'mission_id', 'asset_id', 'linked_issue_id', 'issue_reference',
+        'asset_id', 'linked_issue_id', 'issue_reference',
         'plan_commitment', 'policy_agreed_at', 'policy_agreed_by',
         'is_exploration', 'summary_policy_text'
       ];
@@ -4196,14 +3872,6 @@ exports.handler = async (event) => {
                 'category', assets.category
               )
             END as asset,
-            -- Mission details
-            CASE WHEN a.mission_id IS NOT NULL THEN
-              json_build_object(
-                'id', missions.id,
-                'title', missions.title,
-                'mission_number', missions.mission_number
-              )
-            END as mission,
             -- Participants details
             CASE WHEN participants.participants IS NOT NULL THEN
               participants.participants
@@ -4217,8 +3885,7 @@ exports.handler = async (event) => {
             WHERE sl.entity_type = 'action'
           ) updates ON a.id = updates.action_id
           LEFT JOIN tools assets ON a.asset_id = assets.id
-          LEFT JOIN missions ON a.mission_id = missions.id
-          LEFT JOIN exploration e ON a.id = e.action_id
+            LEFT JOIN exploration e ON a.id = e.action_id
           LEFT JOIN (
             SELECT 
               ap.action_id,

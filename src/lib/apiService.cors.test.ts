@@ -68,12 +68,6 @@ const API_ENDPOINTS = [
   { path: '/actions/00000000-0000-0000-0000-000000000001', methods: ['PUT', 'DELETE', 'OPTIONS'], requiresAuth: true },
   { path: '/action_implementation_updates', methods: ['GET', 'POST', 'OPTIONS'] },
   
-  // Missions
-  { path: '/missions', methods: ['GET', 'POST', 'OPTIONS'] },
-  { path: '/missions/00000000-0000-0000-0000-000000000001', methods: ['GET', 'PUT', 'DELETE', 'OPTIONS'], requiresAuth: true },
-  { path: '/mission_attachments', methods: ['GET', 'POST', 'OPTIONS'] },
-  { path: '/mission_attachments/00000000-0000-0000-0000-000000000001', methods: ['DELETE', 'OPTIONS'], requiresAuth: true },
-  
   // Organization
   { path: '/organization_members', methods: ['GET', 'POST', 'OPTIONS'] },
   { path: '/profiles', methods: ['GET', 'POST', 'OPTIONS'] },

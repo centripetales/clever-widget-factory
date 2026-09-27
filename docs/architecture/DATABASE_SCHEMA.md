@@ -21,10 +21,10 @@ erDiagram
     timestamp with time zone created_at
   }
   action_exploration {
-    uuid action_id NOT NULL
     uuid action_id PK NOT NULL
-    uuid exploration_id NOT NULL
+    uuid action_id NOT NULL
     uuid exploration_id PK NOT NULL
+    uuid exploration_id NOT NULL
     timestamp without time zone created_at
     timestamp without time zone updated_at
   }
@@ -39,7 +39,6 @@ erDiagram
   }
   action_scores {
     uuid id PK NOT NULL
-    uuid action_id NOT NULL
     uuid action_id NOT NULL
     text source_type NOT NULL
     uuid source_id NOT NULL
@@ -136,60 +135,19 @@ erDiagram
     uuid organization_id NOT NULL
     timestamp with time zone created_at NOT NULL
   }
-  azolla_duckweed_observation_perspectives {
-    uuid id PK NOT NULL
+  azolla_state_perspectives {
     uuid id NOT NULL
-    boolean vessel_present
-    text vessel_type
-    numeric vessel_frame_occupancy_percent
-    boolean plant_material_visible
-    numeric plant_coverage_percent_estimate
-    numeric water_visible_percent_estimate
-    character varying dominant_plant_color
-    character varying species_guess
-    text species_guess_basis
-    character varying lighting_condition
-    boolean frame_contains_non_vessel_vegetation
-    text most_interesting_observation
-    jsonb plant_sample_points
+    uuid id PK NOT NULL
+    numeric coverage_percent_estimate
+    text water_color
+    text vessel_condition
+    numeric phosphorus_ppm_estimate
+    text phosphorus_estimate_basis
+    numeric ph_estimate
+    text ph_estimate_basis
+    text summary
     jsonb uncertainty_flags
     jsonb content NOT NULL
-  }
-  checkins {
-    uuid id PK NOT NULL
-    uuid checkout_id
-    uuid tool_id NOT NULL
-    timestamp with time zone checkin_date NOT NULL
-    text problems_reported
-    text notes
-    timestamp with time zone created_at NOT NULL
-    numeric hours_used
-    ARRAY after_image_urls
-    text sop_best_practices NOT NULL
-    text what_did_you_do NOT NULL
-    text checkin_reason
-    uuid organization_id NOT NULL
-    text user_id
-  }
-  checkouts {
-    uuid id PK NOT NULL
-    uuid tool_id NOT NULL
-    text intended_usage
-    timestamp with time zone checkout_date
-    date expected_return_date
-    text before_image_url
-    text notes
-    boolean is_returned NOT NULL
-    timestamp with time zone created_at NOT NULL
-    text pre_existing_issues
-    text user_id NOT NULL
-    uuid organization_id NOT NULL
-    uuid action_id
-  }
-  claim_perspectives {
-    uuid id NOT NULL
-    uuid id PK NOT NULL
-    text content NOT NULL
   }
   energeia_cache {
     uuid id PK NOT NULL
@@ -210,11 +168,6 @@ erDiagram
     uuid organization_id NOT NULL
     character varying changed_by_connection_id
     timestamp with time zone created_at NOT NULL
-  }
-  entropy_perspectives {
-    uuid id NOT NULL
-    uuid id PK NOT NULL
-    text content NOT NULL
   }
   epistemic_links {
     uuid id PK NOT NULL
@@ -238,6 +191,7 @@ erDiagram
     uuid organization_id NOT NULL
     uuid created_by NOT NULL
     timestamp with time zone created_at
+    jsonb metadata
   }
   exploration {
     uuid id PK NOT NULL
@@ -291,27 +245,6 @@ erDiagram
     timestamp with time zone created_at
     timestamp with time zone updated_at
     uuid created_by
-  }
-  growth_color_metrics_perspectives {
-    uuid id PK NOT NULL
-    uuid id NOT NULL
-    character varying sample_method NOT NULL
-    integer image_width NOT NULL
-    integer image_height NOT NULL
-    integer sampled_pixel_count NOT NULL
-    integer green_pixel_count NOT NULL
-    numeric green_pixel_percent NOT NULL
-    numeric green_mean_hue_degrees
-    numeric green_mean_saturation
-    numeric green_mean_value
-    numeric frame_mean_value
-    jsonb content NOT NULL
-    numeric green_median_value
-    numeric green_median_hue_degrees
-    numeric frame_median_value
-    numeric value_ratio_to_frame
-    numeric exg_mean
-    numeric exg_median
   }
   issue_history {
     uuid id PK NOT NULL
@@ -392,6 +325,8 @@ erDiagram
     text notes
     timestamp with time zone created_at
     timestamp with time zone updated_at
+    uuid edited_by
+    timestamp with time zone edited_at
   }
   metrics {
     uuid metric_id PK NOT NULL
@@ -400,9 +335,12 @@ erDiagram
     character varying unit
     numeric benchmark_value
     text details
-    boolean active NOT NULL
     timestamp without time zone created_at
     uuid organization_id NOT NULL
+    boolean active NOT NULL
+    text value_type NOT NULL
+    numeric min_value
+    numeric max_value
   }
   mission_attachments {
     uuid id PK NOT NULL
@@ -567,6 +505,14 @@ erDiagram
     numeric aggregate_risk
     timestamp with time zone created_at
     timestamp with time zone updated_at
+    text captured_at_source
+    text capture_method
+    text original_filename
+    integer original_file_size_bytes
+    text original_mime_type
+    integer original_width
+    integer original_height
+    text gps_source
   }
   policy {
     uuid id PK NOT NULL
@@ -616,11 +562,6 @@ erDiagram
     timestamp with time zone updated_at NOT NULL
     uuid organization_id NOT NULL
   }
-  significance_perspectives {
-    uuid id NOT NULL
-    uuid id PK NOT NULL
-    text content NOT NULL
-  }
   state_links {
     uuid id PK NOT NULL
     uuid state_id NOT NULL
@@ -631,12 +572,14 @@ erDiagram
   }
   state_perspectives {
     uuid id PK NOT NULL
-    uuid state_id NOT NULL
+    uuid state_id
     character varying perspective_type NOT NULL
     uuid llm_generation_config_id NOT NULL
     character varying status NOT NULL
     text error_message
     timestamp with time zone created_at
+    jsonb content
+    uuid action_id
   }
   state_photos {
     uuid id PK NOT NULL
@@ -825,17 +768,9 @@ erDiagram
   analyses ||--o{ analysis_scores : analysis_id
   organizations ||--o{ asset_history : organization_id
   tools ||--o{ asset_history : asset_id
-  state_perspectives ||--o{ azolla_duckweed_observation_perspectives : id
-  checkouts ||--o{ checkins : checkout_id
-  organizations ||--o{ checkins : organization_id
-  tools ||--o{ checkins : tool_id
-  actions ||--o{ checkouts : action_id
-  organizations ||--o{ checkouts : organization_id
-  tools ||--o{ checkouts : tool_id
-  state_perspectives ||--o{ claim_perspectives : id
+  state_perspectives ||--o{ azolla_state_perspectives : id
   organizations ||--o{ energeia_cache : organization_id
   organizations ||--o{ entity_changes : organization_id
-  state_perspectives ||--o{ entropy_perspectives : id
   states ||--o{ epistemic_links : source_state_id
   states ||--o{ epistemic_links : target_state_id
   actions ||--o{ experience_components : action_id
@@ -850,7 +785,6 @@ erDiagram
   organizations ||--o{ financial_records : organization_id
   issues ||--o{ five_whys_sessions : issue_id
   organizations ||--o{ five_whys_sessions : organization_id
-  state_perspectives ||--o{ growth_color_metrics_perspectives : id
   organizations ||--o{ issue_history : organization_id
   organizations ||--o{ issue_requirements : organization_id
   organizations ||--o{ issues : organization_id
@@ -879,8 +813,8 @@ erDiagram
   policy ||--o{ policy_embedding : policy_id
   states ||--o{ rsp_outbox : state_id
   organizations ||--o{ scoring_prompts : organization_id
-  state_perspectives ||--o{ significance_perspectives : id
   states ||--o{ state_links : state_id
+  actions ||--o{ state_perspectives : action_id
   llm_generation_configs ||--o{ state_perspectives : llm_generation_config_id
   states ||--o{ state_perspectives : state_id
   states ||--o{ state_photos : state_id

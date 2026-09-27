@@ -83,7 +83,6 @@ exports.handler = async (event) => {
           a.status,
           a.assigned_to::text,
           a.asset_id::text,
-          a.mission_id::text,
           a.organization_id::text,
           a.created_by::text,
           a.created_at,

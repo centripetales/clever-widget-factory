@@ -144,7 +144,6 @@ export async function processStockConsumption(
   actionId: string,
   userId: string,
   actionTitle: string,
-  missionId: string | undefined,
   queryClient: any // TanStack QueryClient - required, parts should already be in cache
 ): Promise<void> {
   if (!requiredStock || requiredStock.length === 0) {

@@ -3,7 +3,7 @@ import { useEnabledMembers } from '@/hooks/useOrganizationMembers';
 import { ActionForm } from '@/components/UnifiedActionDialog';
 import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { createMissionAction, createAssetAction } from '@/types/actions';
+import { createAssetAction } from '@/types/actions';
 import { ActionCreationContext } from '@/types/actions';
 
 export default function ActionPage() {
@@ -14,19 +14,14 @@ export default function ActionPage() {
   const { members: profiles } = useEnabledMembers();
 
   const isNew = actionId === 'new' || !actionId;
-  const missionId = searchParams.get('missionId');
   const assetId = searchParams.get('assetId');
 
   // Build context for new actions
   const context: ActionCreationContext | undefined = isNew
     ? {
-        type: (missionId ? 'mission' : 'asset') as 'mission' | 'asset',
-        parentId: missionId || assetId || undefined,
-        prefilledData: missionId
-          ? createMissionAction(missionId)
-          : assetId
-          ? createAssetAction(assetId)
-          : undefined,
+        type: 'asset',
+        parentId: assetId || undefined,
+        prefilledData: assetId ? createAssetAction(assetId) : undefined,
       }
     : undefined;
 
@@ -41,8 +36,6 @@ export default function ActionPage() {
       navigate(-1);
     } else if (from) {
       navigate(from, { replace: true });
-    } else if (missionId) {
-      navigate(`/missions`);
     } else {
       navigate('/actions');
     }

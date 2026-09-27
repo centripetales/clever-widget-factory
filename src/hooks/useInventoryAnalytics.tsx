@@ -39,7 +39,6 @@ interface DetailedActivityRecord {
   changeReason?: string;
   usageDescription?: string;
   quantityUsed?: number;
-  missionTitle?: string;
   taskTitle?: string;
   timestamp: string;
   partId: string;
@@ -210,23 +209,8 @@ export function useInventoryAnalytics() {
         partsMap[part.id] = { name: part.name, description: part.description };
       });
 
-      // Fetch mission and task details for usage records
-      const missionIds = usageData?.map(u => u.mission_id).filter(Boolean) || [];
+      // Fetch task details for usage records
       const taskIds = usageData?.map(u => u.task_id).filter(Boolean) || [];
-
-      // Build mission map from AWS-backed API instead of Supabase
-      let missionsData: any[] = [];
-      try {
-        const missionsResponse = await apiService.get('/missions');
-        const missionsPayload = getApiData(missionsResponse as any) || missionsResponse;
-        const allMissions = Array.isArray(missionsPayload) ? missionsPayload : [];
-        if (missionIds.length > 0) {
-          const missionIdSet = new Set(missionIds);
-          missionsData = allMissions.filter((m: any) => missionIdSet.has(m.id));
-        }
-      } catch (missionsError) {
-        console.error("Error fetching missions from API:", missionsError);
-      }
 
       // Build task map from AWS-backed /actions endpoint
       let tasksData: any[] = [];
@@ -243,12 +227,7 @@ export function useInventoryAnalytics() {
         console.error("Error fetching tasks from API:", tasksError);
       }
 
-      const missionsMap: Record<string, string> = {};
       const tasksMap: Record<string, string> = {};
-      
-      missionsData?.forEach(mission => {
-        missionsMap[mission.id] = mission.title;
-      });
       
       tasksData?.forEach(task => {
         tasksMap[task.id] = task.title;
@@ -339,7 +318,6 @@ export function useInventoryAnalytics() {
           partDescription: partInfo?.description,
           usageDescription: record.usage_description,
           quantityUsed: record.quantity_used,
-          missionTitle: missionsMap[record.mission_id],
           taskTitle: tasksMap[record.task_id],
           timestamp: record.created_at,
           partId: record.part_id

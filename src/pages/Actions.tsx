@@ -212,8 +212,7 @@ export default function Actions() {
                action.description?.toLowerCase().includes(searchLower) ||
                stripHtmlAndSearch(action.policy) ||
                stripHtmlAndSearch((action as any).observations) ||
-               action.asset?.name?.toLowerCase().includes(searchLower) ||
-               action.mission?.title?.toLowerCase().includes(searchLower);
+               action.asset?.name?.toLowerCase().includes(searchLower);
       });
     }
 

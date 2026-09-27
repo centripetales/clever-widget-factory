@@ -19,7 +19,6 @@ interface DetailedActivityRecord {
   changeReason?: string;
   usageDescription?: string;
   quantityUsed?: number;
-  missionTitle?: string;
   taskTitle?: string;
   timestamp: string;
   partId: string;
@@ -153,11 +152,6 @@ export function ActivityDetailsDialog({
                     {activity.quantityUsed && (
                       <p className="text-xs">
                         <span className="text-muted-foreground">Quantity Used:</span> {activity.quantityUsed}
-                      </p>
-                    )}
-                    {activity.missionTitle && (
-                      <p className="text-xs">
-                        <span className="text-muted-foreground">Mission:</span> {activity.missionTitle}
                       </p>
                     )}
                     {activity.taskTitle && (

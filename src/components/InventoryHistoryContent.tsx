@@ -248,12 +248,6 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
                         <span className="text-sm font-medium">{getChangeDescription(entry)}</span>
                       </div>
                       <div className="text-sm text-muted-foreground mb-2">{format(new Date(entry.changed_at), 'PPpp')}</div>
-                      {entry.mission_id && (
-                        <Button variant="outline" size="sm" onClick={() => window.open(`/missions#${entry.mission_id}`, '_blank')} className="h-8 text-xs">
-                          <ExternalLink className="h-3 w-3 mr-1" />
-                          Project #{entry.mission_number}: {entry.mission_title}
-                        </Button>
-                      )}
                       {entry.usage_description && <div className="text-sm text-muted-foreground mt-1 italic">"{entry.usage_description}"</div>}
                       {entry.action_id && entry.action_title && (
                         <div className="mt-2">

@@ -28,7 +28,6 @@ interface DetailedActivityRecord {
   changeReason?: string;
   usageDescription?: string;
   quantityUsed?: number;
-  missionTitle?: string;
   taskTitle?: string;
   timestamp: string;
   partId: string;

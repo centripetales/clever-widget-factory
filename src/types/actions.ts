@@ -25,8 +25,7 @@ export interface BaseAction {
   summary_policy_text?: string; // New field for per-action synthesis
   policy_id?: number; // Foreign key to policy table
   
-  // Parent relationship fields - only one should be set
-  mission_id?: string | null;
+  // Parent relationship field
   asset_id?: string | null;
   
   // Additional optional fields
@@ -66,12 +65,6 @@ export interface BaseAction {
     role: string;
     favorite_color?: string;
   }[];
-  mission?: {
-    id: string;
-    title: string;
-    mission_number: number;
-    status: string;
-  } | null;
   asset?: {
     id: string;
     name: string;
@@ -95,30 +88,13 @@ export interface Profile {
 }
 
 export interface ActionCreationContext {
-  type: 'mission' | 'asset';
+  type: 'asset';
   parentId?: string;
   parentTitle?: string;
   prefilledData?: Partial<BaseAction>;
 }
 
 // Helper functions for creating context-specific actions
-export const createMissionAction = (missionId: string): Partial<BaseAction> => ({
-  mission_id: missionId,
-  status: 'not_started',
-  title: '',
-  description: '',
-  expected_state: '',
-  state_text: '', // Logical field mapping
-  policy: '',
-  policy_text: '', // Logical field mapping
-  summary_policy_text: '',
-  assigned_to: null,
-  participants: [],
-  required_tools: [],
-  required_stock: [],
-  attachments: []
-});
-
 export const createIssueAction = (
   _issueId: string,
   _issueDescription?: string,
@@ -166,21 +142,6 @@ export const createExplorationAction = (): Partial<BaseAction> => ({
   attachments: [],
   is_exploration: true // Mark as exploration
 });
-
-// Validation helpers
-export const validateActionRelationship = (action: Partial<BaseAction>): boolean => {
-  const relationships = [
-    action.mission_id,
-    action.asset_id,
-  ].filter(Boolean);
-  
-  return relationships.length <= 1;
-};
-
-export const getActionTypeFromAction = (action: BaseAction): ActionCreationContext['type'] => {
-  if (action.mission_id) return 'mission';
-  return 'asset';
-};
 
 export interface ImplementationUpdate {
   id: string;
