@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { offlineMutationConfig, offlineQueryConfig } from '@/lib/queryConfig';
 import { format } from "date-fns";
@@ -288,6 +288,8 @@ export function ActionForm({
 
   // Fetch states for the action to extract learning takeaways for Copy Context and Maxwell context
   const { data: actionStates } = useStates(organizationId ?? '', { entity_type: 'action', entity_id: action?.id });
+  const [searchParams] = useSearchParams();
+  const autoOpenedMaxwellRef = useRef(false);
 
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
@@ -310,16 +312,28 @@ export function ActionForm({
             return text;
           }).join('\n\n');
         }
+        const isOpenGoal = action.status === 'external_proposal' && !!action.expected_state?.trim() && !action.policy?.trim();
         setMaxwellContextInternal({
           entityId: action.id,
           entityType: 'action',
           entityName: action.title || 'Untitled Action',
           policy: action.policy || '',
           implementation: implText,
+          ...(isOpenGoal ? { positiveSumRole: 'goal' as const } : {}),
         });
       }
     }
   };
+
+  // Page mode: ?maxwell=1 opens the Maxwell panel once the action has loaded
+  // (e.g. "Plan with Maxwell" from a Positive Sum goal).
+  useEffect(() => {
+    if (onMaxwellOpenChange || autoOpenedMaxwellRef.current || !action) return;
+    if (searchParams.get('maxwell') === '1') {
+      autoOpenedMaxwellRef.current = true;
+      handleMaxwellOpenChange(true);
+    }
+  }, [action, searchParams, onMaxwellOpenChange]);
 
   // Sync implementation text into maxwell context when actionStates loads or changes
   useEffect(() => {

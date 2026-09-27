@@ -116,3 +116,29 @@ describe('dayKey', () => {
     expect(dayKey(new Date('2026-09-27T15:00:00Z'))).toBe('2026-09-27');
   });
 });
+
+describe('Maxwell agent adapter', () => {
+  const { toList, toRequest } = require('./agentEvent');
+
+  it('parses list parameters in the forms Bedrock sends', () => {
+    expect(toList('["a","b"]')).toEqual(['a', 'b']);
+    expect(toList('[a, b]')).toEqual(['a', 'b']);
+    expect(toList('a,b')).toEqual(['a', 'b']);
+    expect(toList('')).toEqual([]);
+    expect(toList(undefined)).toEqual([]);
+  });
+
+  it('defaults to the goal being discussed', () => {
+    const event = { apiPath: '/createOption', sessionAttributes: { entityId: 'goal-1' } };
+    const request = toRequest(event, { initial_state: 's', policy: 'p', final_state: 'f', capacity: '3' });
+    expect(request.path).toBe('/api/positive-sum/options');
+    expect(request.body.goal_ids).toEqual(['goal-1']);
+    expect(request.body.capacity).toBe(3);
+    expect(toRequest({ apiPath: '/getGoalContext', sessionAttributes: { entityId: 'goal-1' } }, {}).path)
+      .toBe('/api/positive-sum/goals/goal-1/context');
+  });
+
+  it('rejects unknown operations', () => {
+    expect(toRequest({ apiPath: '/deleteEverything' }, {})).toBeNull();
+  });
+});

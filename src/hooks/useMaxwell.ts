@@ -19,6 +19,7 @@ export interface MaxwellSessionAttributes {
   entityName: string;
   policy: string;
   implementation: string;
+  positiveSumRole?: 'goal';
 }
 
 interface MaxwellChatResponse {

@@ -170,6 +170,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
   };
   const body = JSON.parse(event.body || '{}');
   const optionRoute = path.match(/\/positive-sum\/options\/([0-9a-f-]{36})\/(join|approve|pass)$/);
+  const goalContextRoute = path.match(/\/positive-sum\/goals\/([0-9a-f-]{36})\/context$/);
 
   return withClient(dbConfig, async client => {
     // POST /positive-sum/goals — recipient states initial and desired state
@@ -185,6 +186,36 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       });
       await notify(goal);
       return { statusCode: 201, data: summarize(goal) };
+    }
+
+    // GET /positive-sum/goals/:id/context — what Maxwell needs to shape options:
+    // the goal, options already suggested, and open offers in its org
+    // (information is always free).
+    if (httpMethod === 'GET' && goalContextRoute) {
+      const [goal] = await loadActions(client, [goalContextRoute[1]]);
+      if (!goal || !isGoal(goal)) throw new HttpError(404, 'Goal not found');
+      requireMember(goal.organization_id);
+      const records = await loadRecords(client, [goal.organization_id]);
+      const optionIds = Object.values(records.contexts)
+        .filter(c => (c.goal_ids || []).includes(goal.id)).map(c => c.option_id);
+      const options = await loadActions(client, optionIds);
+      const { rows: offers } = await client.query(
+        `SELECT ${actionColumns('a')}, om.full_name AS created_by_name FROM actions a
+           LEFT JOIN organization_members om
+             ON om.cognito_user_id = a.created_by::text AND om.organization_id = a.organization_id
+          WHERE a.organization_id = $1 AND a.status = $2
+            AND COALESCE(TRIM(a.policy), '') <> '' AND COALESCE(TRIM(a.expected_state), '') = ''
+          ORDER BY a.created_at DESC`,
+        [goal.organization_id, OPEN_STATUS]
+      );
+      return {
+        statusCode: 200,
+        data: {
+          goal: summarize(goal),
+          options: options.map(o => summarize(o, { capacity: records.contexts[o.id]?.capacity })),
+          offers: offers.map(o => summarize(o, { created_by_name: o.created_by_name })),
+        },
+      };
     }
 
     // POST /positive-sum/policies — an implementor's standing suggestion

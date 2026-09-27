@@ -116,6 +116,11 @@ export default function PositiveSum() {
                     <StatusBadge status={goal.status} />
                   </div>
                   <ItemText item={goal} finalLabel="Desired state" />
+                  {goal.status === 'external_proposal' && (
+                    <Button size="sm" variant="outline" onClick={() => navigate(`/actions/${goal.id}?maxwell=1`)}>
+                      Plan with Maxwell
+                    </Button>
+                  )}
                   {goal.options.length === 0 && (
                     <p className="text-xs text-muted-foreground">No options suggested yet.</p>
                   )}

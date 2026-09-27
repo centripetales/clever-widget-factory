@@ -11,6 +11,9 @@ export interface EntityContext {
   entityName: string;
   policy: string;
   implementation: string;
+  // 'goal' when the action is an open Positive Sum goal — Maxwell then helps
+  // shape options for it.
+  positiveSumRole?: 'goal';
 }
 
 /**

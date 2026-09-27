@@ -166,6 +166,7 @@ export function MaxwellInlinePanel({ context, onClose, className, hideHeader = f
       entityName: context.entityName,
       policy: context.policy,
       implementation: context.implementation,
+      ...(context.positiveSumRole ? { positiveSumRole: context.positiveSumRole } : {}),
     }
     : null;
 
