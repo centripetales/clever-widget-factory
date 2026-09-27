@@ -425,10 +425,6 @@ exports.handler = async (event) => {
             tools.*,
             parent_tool.name as parent_structure_name,
             parent_tool.name as area_display,
-            CASE 
-              WHEN active_checkouts.id IS NOT NULL THEN 'checked_out'
-              ELSE tools.status
-            END as status,
             CASE WHEN tools.image_url LIKE '%supabase.co%' THEN 
               REPLACE(
                 tools.image_url, 
@@ -436,29 +432,9 @@ exports.handler = async (event) => {
                 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/'
               )
             ELSE tools.image_url 
-            END as image_url,
-            CASE WHEN active_checkouts.id IS NOT NULL THEN true ELSE false END as is_checked_out,
-            active_checkouts.user_id as checked_out_user_id,
-            om_checkout.full_name as checked_out_to,
-            active_checkouts.checkout_date as checked_out_date,
-            active_checkouts.expected_return_date,
-            active_checkouts.intended_usage as checkout_intended_usage,
-            active_checkouts.notes as checkout_notes,
-            active_checkouts.action_id as checkout_action_id
+            END as image_url
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
-          LEFT JOIN LATERAL (
-            SELECT * FROM checkouts
-            WHERE checkouts.tool_id = tools.id
-              AND checkouts.is_returned = false
-            ORDER BY checkouts.checkout_date DESC NULLS LAST, checkouts.created_at DESC
-            LIMIT 1
-          ) active_checkouts ON true
-          LEFT JOIN LATERAL (
-            SELECT full_name FROM organization_members
-            WHERE cognito_user_id = active_checkouts.user_id
-            LIMIT 1
-          ) om_checkout ON true
           WHERE tools.id = '${escapeLiteral(toolId)}' ${orgCondition}
         ) result;`;
         
@@ -541,10 +517,7 @@ exports.handler = async (event) => {
             tools.created_at, tools.updated_at,
             parent_tool.name as parent_structure_name,
             parent_tool.name as area_display,
-            CASE 
-              WHEN active_checkouts.id IS NOT NULL THEN 'checked_out'
-              ELSE tools.status
-            END as status,
+            tools.status,
             CASE WHEN tools.image_url LIKE '%supabase.co%' THEN 
               REPLACE(
                 tools.image_url, 
@@ -553,31 +526,11 @@ exports.handler = async (event) => {
               )
             ELSE tools.image_url 
             END as image_url,
-            CASE WHEN active_checkouts.id IS NOT NULL THEN true ELSE false END as is_checked_out,
-            active_checkouts.user_id as checked_out_user_id,
-            om_checkout.full_name as checked_out_to,
-            active_checkouts.checkout_date as checked_out_date,
-            active_checkouts.expected_return_date,
-            active_checkouts.intended_usage as checkout_intended_usage,
-            active_checkouts.notes as checkout_notes,
-            active_checkouts.action_id as checkout_action_id,
             tool_gps.gps_latitude, tool_gps.gps_longitude,
             CASE WHEN tools.organization_id::text != '${escapeLiteral(organizationId)}' THEN true ELSE false END as is_shared_inbound,
             COALESCE(tool_share_out.is_shared_outbound, false) as is_shared_outbound
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
-          LEFT JOIN LATERAL (
-            SELECT * FROM checkouts
-            WHERE checkouts.tool_id = tools.id
-              AND checkouts.is_returned = false
-            ORDER BY checkouts.checkout_date DESC NULLS LAST, checkouts.created_at DESC
-            LIMIT 1
-          ) active_checkouts ON true
-          LEFT JOIN LATERAL (
-            SELECT full_name FROM organization_members
-            WHERE cognito_user_id = active_checkouts.user_id
-            LIMIT 1
-          ) om_checkout ON true
           LEFT JOIN LATERAL (
             SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, s_sub.captured_at as sort_time
             FROM state_links sl_sub
@@ -2497,91 +2450,6 @@ exports.handler = async (event) => {
       }
     }
 
-    // Checkins endpoint
-    if (httpMethod === 'POST' && path.endsWith('/checkins')) {
-      try {
-        const body = JSON.parse(event.body || '{}');
-        const afterImageArray = Array.isArray(body.after_image_urls)
-          ? body.after_image_urls
-          : body.after_image_urls
-            ? [body.after_image_urls]
-            : [];
-
-        const insertData = {
-          checkout_id: body.checkout_id,
-          tool_id: body.tool_id,
-          user_id: body.user_id,
-          problems_reported: body.problems_reported !== undefined ? body.problems_reported : null,
-          notes: body.notes !== undefined ? body.notes : null,
-          sop_best_practices: body.sop_best_practices !== undefined ? body.sop_best_practices : '',
-          what_did_you_do: body.what_did_you_do !== undefined ? body.what_did_you_do : '',
-          checkin_reason: body.checkin_reason !== undefined ? body.checkin_reason : null,
-          after_image_urls: afterImageArray,
-          organization_id: (() => {
-            if (!organizationId) {
-              console.error('❌ ERROR: Cannot create checkin - organization_id is missing from authorizer context');
-              throw new Error('Server configuration error: organization context not available');
-            }
-            return organizationId;
-          })()
-        };
-
-        const requiredFields = ['checkout_id', 'tool_id', 'user_id'];
-        const missingFields = requiredFields.filter(field => !insertData[field]);
-        if (missingFields.length > 0) {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ error: `Missing required fields: ${missingFields.join(', ')}` })
-          };
-        }
-
-        const columns = Object.keys(insertData);
-        const values = columns.map(col => formatSqlValue(insertData[col]));
-
-        const sql = `
-          INSERT INTO checkins (${columns.join(', ')}, checkin_date)
-          VALUES (${values.join(', ')}, NOW())
-          RETURNING *
-        `;
-        
-        console.log('Checkin SQL:', sql);
-        console.log('Checkin data:', JSON.stringify(insertData, null, 2));
-        
-        const result = await queryJSON(sql);
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'checkin',
-            entityId: result[0].id,
-            mutationType: 'created',
-            organizationId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 201,
-          headers,
-          body: JSON.stringify({ data: result[0] })
-        };
-      } catch (error) {
-        console.error('Error creating checkin:', error);
-        return {
-          statusCode: 500,
-          headers,
-          body: JSON.stringify({ 
-            error: 'Failed to create checkin',
-            details: error.message,
-            stack: error.stack
-          })
-        };
-      }
-    }
-
     // Tools history endpoint
     if (path.match(/\/tools\/[a-f0-9-]+\/history$/)) {
       if (httpMethod === 'GET') {
@@ -2591,32 +2459,6 @@ exports.handler = async (event) => {
           // Get asset info
           const assetSql = `SELECT created_at, updated_at FROM tools WHERE id::text = '${escapeLiteral(toolId)}';`;
           const assetResult = await queryJSON(assetSql);
-          
-          // Get checkouts - cast all UUIDs to text for consistency
-          const checkoutsSql = `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) as json_agg FROM (
-            SELECT 
-              c.id::text,
-              c.tool_id::text,
-              c.user_id::text,
-              c.checkout_date,
-              c.expected_return_date,
-              c.is_returned,
-              c.intended_usage,
-              c.notes,
-              c.action_id::text,
-              c.organization_id::text,
-              c.created_at,
-              COALESCE(om.full_name, 'Unknown User') as user_display_name
-            FROM checkouts c
-            LEFT JOIN LATERAL (
-              SELECT full_name FROM organization_members
-              WHERE cognito_user_id::text = c.user_id::text
-              LIMIT 1
-            ) om ON true
-            WHERE c.tool_id::text = '${escapeLiteral(toolId)}'
-            ORDER BY c.checkout_date DESC
-          ) t;`;
-          const checkoutsResult = await queryJSON(checkoutsSql);
           
           // Get issues - cast all UUIDs to text
           const issuesSql = `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) as json_agg FROM (
@@ -2729,7 +2571,6 @@ exports.handler = async (event) => {
           
           // Build unified timeline
           const asset = assetResult?.[0];
-          const checkouts = checkoutsResult?.[0]?.json_agg || [];
           const issues = issuesResult?.[0]?.json_agg || [];
           const actions = actionsResult?.[0]?.json_agg || [];
           const observations = observationsResult?.[0]?.json_agg || [];
@@ -2758,16 +2599,6 @@ exports.handler = async (event) => {
               description: 'Asset created'
             });
           }
-          
-          // Add checkout events
-          checkouts.forEach(c => {
-            timeline.push({
-              type: 'checkout',
-              timestamp: c.checkout_date || c.created_at,
-              description: `Checked out by ${c.user_display_name}`,
-              data: c
-            });
-          });
           
           // Add issue events
           issues.forEach(i => {
@@ -2805,7 +2636,6 @@ exports.handler = async (event) => {
             body: JSON.stringify({ 
               data: {
                 asset: asset || null,
-                checkouts,
                 issues,
                 actions,
                 observations,
@@ -2826,205 +2656,6 @@ exports.handler = async (event) => {
         }
       }
     }
-
-    // Checkouts endpoint
-    if (path.endsWith('/checkouts') || path.match(/\/checkouts\/[a-f0-9-]+$/)) {
-      if (httpMethod === 'DELETE') {
-        const checkoutId = path.split('/').pop();
-        const sql = `DELETE FROM checkouts WHERE id = '${checkoutId}' RETURNING *`;
-        const result = await queryJSON(sql);
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'checkout',
-            entityId: checkoutId,
-            mutationType: 'deleted',
-            organizationId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: result[0] })
-        };
-      }
-      
-      if (httpMethod === 'PUT') {
-        const checkoutId = path.split('/').pop();
-        const body = JSON.parse(event.body || '{}');
-        const updates = [];
-        if (body.checkout_date !== undefined) updates.push(`checkout_date = ${body.checkout_date ? `'${body.checkout_date}'` : 'NOW()'}`);
-        if (body.is_returned !== undefined) updates.push(`is_returned = ${body.is_returned}`);
-        if (updates.length === 0) {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ error: 'No fields to update' })
-          };
-        }
-        const sql = `UPDATE checkouts SET ${updates.join(', ')} WHERE id = '${checkoutId}' RETURNING *`;
-        const result = await queryJSON(sql);
-        
-        // Broadcast cache invalidation to WebSocket clients
-        try {
-          await broadcastInvalidation({
-            entityType: 'checkout',
-            entityId: checkoutId,
-            mutationType: 'updated',
-            organizationId,
-            excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-          });
-        } catch (err) {
-          console.error('[CORE] Broadcast failed:', err.message);
-        }
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: result[0] })
-        };
-      }
-      
-      if (httpMethod === 'POST') {
-        const body = JSON.parse(event.body || '{}');
-        const { tool_id, user_id, intended_usage, notes, action_id, is_returned, checkout_date } = body;
-        // Always use organizationId from authorizer context (not from request body)
-        if (!organizationId) {
-          console.error('❌ ERROR: Cannot create checkout - organization_id is missing from authorizer context');
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: 'Server configuration error: organization context not available' })
-          };
-        }
-        const orgId = organizationId;
-        
-        // Check for existing active checkout for this tool
-        // An active checkout is one where is_returned = false
-        const checkActiveCheckoutSql = `
-          SELECT id, checkout_date 
-          FROM checkouts 
-          WHERE tool_id = '${tool_id}' 
-            AND is_returned = false
-            AND organization_id = '${orgId}'
-          LIMIT 1
-        `;
-        const existingCheckouts = await queryJSON(checkActiveCheckoutSql);
-        
-        if (existingCheckouts && existingCheckouts.length > 0) {
-          const existingCheckout = existingCheckouts[0];
-          return {
-            statusCode: 409,
-            headers,
-            body: JSON.stringify({ 
-              error: 'Tool already has an active checkout',
-              details: 'This tool is currently checked out. Please return the tool before creating a new checkout.',
-              existing_checkout: {
-                id: existingCheckout.id,
-                checkout_date: existingCheckout.checkout_date
-              }
-            })
-          };
-        }
-        
-        const checkoutDateValue = checkout_date ? `'${checkout_date}'` : (is_returned ? 'NOW()' : 'NULL');
-        const sql = `
-          INSERT INTO checkouts (tool_id, user_id, intended_usage, notes, action_id, organization_id, is_returned, checkout_date)
-          VALUES ('${tool_id}', '${user_id}', ${intended_usage ? `'${intended_usage.replace(/'/g, "''")}'` : 'NULL'}, ${notes ? `'${notes.replace(/'/g, "''")}'` : 'NULL'}, ${action_id ? `'${action_id}'` : 'NULL'}, '${orgId}', ${is_returned}, ${checkoutDateValue})
-          RETURNING *
-        `;
-        
-        try {
-          const result = await queryJSON(sql);
-          
-          // Broadcast cache invalidation to WebSocket clients
-          try {
-            await broadcastInvalidation({
-              entityType: 'checkout',
-              entityId: result[0].id,
-              mutationType: 'created',
-              organizationId: orgId,
-              excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
-            });
-          } catch (err) {
-            console.error('[CORE] Broadcast failed:', err.message);
-          }
-          
-          return {
-            statusCode: 201,
-            headers,
-            body: JSON.stringify({ data: result[0] })
-          };
-        } catch (error) {
-          // Catch duplicate key constraint violation
-          if (error.message && error.message.includes('idx_unique_active_checkout_per_tool')) {
-            return {
-              statusCode: 409,
-              headers,
-              body: JSON.stringify({ 
-                error: 'Tool already has an active checkout',
-                details: 'This tool is currently checked out. Please return the tool before creating a new checkout.'
-              })
-            };
-          }
-          throw error;
-        }
-      }
-      
-      if (httpMethod === 'GET') {
-        const { is_returned, action_id, tool_id } = event.queryStringParameters || {};
-        let whereConditions = [];
-        
-        // Always filter by organization
-        if (!hasDataReadAll && organizationId) {
-          whereConditions.push(`c.organization_id::text = '${escapeLiteral(organizationId)}'`);
-        }
-        
-        if (is_returned === 'false') {
-          whereConditions.push('c.is_returned = false');
-        } else if (is_returned === 'true') {
-          whereConditions.push('c.is_returned = true');
-        }
-        if (action_id) {
-          whereConditions.push(`c.action_id = '${action_id}'`);
-        }
-        if (tool_id) {
-          whereConditions.push(`c.tool_id = '${tool_id}'`);
-        }
-        const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-        
-        const sql = `SELECT json_agg(row_to_json(t)) FROM (
-          SELECT 
-            c.*,
-            t.serial_number as tool_serial_number,
-            om.full_name as user_name,
-            a.title as action_title
-          FROM checkouts c
-          LEFT JOIN tools t ON c.tool_id = t.id
-          LEFT JOIN LATERAL (
-            SELECT full_name FROM organization_members
-            WHERE cognito_user_id = c.user_id
-            LIMIT 1
-          ) om ON true
-          LEFT JOIN actions a ON c.action_id = a.id
-          ${whereClause} ORDER BY c.checkout_date DESC
-        ) t;`;
-        
-        const result = await queryJSON(sql);
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: result?.[0]?.json_agg || [] })
-        };
-      }
-    }
-
-
 
     // Exploration endpoints
     if (path.endsWith('/explorations') || path.match(/\/explorations\/[0-9]+$/)) {

@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, Plus, X, Wrench } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useToolsData } from "@/hooks/tools/useToolsData";
+import { useSharedTools } from "@/hooks/tools/useSharedTools";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 
 interface Asset {
@@ -16,6 +17,7 @@ interface Asset {
   image_url?: string | null;
   description?: string | null;
   category?: string | null;
+  source_org_name?: string;
 }
 
 interface AssetSelectorProps {
@@ -30,7 +32,9 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
   const [searchTerm, setSearchTerm] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const { toast } = useToast();
-  const { tools: assets, loading, activeCheckouts } = useToolsData();
+  const { tools: ownTools, loading } = useToolsData();
+  const sharedTools = useSharedTools();
+  const assets: Asset[] = useMemo(() => [...ownTools, ...sharedTools], [ownTools, sharedTools]);
   // Track if we're updating from user action to prevent useEffect from overwriting
   const isUserUpdateRef = useRef(false);
   // Track the expected formData state after user update to prevent race conditions
@@ -120,7 +124,7 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
     setSelectedAssetDetails(details);
   };
 
-  // Deduplicate assets by id to prevent duplicates from multiple checkouts
+  // Deduplicate assets by id
   const uniqueAssets = Array.from(
     new Map(assets.map(asset => [asset.id, asset])).values()
   );
@@ -402,8 +406,8 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
                         {asset.storage_location && (
                           <span>• {asset.storage_location}</span>
                         )}
-                        {activeCheckouts[asset.id] && (
-                          <span>• Checked out to {activeCheckouts[asset.id].user_name}</span>
+                        {asset.source_org_name && (
+                          <span>• Shared by {asset.source_org_name}</span>
                         )}
                       </div>
                     </div>

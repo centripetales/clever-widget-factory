@@ -2,18 +2,16 @@
  * Tool Creation Integration Test
  * 
  * Comprehensive integration test that validates tool creation through real Lambda API endpoints,
- * tests permissions, and validates the tool checkout state consistency bug fix.
+ * and tests permissions.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestAuth, cleanupTestAuth } from './testAuth';
 import { testToolCreator, TestTool } from './TestToolCreator';
 import { permissionValidator } from './PermissionValidator';
-import { checkoutStateValidator } from './CheckoutStateValidator';
 
 describe.skip('Tool Creation Integration Tests', () => {
   let createdTools: TestTool[] = [];
-  let createdActions: string[] = [];
 
   beforeAll(async () => {
     console.log('🚀 Setting up tool creation integration tests...');
@@ -30,15 +28,6 @@ describe.skip('Tool Creation Integration Tests', () => {
     // Clean up any created tools
     await testToolCreator.cleanupCreatedTools();
     
-    // Clean up any created actions
-    for (const actionId of createdActions) {
-      try {
-        await checkoutStateValidator.cleanupTestAction(actionId);
-      } catch (error) {
-        console.warn(`Failed to cleanup action ${actionId}:`, error);
-      }
-    }
-    
     // Clean up authentication
     await cleanupTestAuth();
     
@@ -48,7 +37,6 @@ describe.skip('Tool Creation Integration Tests', () => {
   beforeEach(() => {
     // Clear tracking arrays before each test
     createdTools = [];
-    createdActions = [];
   });
 
   describe('Permission Validation', () => {
@@ -178,158 +166,6 @@ describe.skip('Tool Creation Integration Tests', () => {
         expect(error).toBeDefined();
       }
     }, 10000);
-  });
-
-  describe('Checkout State Validation', () => {
-    it('should validate initial tool state is correct', async () => {
-      console.log('🔍 Testing initial tool state validation...');
-      
-      // Create a test tool
-      const tool = await testToolCreator.createMinimalTool();
-      createdTools.push(tool);
-      
-      // Validate initial state
-      const validation = await checkoutStateValidator.validateInitialToolState(tool.id);
-      
-      expect(validation.isValid).toBe(true);
-      expect(validation.tool).toBeDefined();
-      expect(validation.issues).toHaveLength(0);
-      
-      // Verify specific initial state properties
-      expect(validation.tool?.status).toBe('available');
-      expect(validation.tool?.is_checked_out).toBeFalsy();
-      expect(validation.tool?.checked_out_user_id).toBeFalsy();
-      expect(validation.tool?.checkout_action_id).toBeFalsy();
-    }, 10000);
-
-    it('should validate checkout state consistency after adding tool to action', async () => {
-      console.log('🔍 Testing checkout state consistency...');
-      
-      // Create a test tool
-      const tool = await testToolCreator.createMinimalTool();
-      createdTools.push(tool);
-      
-      // Create an action and add the tool to it
-      const actionId = await checkoutStateValidator.createTestActionWithTool(tool.id);
-      expect(actionId).toBeDefined();
-      
-      if (actionId) {
-        createdActions.push(actionId);
-        
-        // Wait a moment for the checkout to be processed
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Validate checkout state consistency
-        const validation = await checkoutStateValidator.validateCheckoutStateConsistency(tool.id, actionId);
-        
-        // Print validation details for debugging
-        console.log('Checkout state validation result:', {
-          isValid: validation.isValid,
-          toolsEndpointStatus: validation.toolsEndpointStatus,
-          actionsEndpointStatus: validation.actionsEndpointStatus,
-          isCheckedOut: validation.isCheckedOut,
-          differences: validation.differences
-        });
-        
-        // The main assertion: checkout state should be consistent
-        expect(validation.isValid).toBe(true);
-        expect(validation.differences).toHaveLength(0);
-        
-        // Verify the bug fix: when tool is checked out, status should be 'checked_out'
-        if (validation.isCheckedOut) {
-          expect(validation.toolsEndpointStatus).toBe('checked_out');
-        }
-      }
-    }, 15000);
-
-    it('should validate consistency across different endpoints', async () => {
-      console.log('🔍 Testing endpoint response consistency...');
-      
-      // Create a test tool
-      const tool = await testToolCreator.createMinimalTool();
-      createdTools.push(tool);
-      
-      // Create an action with the tool
-      const actionId = await checkoutStateValidator.createTestActionWithTool(tool.id);
-      expect(actionId).toBeDefined();
-      
-      if (actionId) {
-        createdActions.push(actionId);
-        
-        // Wait for checkout processing
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Compare responses from both endpoints
-        const comparison = await checkoutStateValidator.compareEndpointResponses(tool.id, actionId);
-        
-        expect(comparison.toolsEndpointTool).toBeDefined();
-        expect(comparison.actionsEndpointTool).toBeDefined();
-        
-        // Print comparison details for debugging
-        console.log('Endpoint comparison result:', {
-          matches: comparison.comparison.matches,
-          differences: comparison.comparison.differences,
-          statusConsistent: comparison.comparison.statusConsistent
-        });
-        
-        // Both endpoints should return consistent data
-        expect(comparison.comparison.matches).toBe(true);
-        expect(comparison.comparison.statusConsistent).toBe(true);
-        expect(comparison.comparison.differences).toHaveLength(0);
-      }
-    }, 15000);
-
-    it('should validate the specific bug fix for status computation', async () => {
-      console.log('🔍 Testing specific bug fix for status computation...');
-      
-      // Create a test tool
-      const tool = await testToolCreator.createMinimalTool();
-      createdTools.push(tool);
-      
-      // Verify initial state
-      let validation = await checkoutStateValidator.validateInitialToolState(tool.id);
-      expect(validation.isValid).toBe(true);
-      expect(validation.tool?.status).toBe('available');
-      expect(validation.tool?.is_checked_out).toBeFalsy();
-      
-      // Add tool to an action (this should check it out)
-      const actionId = await checkoutStateValidator.createTestActionWithTool(tool.id);
-      expect(actionId).toBeDefined();
-      
-      if (actionId) {
-        createdActions.push(actionId);
-        
-        // Wait for checkout processing
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Validate the bug fix: when is_checked_out is true, status should be 'checked_out'
-        validation = await checkoutStateValidator.validateCheckoutStateConsistency(tool.id, actionId);
-        
-        console.log('Bug fix validation:', {
-          isCheckedOut: validation.isCheckedOut,
-          toolsEndpointStatus: validation.toolsEndpointStatus,
-          isValid: validation.isValid,
-          differences: validation.differences
-        });
-        
-        // If the tool is checked out, the status should reflect that
-        if (validation.isCheckedOut) {
-          expect(validation.toolsEndpointStatus).toBe('checked_out');
-          expect(validation.isValid).toBe(true);
-        }
-        
-        // Complete the action to check the tool back in
-        await checkoutStateValidator.cleanupTestAction(actionId);
-        
-        // Wait for checkin processing
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Verify tool is checked back in
-        const finalValidation = await checkoutStateValidator.validateInitialToolState(tool.id);
-        expect(finalValidation.tool?.status).toBe('available');
-        expect(finalValidation.tool?.is_checked_out).toBeFalsy();
-      }
-    }, 20000);
   });
 
   describe('Error Handling and Diagnostics', () => {

@@ -9,7 +9,6 @@ interface CombinedAssetGridProps {
   isAdmin: boolean;
   currentUserId?: string;
   currentUserEmail?: string;
-  userNameMap?: Map<string, string>;
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
@@ -30,7 +29,6 @@ export const CombinedAssetGrid = ({
   isAdmin,
   currentUserId,
   currentUserEmail,
-  userNameMap,
   onView,
   onEdit,
   onRemove,
@@ -50,10 +48,6 @@ export const CombinedAssetGrid = ({
     if (!asset) {
       return <div className="h-40 rounded-md border animate-pulse" style={{ height: '300px' }} />;
     }
-    const resolvedCheckoutName = asset.checked_out_user_id ? userNameMap?.get(asset.checked_out_user_id) : undefined;
-    const checkoutDisplayName = resolvedCheckoutName && resolvedCheckoutName.trim().length > 0
-      ? resolvedCheckoutName
-      : asset.checked_out_to || undefined;
 
     const itemCount = areaItemCounts?.get(asset.id);
 
@@ -66,11 +60,6 @@ export const CombinedAssetGrid = ({
           isAdmin={isAdmin}
           currentUserId={currentUserId}
           currentUserEmail={currentUserEmail}
-          checkoutInfo={asset.type === 'asset' && asset.is_checked_out ? {
-            user_name: checkoutDisplayName || 'Unknown',
-            user_id: asset.checked_out_user_id || '',
-            checkout_date: asset.checked_out_date || undefined
-          } : undefined}
           onView={onView}
           onEdit={onEdit}
           onRemove={onRemove}
@@ -82,7 +71,7 @@ export const CombinedAssetGrid = ({
         />
       </div>
     );
-  }, [assets, canEdit, isAdmin, currentUserId, currentUserEmail, onView, onEdit, onRemove, onAddObservation, onAddQuantity, onUseQuantity, onAskMaxwell, userNameMap, areaItemCounts]);
+  }, [assets, canEdit, isAdmin, currentUserId, currentUserEmail, onView, onEdit, onRemove, onAddObservation, onAddQuantity, onUseQuantity, onAskMaxwell, areaItemCounts]);
 
   if (assets.length === 0) {
     return (

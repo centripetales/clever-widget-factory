@@ -56,16 +56,7 @@ The AWS API Gateway provides these endpoints:
 - `POST /api/semantic-search` - Semantic search using Bedrock embeddings
 
 #### `/api/tools` response
-Tools are served by the `cwf-core-lambda` function which queries the AWS RDS instance. Each tool row now includes checkout metadata resolved server-side (no extra checkout request required):
-- `is_checked_out` (boolean)
-- `checked_out_user_id`
-- `checked_out_to`
-- `checked_out_date`
-- `expected_return_date`
-- `checkout_intended_usage`
-- `checkout_notes`
-
-When a tool has an active checkout (`is_returned = false` in `checkouts`), `status` is automatically overridden to `checked_out`.
+Tools are served by the `cwf-core-lambda` function which queries the AWS RDS instance. A tool's condition is recorded as observations (states) linked to it; there is no checkout/checkin tracking.
 
 ### Database Connection
 - **All environments**: AWS RDS PostgreSQL instance

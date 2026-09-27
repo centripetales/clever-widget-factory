@@ -1,10 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, ExternalLink, Camera, MapPin, Handshake, Network } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, Camera, MapPin, Handshake, Network } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
-import { Link } from "react-router-dom";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import { PrismIcon } from "@/components/icons/PrismIcon";
 
@@ -13,19 +12,12 @@ import { useMemo, memo, useState } from "react";
 import { CombinedAsset } from '@/hooks/useCombinedAssets';
 import { useToast } from "@/hooks/use-toast";
 
-interface CheckoutInfo {
-  user_name: string;
-  user_id: string;
-  checkout_date?: string;
-}
-
 interface CombinedAssetCardProps {
   asset: CombinedAsset;
   canEdit: boolean;
   isAdmin: boolean;
   currentUserId?: string;
   currentUserEmail?: string;
-  checkoutInfo?: CheckoutInfo;
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
@@ -43,8 +35,7 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     prevProps.isAdmin !== nextProps.isAdmin ||
     prevProps.currentUserId !== nextProps.currentUserId ||
     prevProps.currentUserEmail !== nextProps.currentUserEmail ||
-    prevProps.itemCount !== nextProps.itemCount ||
-    prevProps.checkoutInfo?.user_id !== nextProps.checkoutInfo?.user_id) {
+    prevProps.itemCount !== nextProps.itemCount) {
     return false;
   }
 
@@ -108,7 +99,6 @@ export const CombinedAssetCard = memo(({
   isAdmin,
   currentUserId,
   currentUserEmail,
-  checkoutInfo,
   onView,
   onEdit,
   onRemove,
@@ -120,30 +110,8 @@ export const CombinedAssetCard = memo(({
 }: CombinedAssetCardProps) => {
   const { toast } = useToast();
   const [showShareDialog, setShowShareDialog] = useState(false);
-  const checkoutDateDisplay = useMemo(() => {
-    if (!checkoutInfo?.checkout_date) return null;
-    const parsedDate = new Date(checkoutInfo.checkout_date);
-    if (Number.isNaN(parsedDate.getTime())) {
-      return null;
-    }
-    const datePart = parsedDate.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-    const timePart = parsedDate.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-    return `${datePart} at ${timePart}`;
-  }, [checkoutInfo?.checkout_date]);
-
   function getStatusBadge() {
     if (asset.type === 'asset') {
-      if (asset.is_checked_out) {
-        return <Badge variant="outline" className="text-orange-600 border-orange-600">Checked Out</Badge>;
-      }
       if (asset.status === 'removed') {
         return <Badge variant="outline" className="text-gray-600 border-gray-600">Removed</Badge>;
       }
@@ -166,7 +134,7 @@ export const CombinedAssetCard = memo(({
 
   const statusBadge = useMemo(() => {
     return getStatusBadge();
-  }, [asset.type, asset.is_checked_out, asset.status, asset.minimum_quantity, asset.current_quantity]);
+  }, [asset.type, asset.status, asset.minimum_quantity, asset.current_quantity]);
 
   const iconColor = useMemo(() => {
     return getIconColor();
@@ -365,24 +333,6 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            </div>
-          )}
-
-          {checkoutInfo && (
-            <div>
-              <span className="font-medium">Checked out to:</span> {checkoutInfo.user_name}
-              {asset.checkout_action_id && (
-                <Link
-                  to={`/actions?id=${asset.checkout_action_id}`}
-                  className="inline-flex items-center gap-1 ml-2 text-xs text-primary hover:underline"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  View Action <ExternalLink className="h-3 w-3" />
-                </Link>
-              )}
-              <div className="text-xs text-muted-foreground mt-1">
-                {checkoutDateDisplay ? `Since ${checkoutDateDisplay}` : 'Checkout date unavailable'}
-              </div>
             </div>
           )}
 

@@ -88,11 +88,6 @@ export function useCacheInvalidation() {
           queryClient.invalidateQueries({ queryKey: [experiencesQueryKey()[0]] });
           break;
 
-        case 'checkout':
-        case 'checkin':
-          queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
-          break;
-
         case 'state':
           // Clear any active processing indicator for this state
           if (entityId && perspectivesProcessingMap.has(entityId)) {

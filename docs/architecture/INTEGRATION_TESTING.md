@@ -20,7 +20,7 @@ today.** `package.json` only has `dev`, `build`, `preview`, `test`,
   at all. Don't be surprised they don't show up in results.
 - Inside `src/hooks/__tests__/integration/`, tests split into two real
   patterns:
-  - **Mock-based** (e.g. `assetCheckoutValidation.mock.test.tsx`) — actually
+  - **Mock-based** — actually
     run as part of `test:run`, mock `apiService` with `vi.mock`, no network
     calls, no auth needed.
   - **Hardcoded `describe.skip()`** (e.g. `toolCreationIntegration.test.tsx`)
