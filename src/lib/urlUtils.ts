@@ -26,17 +26,6 @@ export function generateObservationUrl(observationId: string, baseUrl?: string):
 
 
 /**
- * Generate a shareable URL for a mission
- * @param missionId - The ID of the mission
- * @param baseUrl - Optional base URL, defaults to window.location.origin
- * @returns The full URL to the mission
- */
-export function generateMissionUrl(missionId: string, baseUrl?: string): string {
-  const base = baseUrl || (typeof window !== 'undefined' ? window.location.origin : '');
-  return `${base}/missions/${missionId}/edit`;
-}
-
-/**
  * Generate a shareable URL for an issue
  * @param issueId - The ID of the issue
  * @param baseUrl - Optional base URL, defaults to window.location.origin

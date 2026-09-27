@@ -1,6 +1,6 @@
 # Core Lambda Deployment Guide
 
-The `cwf-core-lambda` function handles all core API endpoints, including tools, parts, actions, missions, and profiles.
+The `cwf-core-lambda` function handles all core API endpoints, including tools, parts, actions, and profiles.
 
 ---
 

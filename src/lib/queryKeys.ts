@@ -29,11 +29,6 @@ export const proactiveReactiveQueryKey = (start?: string, end?: string) => [
 
 // Issues query keys removed - issue system deprecated
 
-// Missions query keys
-export const missionsQueryKey = () => ['missions'];
-
-export const missionQueryKey = (missionId: string) => ['mission', missionId];
-
 // Parts orders query key
 export const partsOrdersQueryKey = (status?: string) => [
   'parts_orders',

@@ -8,7 +8,6 @@ import {
   completedActionsQueryKey,
   allActionsQueryKey,
   actionQueryKey,
-  missionsQueryKey,
   explorationsQueryKey,
   experiencesQueryKey,
   statesQueryKey,
@@ -74,10 +73,6 @@ export function useCacheInvalidation() {
           break;
 
         case 'issue':
-          break;
-
-        case 'mission':
-          queryClient.invalidateQueries({ queryKey: missionsQueryKey() });
           break;
 
         case 'exploration':

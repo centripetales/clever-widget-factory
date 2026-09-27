@@ -13,9 +13,6 @@ export interface HistoryEntry {
   changed_by_name?: string;
   change_reason: string | null;
   changed_at: string;
-  mission_id?: string;
-  mission_number?: number;
-  mission_title?: string;
   usage_description?: string;
   action_id?: string | null;
   action_title?: string | null;

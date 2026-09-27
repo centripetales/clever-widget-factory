@@ -21,9 +21,6 @@ interface HistoryEntry {
   changed_by_name?: string;
   change_reason: string | null;
   changed_at: string;
-  mission_id?: string;
-  mission_number?: number;
-  mission_title?: string;
   usage_description?: string;
   action_id?: string | null;
   action_title?: string | null;
@@ -173,10 +170,6 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
       default:
         return <Badge variant="outline">Unknown</Badge>;
     }
-  };
-
-  const navigateToMission = (missionId: string) => {
-    window.open(`/missions#${missionId}`, '_blank');
   };
 
   const usageEntries = history.filter(entry => entry.change_type === 'mission_usage' || entry.change_type === 'manual_usage');
@@ -399,19 +392,6 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                                 <div className="text-sm text-muted-foreground mb-2">
                                   {format(new Date(entry.changed_at), 'PPpp')}
                                 </div>
-                                {entry.mission_id && (
-                                  <div className="flex items-center gap-2">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => navigateToMission(entry.mission_id!)}
-                                      className="h-8 text-xs"
-                                    >
-                                      <ExternalLink className="h-3 w-3 mr-1" />
-                                      Project #{entry.mission_number}: {entry.mission_title}
-                                    </Button>
-                                  </div>
-                                )}
                                 {entry.usage_description && (
                                   <div className="text-sm text-muted-foreground mt-1 italic">
                                     "{entry.usage_description}"

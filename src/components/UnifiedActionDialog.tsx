@@ -8,7 +8,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -27,7 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { apiService, getApiData } from '@/lib/apiService';
-import { missionsQueryKey, toolHistoryQueryKey } from '@/lib/queryKeys';
+import { toolHistoryQueryKey } from '@/lib/queryKeys';
 import {
   Paperclip,
   Calendar as CalendarIcon,
@@ -40,7 +39,6 @@ import {
   Trash2,
   CheckCircle,
   Target,
-  Flag,
   Copy,
   Sparkles,
   Search,
@@ -57,7 +55,6 @@ import { stateService } from '@/services/stateService';
 import { AssetSelector } from './AssetSelector';
 import { StockSelector } from './StockSelector';
 import { MultiParticipantSelector } from './MultiParticipantSelector';
-import { MissionSelector } from './MissionSelector';
 import { ShareConfigurationDialog } from './ShareConfigurationDialog';
 import { cn, sanitizeRichText, getActionBorderStyle } from "@/lib/utils";
 import { BaseAction, Profile, ActionCreationContext } from "@/types/actions";
@@ -257,7 +254,6 @@ export function ActionForm({
 
 
   const [formData, setFormData] = useState<Partial<BaseAction>>({});
-  const [missionData, setMissionData] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Existing state (S): a person can describe the situation and attach
   // photos while creating a new action, same as StatesInline offers once an
@@ -281,7 +277,6 @@ export function ActionForm({
   const [activeTab, setActiveTab] = useState<string>('');
   const [isInImplementationMode, setIsInImplementationMode] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [showMissionDialog, setShowMissionDialog] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
   const isShared = action?.shared_with_partners ?? false;
   // Internal Maxwell state — used when props are not provided (page mode)
@@ -528,36 +523,12 @@ export function ActionForm({
     }
   }, [action?.attachments?.length, action?.required_tools, action?.required_stock, isCreating, isFormInitialized, isUploading, isLocalUploading]);
 
-  // Fetch mission data when action has mission_id - use TanStack Query cache
-  const { data: missions = [] } = useQuery({
-    queryKey: missionsQueryKey(),
-    queryFn: async () => {
-      const result = await apiService.get('/missions');
-      return result.data || [];
-    },
-    enabled: !!formData.mission_id && open, // Only fetch when dialog is open and we have a mission_id
-    ...offlineQueryConfig,
-  });
-
-  // Find mission from cached data
-  useEffect(() => {
-    if (formData.mission_id && missions.length > 0) {
-      const mission = missions.find((m: any) => m.id === formData.mission_id);
-      setMissionData(mission || null);
-    } else {
-      setMissionData(null);
-    }
-  }, [formData.mission_id, missions]);
-
   const getDialogTitle = () => {
     // If we have an actionId, we're editing (even if action not in cache yet)
     if (!isCreating && (action || actionId)) {
       return action?.title || 'Edit Action';
     }
 
-    if (context?.type === 'mission') {
-      return 'Create Project Action';
-    }
     if (context?.type === 'asset') {
       return 'Create Asset Action';
     }
@@ -807,8 +778,7 @@ export function ActionForm({
       const response = await aiContentService.generateExpectedState({
         title: formData.title || '',
         description: formData.description || '',
-        asset_name: formData.asset?.name,
-        mission_title: missionData?.title
+        asset_name: formData.asset?.name
       });
 
       if (response?.content?.expected_state) {
@@ -865,7 +835,6 @@ export function ActionForm({
         actionId,
         user.id,
         formData.title || action?.title || 'Unknown Action',
-        action?.mission_id ?? undefined,
         queryClient // Pass queryClient to use cached parts data
       );
     } catch (error: any) {
@@ -1053,7 +1022,6 @@ export function ActionForm({
         required_tools: Array.isArray(formData.required_tools) ? formData.required_tools : [],
         // Always include attachments array, even if empty, so removals are properly saved
         attachments: Array.isArray(formData.attachments) ? formData.attachments : [],
-        mission_id: formData.mission_id || null,
         asset_id: formData.asset_id || null,
         status: actionStatus,
         plan_commitment: formData.plan_commitment || false,
@@ -1199,15 +1167,6 @@ export function ActionForm({
                 </Button>
               </>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowMissionDialog(true)}
-              className={`h-7 w-7 p-0 ${formData.mission_id ? 'bg-primary/10 border-primary/50' : ''}`}
-              title={formData.mission_id ? "Change linked project" : "Link to project"}
-            >
-              <Flag className="h-4 w-4" />
-            </Button>
 
             {!isCreating && action?.id && (
               <Button
@@ -1246,29 +1205,6 @@ export function ActionForm({
             <p className="text-sm text-muted-foreground">
               {formData.issue_reference || `Issue ID: ${formData.linked_issue_id}`}
             </p>
-          </div>
-        )}
-
-        {/* Mission Context Display */}
-        {missionData && (
-          <div className="bg-primary/5 border border-primary/20 p-3 rounded-lg">
-            <div className="flex items-center gap-2 mb-1">
-              <Flag className="h-4 w-4 text-primary" />
-              <h4 className="font-semibold text-sm">Project Context</h4>
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">
-                Project #{missionData.mission_number}: {missionData.title}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {missionData.problem_statement}
-              </p>
-              <div className="flex items-center gap-2 mt-1">
-                <Badge variant="secondary" className="text-xs">
-                  {missionData.status}
-                </Badge>
-              </div>
-            </div>
           </div>
         )}
 
@@ -1655,44 +1591,6 @@ export function ActionForm({
         </div>
       </div>
 
-      {/* Mission Selection Dialog */}
-      <Dialog open={showMissionDialog} onOpenChange={setShowMissionDialog}>
-        <DialogContent className="max-w-md w-full">
-          <DialogHeader>
-            <DialogTitle>Link to Project</DialogTitle>
-            <DialogDescription>
-              Search and select a project to link this action to.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 min-w-0">
-            <MissionSelector
-              selectedMissionId={formData.mission_id}
-              onMissionChange={(missionId) => {
-                setFormData(prev => ({
-                  ...prev,
-                  mission_id: missionId || null,
-                  // Clear other parent relationships when linking to mission
-                  asset_id: missionId ? null : prev.asset_id,
-                }));
-                // Close dialog after selection
-                if (missionId) {
-                  setShowMissionDialog(false);
-                }
-              }}
-              disabled={isSubmitting}
-            />
-          </div>
-          <div className="flex justify-end gap-2 mt-6">
-            <Button
-              variant="outline"
-              onClick={() => setShowMissionDialog(false)}
-            >
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Share Configuration Dialog */}
       {action?.id && (
         <ShareConfigurationDialog
@@ -1713,7 +1611,7 @@ export function ActionForm({
 
 /**
  * UnifiedActionDialog — wraps ActionForm in a Dialog for use as a modal.
- * Kept for backward compatibility with SimpleMissionForm and other callers.
+ * Kept for backward compatibility with existing callers.
  */
 export function UnifiedActionDialog(props: UnifiedActionDialogProps) {
   const { open, onOpenChange } = props;

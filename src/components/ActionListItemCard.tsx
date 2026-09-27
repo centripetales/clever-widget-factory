@@ -174,16 +174,6 @@ export function ActionListItemCard({
           </div>
 
           <div className="flex flex-wrap gap-2 overflow-hidden">
-            {action.mission && (
-              <Badge variant="outline" className="bg-indigo-100 text-indigo-800 max-w-full overflow-hidden">
-                <span className="truncate">
-                  Project #{action.mission.mission_number}: {(action.mission.title?.length ?? 0) > 15 
-                    ? `${action.mission.title?.substring(0, 15)}...` 
-                    : (action.mission.title ?? 'Untitled')}
-                </span>
-              </Badge>
-            )}
-
             {action.assigned_to ? (
               <Badge
                 variant="outline"

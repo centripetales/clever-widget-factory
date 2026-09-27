@@ -467,8 +467,7 @@ const Organization = () => {
               </p>
               <ul className="text-xs text-muted-foreground space-y-1">
                 <li>• View tools and inventory</li>
-                <li>• Check out/in tools</li>
-                <li>• Participate in missions</li>
+                <li>• Participate in actions</li>
                 <li>• Report issues</li>
                 <li>• View own activities</li>
               </ul>
@@ -485,11 +484,9 @@ const Organization = () => {
               </p>
               <ul className="text-xs text-muted-foreground space-y-1">
                 <li>• All User permissions</li>
-                <li>• Create missions and actions</li>
-                <li>• Edit mission details</li>
+                <li>• Create and edit actions</li>
                 <li>• Add/edit tools and inventory (with history tracking)</li>
                 <li>• Manage tool maintenance</li>
-                <li>• Manage mission attachments</li>
                 <li>• Generate reports</li>
               </ul>
             </div>

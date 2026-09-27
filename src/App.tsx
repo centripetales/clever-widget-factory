@@ -33,8 +33,6 @@ import AssetPage from "./pages/AssetPage";
 import AssetDetailsPage from "./pages/AssetDetailsPage";
 import AddObservation from "./pages/AddObservation";
 import ObservationsList from "./pages/ObservationsList";
-import Missions from "./pages/Missions";
-import EditMission from "./pages/EditMission";
 import Actions from "./pages/Actions";
 import ActionPage from "./pages/ActionPage";
 import ExperiencePage from "./pages/ExperiencePage";
@@ -231,26 +229,6 @@ function AppContent() {
             <ProtectedRoute>
               <FeatureGuardRoute featureKey="assets" featureName="Assets">
                 <InventorySummary />
-              </FeatureGuardRoute>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/missions"
-          element={
-            <ProtectedRoute>
-              <FeatureGuardRoute featureKey="missions" featureName="Stargazer Projects">
-                <Missions />
-              </FeatureGuardRoute>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/missions/:missionId/edit"
-          element={
-            <ProtectedRoute>
-              <FeatureGuardRoute featureKey="missions" featureName="Stargazer Projects">
-                <EditMission />
               </FeatureGuardRoute>
             </ProtectedRoute>
           }

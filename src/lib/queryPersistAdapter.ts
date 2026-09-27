@@ -29,7 +29,7 @@ const CACHE_KEY = 'default';
  * IndexedDB-based persister for TanStack Query.
  *
  * This allows queries to be restored from disk so that
- * Assets / Actions / Missions pages can load immediately
+ * Assets / Actions pages can load immediately
  * from the last known data, even after being offline.
  */
 export const queryCachePersister: Persister = {

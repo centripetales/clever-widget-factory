@@ -33,7 +33,6 @@ export interface ExpectedStateRequest {
   title: string;
   description?: string;
   asset_name?: string;
-  mission_title?: string;
 }
 
 export interface ExpectedStateResponse {
@@ -158,8 +157,7 @@ export class AIContentService {
           type: 'expected_state_generation',
           title: request.title,
           description: request.description,
-          asset_name: request.asset_name,
-          mission_title: request.mission_title
+          asset_name: request.asset_name
         }
       });
 
@@ -175,7 +173,7 @@ export class AIContentService {
         confidence: response.data.confidence || 0.8,
         model_used: response.data.model || this.defaultModel,
         generated_at: new Date().toISOString(),
-        context_used: ['title', 'description', 'asset_name', 'mission_title']
+        context_used: ['title', 'description', 'asset_name']
       };
     } catch (error) {
       console.error('Failed to generate expected state:', error);
@@ -416,7 +414,6 @@ Format the response as JSON with the following structure:
     if (request.title) contextParts.push(`Action Title: ${request.title}`);
     if (request.description) contextParts.push(`Current State/Description: ${request.description}`);
     if (request.asset_name) contextParts.push(`Asset: ${request.asset_name}`);
-    if (request.mission_title) contextParts.push(`Project: ${request.mission_title}`);
 
     return `Based on the following action context, describe the expected outcome — where we want to get to when this action is complete. Be specific, measurable, and concise (2-3 sentences).
 

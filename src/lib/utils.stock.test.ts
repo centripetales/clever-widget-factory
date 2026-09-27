@@ -35,7 +35,6 @@ describe('processStockConsumption', () => {
   const mockActionId = 'action-456';
   const mockActionTitle = 'Test Action';
   const mockOrganizationId = 'org-789';
-  const mockMissionId = 'mission-101';
 
   const mockOringPart = {
     id: 'part-oring-1',
@@ -112,7 +111,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        mockMissionId,
         queryClient
       );
 
@@ -190,7 +188,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        mockMissionId,
         queryClient
       );
 
@@ -254,7 +251,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        mockMissionId,
         queryClient
       );
 
@@ -305,7 +301,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        mockMissionId,
         queryClient
       );
 
@@ -325,7 +320,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        undefined,
         queryClient
       );
 
@@ -343,7 +337,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        undefined,
         queryClient
       );
 
@@ -354,7 +347,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        undefined,
         queryClient
       );
 
@@ -387,7 +379,6 @@ describe('processStockConsumption', () => {
           mockActionId,
           mockUserId,
           mockActionTitle,
-          mockMissionId,
           queryClient
         )
       ).rejects.toThrow('no longer exists in inventory');
@@ -420,7 +411,6 @@ describe('processStockConsumption', () => {
           mockActionId,
           mockUserId,
           mockActionTitle,
-          mockMissionId,
           queryClient
         )
       ).rejects.toThrow();
@@ -463,7 +453,6 @@ describe('processStockConsumption', () => {
           mockActionId,
           mockUserId,
           mockActionTitle,
-          mockMissionId,
           queryClient
         )
       ).rejects.toThrow();
@@ -512,7 +501,6 @@ describe('processStockConsumption', () => {
           mockActionId,
           mockUserId,
           mockActionTitle,
-          mockMissionId,
           queryClient
         )
       ).resolves.not.toThrow();
@@ -558,7 +546,6 @@ describe('processStockConsumption', () => {
         mockActionId,
         mockUserId,
         mockActionTitle,
-        mockMissionId,
         queryClient
       );
 
@@ -598,7 +585,6 @@ describe('processStockConsumption', () => {
           mockActionId,
           mockUserId,
           mockActionTitle,
-          mockMissionId,
           queryClient
         )
       ).resolves.not.toThrow();
@@ -660,7 +646,6 @@ describe('processStockConsumption', () => {
         'action-with-oring',
         'user-123',
         'Action using O-ring',
-        undefined,
         queryClient
       );
 
@@ -685,7 +670,6 @@ describe('processStockConsumption', () => {
         'action-id',
         'user-id',
         'Action Title',
-        undefined,
         queryClient
       );
 
@@ -697,7 +681,6 @@ describe('processStockConsumption', () => {
         'action-id',
         'user-id',
         'Action Title',
-        undefined,
         queryClient
       );
 
@@ -757,7 +740,6 @@ describe('processStockConsumption', () => {
           mockAction.id,
           'user-id',
           mockAction.title,
-          undefined,
           queryClient
         );
       }
