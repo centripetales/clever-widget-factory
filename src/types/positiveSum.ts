@@ -33,21 +33,14 @@ export interface MyGoal extends PositiveSumItem {
   options: SuggestedOption[];
 }
 
-export interface MyPolicy extends PositiveSumItem {
-  times_used: number;
-  accepted: number;
-  experiences: PositiveSumItem[];
-}
-
-export interface WaitingItem extends PositiveSumItem {
+export interface ReadyItem extends PositiveSumItem {
   role: 'recipient' | 'implementor';
   value?: number;
 }
 
 export interface MyPositiveSum {
   goals: MyGoal[];
-  policies: MyPolicy[];
-  waiting: WaitingItem[];
+  ready: ReadyItem[];
 }
 
 export interface NewGoal {
@@ -57,16 +50,9 @@ export interface NewGoal {
   attachments?: string[];
 }
 
-export interface NewPolicy {
-  organization_id: string;
-  policy: string;
-  conditions?: string;
-  required_tools?: string[];
-}
-
 export interface NewOption {
   goal_ids: string[];
-  policy_ids?: string[];
+  source_option_ids?: string[];
   initial_state: string;
   policy: string;
   final_state: string;

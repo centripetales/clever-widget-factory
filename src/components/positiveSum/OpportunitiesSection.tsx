@@ -9,11 +9,11 @@ import { useJoinOption, useOpportunities, usePass } from '@/hooks/positiveSum/us
 import type { Opportunity } from '@/types/positiveSum';
 import { SuggestOptionDialog } from './SuggestOptionDialog';
 
-// Goals that need options and options that need people, across the orgs
-// with Positive Sum turned on. Fetched only when asked; refreshed once a day.
+// Desired states that need options and options that need people, in the
+// given orgs. Opening Positive Sum is the ask: the first visit of the day
+// builds that day's short list; later visits show the same list.
 export function OpportunitiesSection({ orgIds }: { orgIds: string[] }) {
-  const [requested, setRequested] = useState(false);
-  const { data: items = [], isFetching } = useOpportunities(requested, orgIds);
+  const { data: items = [], isFetching } = useOpportunities(true, orgIds);
   const [suggesting, setSuggesting] = useState<{ item: Opportunity; change: boolean } | null>(null);
   const join = useJoinOption();
   const pass = usePass();
@@ -29,23 +29,16 @@ export function OpportunitiesSection({ orgIds }: { orgIds: string[] }) {
   };
 
   return (
-    <section className="space-y-4 pt-2 border-t border-border/40">
-      <div className="flex items-center justify-between gap-2 pt-4">
-        <h2 className="text-lg font-semibold text-foreground">Opportunities</h2>
-        {!requested && (
-          <Button variant="outline" size="sm" onClick={() => setRequested(true)}>
-            Show my opportunities
-          </Button>
-        )}
-      </div>
+    <section className="space-y-3">
+      <h2 className="text-lg font-semibold text-foreground">Opportunities</h2>
 
-      {requested && isFetching && (
+      {isFetching && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Finding opportunities...
         </div>
       )}
 
-      {requested && !isFetching && items.length === 0 && (
+      {!isFetching && items.length === 0 && (
         <p className="text-sm text-muted-foreground">Nothing open right now. Check back tomorrow.</p>
       )}
 

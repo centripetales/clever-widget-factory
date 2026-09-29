@@ -3,7 +3,7 @@
 //
 // Vocabulary: goal (recipient's initial + desired state) → option (suggested
 // by implementors) → approval (recipient) → action → experience.
-// Goals, policies and options are all `actions` rows; bookkeeping records
+// Desired states (goals) and options are `actions` rows; bookkeeping records
 // (option context, approvals, passes, daily lists) are JSON states whose
 // state_text starts with STATE_PREFIX so the observations list can hide them.
 
@@ -16,7 +16,7 @@ const STATE_TYPES = {
   OPPORTUNITY_LIST: 'positive_sum.opportunity_list',
 };
 
-// Goals, policies and options not yet chosen stay out of normal action lists,
+// Open desired states and options not yet chosen stay out of normal action lists,
 // which only show not_started / in_progress / blocked.
 const OPEN_STATUS = 'external_proposal';
 
@@ -67,22 +67,22 @@ function sortByValue(options, valueOf) {
 }
 
 // An option needs the implementors' own approval when a recipient built it
-// from someone else's policy (the resource owner hasn't agreed to this case).
+// from someone else's open option (the owner hasn't agreed to this case).
 function needsImplementorApproval(option) {
   return !implementorIds(option).includes(String(option.created_by));
 }
 
 // Association default: auto-approve when the person has a completed,
 // evidenced experience with any similar option. Pilot similarity: the past
-// option shares a required tool or was built from the same policy.
-// past: [{ required_tools, policy_ids, completed, photo_count }]
-function qualifiesForAutoApproval(option, optionPolicyIds, past) {
+// option shares a required tool or was built from the same open option.
+// past: [{ required_tools, source_option_ids, completed, photo_count }]
+function qualifiesForAutoApproval(option, sourceOptionIds, past) {
   const tools = new Set(option.required_tools || []);
-  const policies = new Set(optionPolicyIds || []);
+  const sources = new Set(sourceOptionIds || []);
   return past.some(p =>
     p.completed && p.photo_count > 0 && (
       (p.required_tools || []).some(t => tools.has(t)) ||
-      (p.policy_ids || []).some(id => policies.has(id))
+      (p.source_option_ids || []).some(id => sources.has(id))
     )
   );
 }

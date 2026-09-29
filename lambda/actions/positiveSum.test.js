@@ -88,7 +88,7 @@ describe('approval', () => {
     expect(isApproved(byRecipient, [{ basis: 'implementor' }])).toBe(false);
   });
 
-  it('needs every implementor when built from several owners\' policies', () => {
+  it('needs every implementor when built from several owners\' options', () => {
     const twoOwners = { created_by: 'maria', assigned_to: 'juan', participants: ['lester'] };
     const recipient = { basis: 'recipient', approver: 'maria' };
     expect(isApproved(twoOwners, [recipient, { basis: 'implementor', approver: 'juan' }])).toBe(false);
@@ -101,7 +101,7 @@ describe('approval', () => {
     const option = { required_tools: ['picker'] };
     const evidenced = { completed: true, photo_count: 2 };
     expect(qualifiesForAutoApproval(option, [], [{ ...evidenced, required_tools: ['picker'] }])).toBe(true);
-    expect(qualifiesForAutoApproval(option, ['p1'], [{ ...evidenced, policy_ids: ['p1'] }])).toBe(true);
+    expect(qualifiesForAutoApproval(option, ['o1'], [{ ...evidenced, source_option_ids: ['o1'] }])).toBe(true);
     expect(qualifiesForAutoApproval(option, [], [{ ...evidenced, required_tools: ['auger'] }])).toBe(false);
     expect(qualifiesForAutoApproval(option, [], [{ completed: false, photo_count: 2, required_tools: ['picker'] }])).toBe(false);
     expect(qualifiesForAutoApproval(option, [], [{ completed: true, photo_count: 0, required_tools: ['picker'] }])).toBe(false);

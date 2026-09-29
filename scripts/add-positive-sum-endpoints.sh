@@ -10,11 +10,10 @@ cd "$(dirname "$0")"
 L=cwf-actions-lambda
 
 ./add-api-endpoint.sh /api/positive-sum OPTIONS $L
-for path in goals policies options opportunities mine; do
+for path in goals options opportunities mine; do
   ./add-api-endpoint.sh /api/positive-sum/$path OPTIONS $L
 done
 ./add-api-endpoint.sh /api/positive-sum/goals POST $L
-./add-api-endpoint.sh /api/positive-sum/policies POST $L
 ./add-api-endpoint.sh /api/positive-sum/options POST $L
 ./add-api-endpoint.sh /api/positive-sum/opportunities GET $L
 ./add-api-endpoint.sh /api/positive-sum/mine GET $L

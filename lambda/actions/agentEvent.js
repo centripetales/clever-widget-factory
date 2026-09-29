@@ -73,7 +73,7 @@ function toRequest(event, params) {
       path: '/api/positive-sum/options',
       body: {
         goal_ids: goalIds.length ? goalIds : (session.entityId ? [session.entityId] : []),
-        policy_ids: toList(params.policy_ids),
+        source_option_ids: toList(params.source_option_ids),
         title: params.title,
         initial_state: params.initial_state,
         policy: params.policy,

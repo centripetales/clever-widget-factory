@@ -5,13 +5,12 @@ import type {
   MyPositiveSum,
   NewGoal,
   NewOption,
-  NewPolicy,
   Opportunity,
   PositiveSumItem,
 } from '@/types/positiveSum';
 
 /**
- * My goals (with suggested options), my policies, and what's waiting on me,
+ * My desired states (with suggested options) and what's ready for me,
  * in one org.
  * GET /api/positive-sum/mine?org_id=
  */
@@ -51,9 +50,6 @@ function usePositiveSumMutation<TVars>(request: (vars: TVars) => Promise<{ data?
 
 export const useCreateGoal = () =>
   usePositiveSumMutation((goal: NewGoal) => apiService.post('/positive-sum/goals', goal));
-
-export const useCreatePolicy = () =>
-  usePositiveSumMutation((policy: NewPolicy) => apiService.post('/positive-sum/policies', policy));
 
 export const useCreateOption = () =>
   usePositiveSumMutation((option: NewOption) => apiService.post('/positive-sum/options', option));

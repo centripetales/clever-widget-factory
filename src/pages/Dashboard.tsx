@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
-import { OpportunitiesSection } from '@/components/positiveSum/OpportunitiesSection';
 import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
@@ -324,7 +323,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {positiveSumOrgs.length > 0 && <OpportunitiesSection orgIds={positiveSumOrgs.map(org => org.id)} />}
 
         {disabledItems.length > 0 && (
           <Collapsible

@@ -1,4 +1,4 @@
-// Positive Sum routes (goals, policies, options, approvals, opportunities).
+// Positive Sum routes (desired states/goals, options, approvals, opportunities).
 // Rules live in positiveSumRules.js; this file is data access + HTTP.
 // All SQL here is parameterized.
 const { Client } = require('pg');
@@ -62,7 +62,10 @@ async function loadRecords(client, orgIds) {
     .filter(r => r.data);
   const ofType = type => records.filter(r => r.data.type === type);
   const contexts = {};
-  for (const r of ofType(STATE_TYPES.OPTION_CONTEXT)) contexts[r.data.option_id] = r.data;
+  for (const r of ofType(STATE_TYPES.OPTION_CONTEXT)) {
+    // Options built from other (open) options; early records called these policy_ids.
+    contexts[r.data.option_id] = { ...r.data, source_option_ids: r.data.source_option_ids ?? r.data.policy_ids ?? [] };
+  }
   const approvals = ofType(STATE_TYPES.APPROVAL).map(r => ({
     approver: r.captured_by, option_id: r.data.option_id, goal_id: r.data.goal_id, basis: r.data.basis,
   }));
@@ -140,7 +143,7 @@ async function pastExperiences(client, personId, contexts, approvals) {
   return options.map(o => ({
     id: o.id,
     required_tools: o.required_tools || [],
-    policy_ids: contexts[o.id]?.policy_ids || [],
+    source_option_ids: contexts[o.id]?.source_option_ids || [],
     completed: o.status === 'completed',
     photo_count: photoCount[o.id] || 0,
   }));
@@ -196,77 +199,53 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
     }
 
     // GET /positive-sum/goals/:id/context — what Maxwell needs to shape options:
-    // the goal, options already suggested, and open offers in its org
-    // (information is always free).
+    // the goal, options already suggested for it, and other open options in
+    // its org that could be built on (information is always free).
     if (httpMethod === 'GET' && goalContextRoute) {
       const [goal] = await loadActions(client, [goalContextRoute[1]]);
-      if (!goal || !isGoal(goal)) throw new HttpError(404, 'Goal not found');
+      if (!goal || !isGoal(goal)) throw new HttpError(404, 'Desired state not found');
       requireMember(goal.organization_id);
       const records = await loadRecords(client, [goal.organization_id]);
-      const optionIds = Object.values(records.contexts)
-        .filter(c => (c.goal_ids || []).includes(goal.id)).map(c => c.option_id);
-      const options = await loadActions(client, optionIds);
-      const { rows: offers } = await client.query(
-        `SELECT ${actionColumns('a')}, om.full_name AS created_by_name FROM actions a
-           LEFT JOIN organization_members om
-             ON om.cognito_user_id = a.created_by::text AND om.organization_id = a.organization_id
-          WHERE a.organization_id = $1 AND a.status = $2
-            AND COALESCE(TRIM(a.policy), '') <> '' AND COALESCE(TRIM(a.expected_state), '') = ''
-          ORDER BY a.created_at DESC`,
-        [goal.organization_id, OPEN_STATUS]
-      );
+      const contexts = Object.values(records.contexts);
+      const forGoal = contexts.filter(c => (c.goal_ids || []).includes(goal.id)).map(c => c.option_id);
+      const others = contexts.filter(c => !(c.goal_ids || []).includes(goal.id)).map(c => c.option_id);
+      const options = await loadActions(client, forGoal);
+      const openOptions = (await loadActions(client, others)).filter(o => o.status === OPEN_STATUS);
+      const withCapacity = o => summarize(o, { capacity: records.contexts[o.id]?.capacity });
       return {
         statusCode: 200,
-        data: {
-          goal: summarize(goal),
-          options: options.map(o => summarize(o, { capacity: records.contexts[o.id]?.capacity })),
-          offers: offers.map(o => summarize(o, { created_by_name: o.created_by_name })),
-        },
+        data: { goal: summarize(goal), options: options.map(withCapacity), open_options: openOptions.map(withCapacity) },
       };
-    }
-
-    // POST /positive-sum/policies — an implementor's standing suggestion
-    if (httpMethod === 'POST' && path.endsWith('/positive-sum/policies')) {
-      const { organization_id, title, conditions, policy, required_tools } = body;
-      requireMember(organization_id);
-      if (!policy?.trim()) throw new HttpError(400, 'A policy needs its terms');
-      const created = await insertAction(client, {
-        organization_id, title: titleFrom(title, policy), description: conditions, policy,
-        created_by: userId, assigned_to: userId, required_tools,
-      });
-      queueEmbedding(created);
-      await notify(created);
-      return { statusCode: 201, data: summarize(created) };
     }
 
     // POST /positive-sum/options — shaped in a conversation, then saved
     if (httpMethod === 'POST' && path.endsWith('/positive-sum/options')) {
       const {
-        goal_ids = [], policy_ids = [], title, initial_state, policy, final_state,
+        goal_ids = [], source_option_ids = [], title, initial_state, policy, final_state,
         capacity = 1, required_tools = [], conversation_state_ids = [], parent_option_id = null,
       } = body;
       if (!policy?.trim() || !final_state?.trim()) {
         throw new HttpError(400, 'An option needs a policy and a final state');
       }
       const goals = await loadActions(client, goal_ids);
-      const policies = await loadActions(client, policy_ids);
-      if (goals.length !== goal_ids.length || policies.length !== policy_ids.length) {
-        throw new HttpError(404, 'Goal or policy not found');
+      const sources = await loadActions(client, source_option_ids);
+      if (goals.length !== goal_ids.length || sources.length !== source_option_ids.length) {
+        throw new HttpError(404, 'Desired state or option not found');
       }
       if (goals.some(g => !isGoal(g) || g.status !== OPEN_STATUS)) {
-        throw new HttpError(400, 'Options can only be suggested for open goals');
+        throw new HttpError(400, 'Options can only be suggested for open desired states');
       }
-      const orgIds = [...new Set([...goals, ...policies].map(a => a.organization_id))];
+      const orgIds = [...new Set([...goals, ...sources].map(a => a.organization_id))];
       const organization_id = orgIds[0] || body.organization_id;
-      if (orgIds.length > 1) throw new HttpError(400, 'Goals and policies must be in the same organization');
+      if (orgIds.length > 1) throw new HttpError(400, 'Desired states and options must be in the same organization');
       requireMember(organization_id);
 
-      // Built from published policies → their creators implement it (and must
-      // agree unless the association default applies); otherwise the creator
-      // suggests it themselves. Nobody else can be named — others join
+      // Built from someone's open options → their implementors implement it (and
+      // must agree unless the association default applies); otherwise the
+      // creator suggests it themselves. Nobody else can be named — others join
       // themselves via /join.
-      const implementors = policies.length
-        ? [...new Set(policies.map(p => String(p.created_by)))]
+      const implementors = sources.length
+        ? [...new Set(sources.flatMap(o => implementorIds(o)))]
         : [String(userId)];
       if (implementors.length > capacity) throw new HttpError(400, 'More implementors than capacity');
 
@@ -278,18 +257,18 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       const links = [
         { entity_type: 'action', entity_id: option.id },
         ...goal_ids.map(id => ({ entity_type: 'action', entity_id: id })),
-        ...policy_ids.map(id => ({ entity_type: 'action', entity_id: id })),
+        ...source_option_ids.map(id => ({ entity_type: 'action', entity_id: id })),
         ...(parent_option_id ? [{ entity_type: 'action', entity_id: parent_option_id }] : []),
         ...conversation_state_ids.map(id => ({ entity_type: 'state', entity_id: id })),
       ];
       await insertRecord(client, {
         organizationId: organization_id, userId, type: STATE_TYPES.OPTION_CONTEXT,
-        payload: { option_id: option.id, goal_ids, policy_ids, parent_option_id, capacity, conversation_state_ids },
+        payload: { option_id: option.id, goal_ids, source_option_ids, parent_option_id, capacity, conversation_state_ids },
         links,
       });
       queueEmbedding(option);
       await notify(option);
-      return { statusCode: 201, data: summarize(option, { capacity, goal_ids, policy_ids, parent_option_id }) };
+      return { statusCode: 201, data: summarize(option, { capacity, goal_ids, source_option_ids, parent_option_id }) };
     }
 
     if (optionRoute && httpMethod === 'POST') {
@@ -354,7 +333,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           await add('recipient');
           if (needsImplementorApproval(option) && !isApproved(option, existing)) {
             const past = await pastExperiences(client, String(userId), records.contexts, records.approvals);
-            if (qualifiesForAutoApproval(option, context.policy_ids, past)) {
+            if (qualifiesForAutoApproval(option, context.source_option_ids, past)) {
               const evidence = past.find(p => p.completed && p.photo_count > 0);
               await add('association_default', { rule: 'similar_evidenced_experience', evidence_id: evidence?.id || null });
             }
@@ -439,10 +418,10 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       };
     }
 
-    // GET /positive-sum/mine — my goals, my policies, waiting on me
+    // GET /positive-sum/mine — my desired states (goals) and what's ready for me
     if (httpMethod === 'GET' && path.endsWith('/positive-sum/mine')) {
       const orgIds = scopedOrgIds(query.org_id);
-      if (orgIds.length === 0) return { statusCode: 200, data: { goals: [], policies: [], waiting: [] } };
+      if (orgIds.length === 0) return { statusCode: 200, data: { goals: [], ready: [] } };
       const records = await loadRecords(client, orgIds);
       const { options, index } = await implementorsIndex(client, records.contexts);
       const recipientApprovals = records.approvals.filter(a => a.basis === 'recipient');
@@ -463,15 +442,6 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           value: valueOf(o), approved_by_me: approvedBy(o.id, String(userId), 'recipient'),
         })),
       }));
-      const policies = mineRows.filter(a => (a.policy || '').trim() && !(a.expected_state || '').trim()).map(p => {
-        const uses = options.filter(o => (records.contexts[o.id].policy_ids || []).includes(p.id));
-        return summarize(p, {
-          times_used: uses.length,
-          accepted: uses.filter(o => recipientApprovals.some(a => a.option_id === o.id)).length,
-          experiences: uses.filter(o => o.status === 'completed').map(o => summarize(o)),
-        });
-      });
-
       const openGoalIds = new Set(goals.filter(g => g.status === OPEN_STATUS).map(g => g.id));
       const toApproveAsRecipient = options.filter(o => o.status === OPEN_STATUS &&
         (records.contexts[o.id].goal_ids || []).some(id => openGoalIds.has(id)) &&
@@ -481,11 +451,11 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         recipientApprovals.some(a => a.option_id === o.id) &&
         !approvedBy(o.id, String(userId), 'implementor') &&
         !records.approvals.some(a => a.option_id === o.id && a.basis === 'association_default'));
-      const waiting = [
+      const ready = [
         ...sortByValue(toApproveAsRecipient, valueOf).map(o => summarize(o, { role: 'recipient', value: valueOf(o) })),
         ...toApproveAsImplementor.map(o => summarize(o, { role: 'implementor' })),
       ];
-      return { statusCode: 200, data: { goals, policies, waiting } };
+      return { statusCode: 200, data: { goals, ready } };
     }
 
     throw new HttpError(404, 'Not found');

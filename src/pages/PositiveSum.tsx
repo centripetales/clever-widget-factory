@@ -7,7 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useApproveOption, useMyPositiveSum } from '@/hooks/positiveSum/usePositiveSum';
 import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 import { GoalForm } from '@/components/positiveSum/GoalForm';
-import { OfferForm } from '@/components/positiveSum/OfferForm';
+import { OpportunitiesSection } from '@/components/positiveSum/OpportunitiesSection';
 import { StatusBadge } from '@/components/positiveSum/StatusBadge';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
 import type { PositiveSumItem } from '@/types/positiveSum';
@@ -22,10 +22,10 @@ function ItemText({ item, finalLabel = 'Done when' }: { item: PositiveSumItem; f
   );
 }
 
-// "Helped others N times" — sentences, not scores or rankings.
+// Sentences, not scores or rankings.
 function helpedText(value?: number) {
   if (!value) return null;
-  return `Offers accepted by others: ${value}`;
+  return `Their options were accepted by others ${value} ${value === 1 ? 'time' : 'times'}`;
 }
 
 export default function PositiveSum() {
@@ -61,7 +61,7 @@ export default function PositiveSum() {
         <div>
           <h1 className="text-2xl font-bold">Positive Sum</h1>
           <p className="text-sm text-muted-foreground">
-            {org ? `${org.name} · ` : ''}Share what you can offer, ask for what you want to change.
+            {org ? `${org.name} · ` : ''}Ask for what you'd like to be different, and help others with theirs.
           </p>
         </div>
       </div>
@@ -75,7 +75,6 @@ export default function PositiveSum() {
       )}
 
       {org && (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">What would you like to be different?</CardTitle>
@@ -83,14 +82,6 @@ export default function PositiveSum() {
           </CardHeader>
           <CardContent><GoalForm organizationId={org.id} /></CardContent>
         </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Offer something</CardTitle>
-            <CardDescription>Something you can share or do, on your terms.</CardDescription>
-          </CardHeader>
-          <CardContent><OfferForm organizationId={org.id} /></CardContent>
-        </Card>
-      </div>
       )}
 
       {isLoading && (
@@ -102,16 +93,16 @@ export default function PositiveSum() {
       {data && (
         <>
           <section className="space-y-3">
-            <h2 className="text-lg font-semibold">Waiting on me</h2>
-            {data.waiting.length === 0 && <p className="text-sm text-muted-foreground">Nothing waiting on you.</p>}
-            {data.waiting.map(item => (
+            <h2 className="text-lg font-semibold">Ready for you</h2>
+            {data.ready.length === 0 && <p className="text-sm text-muted-foreground">Nothing right now.</p>}
+            {data.ready.map(item => (
               <Card key={`${item.role}-${item.id}`}>
                 <CardContent className="pt-4 space-y-2">
                   <p className="font-medium break-words">{item.title}</p>
                   <ItemText item={item} />
                   <p className="text-xs text-muted-foreground">
                     {item.role === 'implementor'
-                      ? 'Someone wants to use your offer this way.'
+                      ? 'Someone would like to build on your option this way.'
                       : helpedText(item.value) ?? 'Suggested for something you would like to be different.'}
                   </p>
                   <Button size="sm" disabled={approve.isPending} onClick={() => approveOption(item.id)}>
@@ -121,6 +112,8 @@ export default function PositiveSum() {
               </Card>
             ))}
           </section>
+
+          <OpportunitiesSection orgIds={[org!.id]} />
 
           <section className="space-y-3">
             <h2 className="text-lg font-semibold">What I'd like to be different</h2>
@@ -166,35 +159,6 @@ export default function PositiveSum() {
                       </div>
                     </div>
                   ))}
-                </CardContent>
-              </Card>
-            ))}
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold">My offers</h2>
-            {data.policies.length === 0 && <p className="text-sm text-muted-foreground">No offers yet.</p>}
-            {data.policies.map(policy => (
-              <Card key={policy.id}>
-                <CardContent className="pt-4 space-y-2">
-                  <p className="font-medium break-words">{policy.title}</p>
-                  <ItemText item={policy} />
-                  <p className="text-xs text-muted-foreground">
-                    Used {policy.times_used} {policy.times_used === 1 ? 'time' : 'times'}
-                    {policy.accepted > 0 && `, accepted ${policy.accepted}`}
-                  </p>
-                  {policy.experiences.length > 0 && (
-                    <ul className="text-sm list-disc pl-5 space-y-1">
-                      {policy.experiences.map(e => (
-                        <li key={e.id}>
-                          <button className="text-left underline-offset-2 hover:underline"
-                            onClick={() => navigate(`/actions/${e.id}`)}>
-                            {e.title}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </CardContent>
               </Card>
             ))}
