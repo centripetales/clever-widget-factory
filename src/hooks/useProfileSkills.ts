@@ -31,6 +31,8 @@ export interface ProfileSkill {
   ai_interpretation: AIInterpretation | null;
   axes: ProfileAxis[];
   active: boolean;
+  // 'claimed' = self-described (e.g. from a Positive Sum conversation).
+  source?: 'claimed';
   created_at: string;
 }
 

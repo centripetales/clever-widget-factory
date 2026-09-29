@@ -78,11 +78,23 @@ replaced by capabilities + open options), *board*/*post*.
 
 ## 2. Decided, to build next
 
-### 2.1 Positive Sum page as a conversation
-Replace the page's form with a copyable AI prompt (the person's own Gemini,
-Claude or ChatGPT) that holds the discussion and returns JSON to paste back,
-with a preview before saving (see §3.4). Maxwell stays for "Plan with
-Maxwell" on a desired state.
+### 2.1 Positive Sum page as a conversation (branch `positive-sum-conversation`)
+- The page's main path is a **copyable prompt** for the person's own AI
+  (Gemini, ChatGPT, Claude). The AI presents the mission and vision (stubbed
+  until policies hold them), what's expected of members, then asks about
+  their **capabilities** — **human capital** (skills, experience) and
+  **assets** they want to track — and what they'd like to be different, and
+  discusses today's opportunities (a snapshot in the prompt). It returns JSON
+  (`src/lib/positiveSumConversation.ts`) that the person pastes back, reviews
+  and saves. The form stays under "or type it yourself".
+- Desired states → Positive Sum goals in the page's org. Human capital →
+  profile skills (narrative only, `source: 'claimed'` — describing a
+  capability is not a commitment; we collect, we don't judge). Assets →
+  tools or stock in the person's own org. The API client can target an org
+  per request (`X-Organization-Id`, validated by the authorizer).
+- **Tool availability** is derived: a tool is *in use* while an in-progress
+  action (any org) requires it; the first observation on an action with a
+  required tool starts it. No checkout links, nothing stored on the tool.
 
 ### 2.2 Policies
 - `policy` table gains `organization_id` (always an org). A **Policy tile**

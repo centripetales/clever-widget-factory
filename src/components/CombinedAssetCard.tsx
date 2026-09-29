@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, Camera, MapPin, Handshake, Network } from "lucide-react";
+import { Link } from "react-router-dom";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { getThumbnailUrl } from '@/lib/imageUtils';
@@ -61,7 +62,8 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     current_quantity: prevAsset.current_quantity !== nextAsset.current_quantity,
     accountable_person_name: prevAsset.accountable_person_name !== nextAsset.accountable_person_name,
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
-    updated_at: prevAsset.updated_at !== nextAsset.updated_at
+    updated_at: prevAsset.updated_at !== nextAsset.updated_at,
+    in_use_action_id: prevAsset.in_use_action_id !== nextAsset.in_use_action_id
   };
 
   const hasKeyChanges = Object.values(keyChanges).some(Boolean);
@@ -333,6 +335,22 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+            </div>
+          )}
+
+          {asset.type === 'asset' && asset.in_use_action_id && (
+            <div className="text-xs">
+              <span className="font-medium">In use</span>
+              {' · '}
+              <Link
+                to={`/actions/${asset.in_use_action_id}`}
+                className="text-primary hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {asset.in_use_action_title}
+              </Link>
+              {[asset.in_use_org_name, asset.in_use_by].filter(Boolean).map(part => ` · ${part}`).join('')}
+              {asset.in_use_since && ` · since ${new Date(asset.in_use_since).toLocaleDateString()}`}
             </div>
           )}
 

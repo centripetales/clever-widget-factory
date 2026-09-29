@@ -741,10 +741,15 @@ async function handleApproveProfileSkill(event, organizationId) {
   }
 
   const body = JSON.parse(event.body || '{}');
-  const { narrative, ai_interpretation, axes } = body;
+  const { narrative, ai_interpretation, axes, source } = body;
 
   if (!narrative || typeof narrative !== 'string' || !narrative.trim()) {
     return error('narrative is required and must be a non-empty string', 400);
+  }
+  // 'claimed' = self-described (e.g. from a Positive Sum conversation), as
+  // opposed to anything demonstrated later.
+  if (source !== undefined && source !== 'claimed') {
+    return error("source must be 'claimed' when provided", 400);
   }
 
   // Build profile skill JSON (Req 1.2: preserve original narrative, Req 1.8: ai_interpretation can be null)
@@ -757,6 +762,7 @@ async function handleApproveProfileSkill(event, organizationId) {
       progression_history: []
     })),
     active: true, // Req 5.2: default to active
+    ...(source ? { source } : {}),
     created_at: new Date().toISOString()
   };
 

@@ -716,23 +716,27 @@ async function createState(event, authContext, headers) {
 
     await client.query('COMMIT');
 
-    // Positive Sum: an option's action starts at its first observation.
+    // An action starts at its first observation when it uses a tool (so the
+    // tool shows as in use) or came from a Positive Sum option.
     const linkedActionIds = links.filter(link => link.entity_type === 'action').map(link => link.entity_id);
     if (linkedActionIds.length > 0) {
       try {
         await client.query(
           `UPDATE actions a SET status = 'in_progress', updated_at = NOW()
             WHERE a.id = ANY($1::uuid[]) AND a.status = 'not_started'
-              AND EXISTS (
-                SELECT 1 FROM state_links cl JOIN states c ON c.id = cl.state_id
-                 WHERE cl.entity_type = 'action' AND cl.entity_id = a.id
-                   AND c.state_text LIKE '{"type":"positive_sum.option_context"%'
-                   AND c.state_text LIKE '%"option_id":"' || a.id::text || '"%'
+              AND (
+                COALESCE(cardinality(a.required_tools), 0) > 0
+                OR EXISTS (
+                  SELECT 1 FROM state_links cl JOIN states c ON c.id = cl.state_id
+                   WHERE cl.entity_type = 'action' AND cl.entity_id = a.id
+                     AND c.state_text LIKE '{"type":"positive_sum.option_context"%'
+                     AND c.state_text LIKE '%"option_id":"' || a.id::text || '"%'
+                )
               )`,
           [linkedActionIds]
         );
       } catch (startErr) {
-        console.error('[STATES] Failed to start Positive Sum action:', startErr.message);
+        console.error('[STATES] Failed to start action at first observation:', startErr.message);
       }
     }
 

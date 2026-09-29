@@ -432,9 +432,31 @@ exports.handler = async (event) => {
                 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com/'
               )
             ELSE tools.image_url 
-            END as image_url
+            END as image_url,
+            in_use.action_id AS in_use_action_id, in_use.title AS in_use_action_title,
+            in_use.org_name AS in_use_org_name, in_use.by_name AS in_use_by, in_use.since AS in_use_since
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
+          -- In use: the most recent in-progress action (any org) requiring this tool.
+          -- Derived on read; nothing is stored on the tool.
+          LEFT JOIN (
+            SELECT DISTINCT ON (u.tool_id)
+              u.tool_id, a.id AS action_id, a.title, o.name AS org_name, om_use.full_name AS by_name,
+              COALESCE(first_obs.at, a.updated_at) AS since
+            FROM actions a
+            CROSS JOIN LATERAL unnest(a.required_tools) AS u(tool_id)
+            JOIN organizations o ON o.id = a.organization_id
+            LEFT JOIN organization_members om_use
+              ON om_use.cognito_user_id = a.assigned_to::text AND om_use.organization_id = a.organization_id
+            LEFT JOIN LATERAL (
+              SELECT MIN(s_obs.captured_at) AS at
+                FROM state_links sl_obs JOIN states s_obs ON s_obs.id = sl_obs.state_id
+               WHERE sl_obs.entity_type = 'action' AND sl_obs.entity_id = a.id
+                 AND (s_obs.state_text IS NULL OR s_obs.state_text NOT LIKE '{"type":"positive_sum.%')
+            ) first_obs ON true
+            WHERE a.status = 'in_progress'
+            ORDER BY u.tool_id, a.updated_at DESC
+          ) in_use ON in_use.tool_id = tools.id::text
           WHERE tools.id = '${escapeLiteral(toolId)}' ${orgCondition}
         ) result;`;
         
@@ -528,9 +550,31 @@ exports.handler = async (event) => {
             END as image_url,
             tool_gps.gps_latitude, tool_gps.gps_longitude,
             CASE WHEN tools.organization_id::text != '${escapeLiteral(organizationId)}' THEN true ELSE false END as is_shared_inbound,
-            COALESCE(tool_share_out.is_shared_outbound, false) as is_shared_outbound
+            COALESCE(tool_share_out.is_shared_outbound, false) as is_shared_outbound,
+            in_use.action_id AS in_use_action_id, in_use.title AS in_use_action_title,
+            in_use.org_name AS in_use_org_name, in_use.by_name AS in_use_by, in_use.since AS in_use_since
           FROM tools
           LEFT JOIN tools parent_tool ON tools.parent_structure_id = parent_tool.id
+          -- In use: the most recent in-progress action (any org) requiring this tool.
+          -- Derived on read; nothing is stored on the tool.
+          LEFT JOIN (
+            SELECT DISTINCT ON (u.tool_id)
+              u.tool_id, a.id AS action_id, a.title, o.name AS org_name, om_use.full_name AS by_name,
+              COALESCE(first_obs.at, a.updated_at) AS since
+            FROM actions a
+            CROSS JOIN LATERAL unnest(a.required_tools) AS u(tool_id)
+            JOIN organizations o ON o.id = a.organization_id
+            LEFT JOIN organization_members om_use
+              ON om_use.cognito_user_id = a.assigned_to::text AND om_use.organization_id = a.organization_id
+            LEFT JOIN LATERAL (
+              SELECT MIN(s_obs.captured_at) AS at
+                FROM state_links sl_obs JOIN states s_obs ON s_obs.id = sl_obs.state_id
+               WHERE sl_obs.entity_type = 'action' AND sl_obs.entity_id = a.id
+                 AND (s_obs.state_text IS NULL OR s_obs.state_text NOT LIKE '{"type":"positive_sum.%')
+            ) first_obs ON true
+            WHERE a.status = 'in_progress'
+            ORDER BY u.tool_id, a.updated_at DESC
+          ) in_use ON in_use.tool_id = tools.id::text
           LEFT JOIN LATERAL (
             SELECT pme_sub.gps_latitude, pme_sub.gps_longitude, s_sub.captured_at as sort_time
             FROM state_links sl_sub

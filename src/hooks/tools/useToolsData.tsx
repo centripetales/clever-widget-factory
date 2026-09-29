@@ -32,6 +32,12 @@ export interface Tool {
   // Sharing fields
   organization_id?: string;
   is_shared_inbound?: boolean;
+  // In use: derived from the most recent in-progress action requiring the tool
+  in_use_action_id?: string | null;
+  in_use_action_title?: string | null;
+  in_use_org_name?: string | null;
+  in_use_by?: string | null;
+  in_use_since?: string | null;
   is_shared_outbound?: boolean;
 }
 

@@ -154,7 +154,7 @@ async function getIdToken(): Promise<string | null> {
  */
 async function apiRequest<T = any>(
   endpoint: string,
-  options: RequestInit & { optimisticId?: string } = {},
+  options: RequestInit & { optimisticId?: string; organizationId?: string } = {},
   _isRetry: boolean = false
 ): Promise<T> {
   // Handle absolute URLs
@@ -211,8 +211,12 @@ async function apiRequest<T = any>(
   }
 
   // Add X-Organization-Id header if an active org is set
-  // Callers can opt out by passing skipOrgHeader: true in options
-  if (activeOrganizationId && !(options as any)?.skipOrgHeader) {
+  // Callers can opt out by passing skipOrgHeader: true in options, or target a
+  // specific org for this one request with organizationId (the authorizer only
+  // honours orgs the person belongs to).
+  if (options.organizationId) {
+    (headers as Record<string, string>)['X-Organization-Id'] = options.organizationId;
+  } else if (activeOrganizationId && !(options as any)?.skipOrgHeader) {
     (headers as Record<string, string>)['X-Organization-Id'] = activeOrganizationId;
   } else if (activeOrganizationId && (options as any)?.skipOrgHeader) {
     // skipped
@@ -492,7 +496,7 @@ export const apiService = {
    * POST request
    * @param optimisticId - Optional temp ID for optimistic updates (will replace temp item with real data)
    */
-  async post<T = any>(endpoint: string, body?: any, options?: RequestInit & { optimisticId?: string }): Promise<T> {
+  async post<T = any>(endpoint: string, body?: any, options?: RequestInit & { optimisticId?: string; organizationId?: string }): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'POST',
