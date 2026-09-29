@@ -15,6 +15,8 @@ AGENT_ID=CNV04Q1OAZ
 LAMBDA=cwf-actions-lambda
 SCHEMA="$(cd "$(dirname "$0")/.." && pwd)/lambda/actions/positive-sum-openapi.json"
 LAMBDA_ARN="arn:aws:lambda:$REGION:$ACCOUNT:function:$LAMBDA"
+# --api-schema as JSON ({"payload": "<schema text>"}); shorthand can't carry raw JSON.
+API_SCHEMA=$(python3 -c 'import sys,json; print(json.dumps({"payload": json.dumps(json.load(open(sys.argv[1])))}))' "$SCHEMA")
 
 echo "Previous versions: production=$(aws bedrock-agent get-agent-alias --agent-id $AGENT_ID --agent-alias-id EOLN5DJPW4 --region $REGION --query 'agentAlias.routingConfiguration[0].agentVersion' --output text), sonnet-deep=$(aws bedrock-agent get-agent-alias --agent-id $AGENT_ID --agent-alias-id XVS45ZMCA6 --region $REGION --query 'agentAlias.routingConfiguration[0].agentVersion' --output text)"
 
@@ -28,13 +30,13 @@ EXISTING=$(aws bedrock-agent list-agent-action-groups --agent-id $AGENT_ID --age
 if [ -z "$EXISTING" ]; then
   aws bedrock-agent create-agent-action-group --agent-id $AGENT_ID --agent-version DRAFT \
     --action-group-name PositiveSum --action-group-executor lambda=$LAMBDA_ARN \
-    --api-schema "payload=$(cat "$SCHEMA" | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin)))')" \
+    --api-schema "$API_SCHEMA" \
     --description "Shape and save options for Positive Sum goals" --region $REGION >/dev/null
   echo "Created PositiveSum action group"
 else
   aws bedrock-agent update-agent-action-group --agent-id $AGENT_ID --agent-version DRAFT --action-group-id $EXISTING \
     --action-group-name PositiveSum --action-group-executor lambda=$LAMBDA_ARN \
-    --api-schema "payload=$(cat "$SCHEMA" | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin)))')" \
+    --api-schema "$API_SCHEMA" \
     --description "Shape and save options for Positive Sum goals" --region $REGION >/dev/null
   echo "Updated PositiveSum action group"
 fi
