@@ -49,7 +49,10 @@ doc's status line says which.
   roadmap; superseded by the `states`/`state_photos`/`state_links` schema
 - [`PARTNER_AGENCY_RBAC.md`](design/PARTNER_AGENCY_RBAC.md) — authorizer
   code is live, database tables were never created; currently a no-op
+- [`POSITIVE_SUM.md`](design/POSITIVE_SUM.md) — Positive Sum network:
+  vocabulary, principles, what PR #166 built, and the decided next pieces
 - [`TODO-POLICY-ORG-ID.md`](design/TODO-POLICY-ORG-ID.md) — still open
+  (planned as part of Positive Sum policies, see POSITIVE_SUM.md §2.2)
 - [`TODO-UNIFIED-IMAGES-TABLE.md`](design/TODO-UNIFIED-IMAGES-TABLE.md) —
   still open
 
