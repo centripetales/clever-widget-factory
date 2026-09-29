@@ -6,27 +6,19 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useImageUpload } from '@/hooks/useImageUpload';
-import { useOrganization } from '@/hooks/useOrganization';
-import { useAssociations } from '@/hooks/positiveSum/useAssociations';
 import { useCreateGoal } from '@/hooks/positiveSum/usePositiveSum';
-import { OrgPicker } from './OrgPicker';
 
 // "What would you like to be different?" — stored as a goal: both how things
 // are now and how the person would like them to be, stated explicitly.
-export function GoalForm() {
-  const { organization } = useOrganization();
-  const { associations } = useAssociations();
-  // Post to the association by default so other members can see it.
-  const defaultOrgId = associations[0]?.id ?? organization?.id ?? '';
+export function GoalForm({ organizationId }: { organizationId: string }) {
   const { toast } = useToast();
   const { uploadImages, isUploading } = useImageUpload();
   const createGoal = useCreateGoal();
-  const [orgId, setOrgId] = useState('');
   const [initialState, setInitialState] = useState('');
   const [desiredState, setDesiredState] = useState('');
   const [files, setFiles] = useState<File[]>([]);
 
-  const canSubmit = initialState.trim() && desiredState.trim() && (orgId || defaultOrgId);
+  const canSubmit = initialState.trim() && desiredState.trim();
   const busy = isUploading || createGoal.isPending;
 
   const submit = async () => {
@@ -34,7 +26,7 @@ export function GoalForm() {
       const uploaded = files.length ? await uploadImages(files) : [];
       const attachments = (Array.isArray(uploaded) ? uploaded : [uploaded]).map(r => r.url);
       await createGoal.mutateAsync({
-        organization_id: orgId || defaultOrgId,
+        organization_id: organizationId,
         initial_state: initialState.trim(),
         desired_state: desiredState.trim(),
         attachments,
@@ -78,7 +70,6 @@ export function GoalForm() {
           onChange={e => setDesiredState(e.target.value)}
         />
       </div>
-      <OrgPicker value={orgId || defaultOrgId} onChange={setOrgId} />
       <Button className="w-full" disabled={!canSubmit || busy} onClick={submit}>
         {busy ? 'Saving...' : 'Ask the network'}
       </Button>

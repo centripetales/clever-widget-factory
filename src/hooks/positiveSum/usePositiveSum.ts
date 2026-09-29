@@ -11,26 +11,29 @@ import type {
 } from '@/types/positiveSum';
 
 /**
- * My goals (with suggested options), my policies, and what's waiting on me.
- * GET /api/positive-sum/mine
+ * My goals (with suggested options), my policies, and what's waiting on me,
+ * in one org.
+ * GET /api/positive-sum/mine?org_id=
  */
-export function useMyPositiveSum() {
+export function useMyPositiveSum(orgId: string | undefined) {
   return useQuery<MyPositiveSum>({
-    queryKey: positiveSumMineQueryKey(),
-    queryFn: async () => getApiData(await apiService.get('/positive-sum/mine')),
+    queryKey: positiveSumMineQueryKey(orgId),
+    queryFn: async () => getApiData(await apiService.get(`/positive-sum/mine?org_id=${orgId}`)),
+    enabled: !!orgId,
   });
 }
 
 /**
- * Today's opportunities. Only fetched when the person asks (enabled = true);
+ * Today's opportunities in the given orgs. Only fetched when the person asks;
  * the server refreshes the list at most once a day.
  * GET /api/positive-sum/opportunities
  */
-export function useOpportunities(enabled: boolean) {
+export function useOpportunities(enabled: boolean, orgIds: string[]) {
   return useQuery<Opportunity[]>({
-    queryKey: positiveSumOpportunitiesQueryKey(),
-    queryFn: async () => getApiData(await apiService.get('/positive-sum/opportunities')) ?? [],
-    enabled,
+    queryKey: positiveSumOpportunitiesQueryKey(orgIds),
+    queryFn: async () =>
+      getApiData(await apiService.get(`/positive-sum/opportunities?org_ids=${orgIds.join(',')}`)) ?? [],
+    enabled: enabled && orgIds.length > 0,
   });
 }
 

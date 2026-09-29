@@ -1,5 +1,16 @@
 import { useOrganization } from './useOrganization';
 
+// Features an org only has when its settings list them explicitly. Other
+// features are on for orgs that have no enabled_features list at all.
+const OPT_IN_FEATURES = ['positive_sum'];
+
+/** Whether a given org (not just the active one) has a feature turned on. */
+export function orgHasFeature(org: { settings?: { enabled_features?: string[] } | null } | null | undefined, featureKey: string): boolean {
+  const enabled = org?.settings?.enabled_features;
+  if (!enabled) return !OPT_IN_FEATURES.includes(featureKey);
+  return enabled.includes(featureKey);
+}
+
 export function useFeatureFlag() {
   const { organization, loading } = useOrganization();
 
@@ -16,9 +27,7 @@ export function useFeatureFlag() {
 
     // While organization is loading, hide non-core features to prevent flash
     if (!organization) return false;
-    if (!enabledFeatures) return true;
-    
-    return enabledFeatures.includes(featureKey);
+    return orgHasFeature(organization, featureKey);
   };
 
   return {

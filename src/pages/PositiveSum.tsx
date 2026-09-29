@@ -1,11 +1,11 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { errorMessage } from '@/lib/apiService';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { useApproveOption, useMyPositiveSum } from '@/hooks/positiveSum/usePositiveSum';
-import { useAssociations } from '@/hooks/positiveSum/useAssociations';
+import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 import { GoalForm } from '@/components/positiveSum/GoalForm';
 import { OfferForm } from '@/components/positiveSum/OfferForm';
 import { StatusBadge } from '@/components/positiveSum/StatusBadge';
@@ -31,9 +31,11 @@ function helpedText(value?: number) {
 export default function PositiveSum() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { data, isLoading } = useMyPositiveSum();
+  const { orgId } = useParams<{ orgId: string }>();
+  // Positive Sum works within one org at a time: the one this page is for.
+  const org = usePositiveSumOrgs().find(o => o.id === orgId);
+  const { data, isLoading } = useMyPositiveSum(org?.id);
   const approve = useApproveOption();
-  const { isAssociationMember } = useAssociations();
 
   const approveOption = async (optionId: string, goalId?: string) => {
     try {
@@ -58,34 +60,38 @@ export default function PositiveSum() {
         </div>
         <div>
           <h1 className="text-2xl font-bold">Positive Sum</h1>
-          <p className="text-sm text-muted-foreground">Share what you can offer, ask for what you want to change.</p>
+          <p className="text-sm text-muted-foreground">
+            {org ? `${org.name} · ` : ''}Share what you can offer, ask for what you want to change.
+          </p>
         </div>
       </div>
 
-      {!isAssociationMember && (
+      {!org && (
         <Card>
           <CardContent className="pt-4 text-sm text-muted-foreground">
-            Positive Sum is for members of an association. Ask to join one to share and see opportunities.
+            Positive Sum isn't turned on for this organization, or you're not a member of it.
           </CardContent>
         </Card>
       )}
 
+      {org && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">What would you like to be different?</CardTitle>
             <CardDescription>How things are now, and how you'd like them to be.</CardDescription>
           </CardHeader>
-          <CardContent><GoalForm /></CardContent>
+          <CardContent><GoalForm organizationId={org.id} /></CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Offer something</CardTitle>
             <CardDescription>Something you can share or do, on your terms.</CardDescription>
           </CardHeader>
-          <CardContent><OfferForm /></CardContent>
+          <CardContent><OfferForm organizationId={org.id} /></CardContent>
         </Card>
       </div>
+      )}
 
       {isLoading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

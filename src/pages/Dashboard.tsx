@@ -6,7 +6,7 @@ import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarC
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
 import { OpportunitiesSection } from '@/components/positiveSum/OpportunitiesSection';
-import { useAssociations } from '@/hooks/positiveSum/useAssociations';
+import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
@@ -36,7 +36,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
 
   const { isFeatureEnabled } = useFeatureFlag();
-  const { isAssociationMember } = useAssociations();
+  const positiveSumOrgs = usePositiveSumOrgs();
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [lockedFeatureName, setLockedFeatureName] = useState('');
   const [disabledSectionOpen, setDisabledSectionOpen] = useState(false);
@@ -132,13 +132,6 @@ export default function Dashboard() {
       featureKey: "actions"
     },
     {
-      title: "Positive Sum",
-      description: "Share what you can offer, ask for what you want to change.",
-      icon: PositiveSumIcon,
-      path: "/positive-sum",
-      color: "bg-orange-500"
-    },
-    {
       title: "Sari Sari Store",
       description: "Chat with AI assistant for farm produce",
       icon: Bot,
@@ -194,14 +187,27 @@ export default function Dashboard() {
       if (item.path === "/dashboard/analytics") return isLeadership;
       if (item.path === "/organization") return isLeadership;
       if (item.path === "/admin/organizations") return isSuperAdmin;
-      if (item.path === "/positive-sum") return isAssociationMember;
       return true; // Show all other items (Assets, Actions, Explorations, etc.)
     })();
     
     return shouldShow;
   });
 
-  const enabledItems = visibleItems.filter(item => isFeatureEnabled(item.featureKey));
+  // One Positive Sum card per org that has it turned on, after Actions —
+  // each opens Positive Sum in that org.
+  const positiveSumItems = positiveSumOrgs.map(org => ({
+    title: "Positive Sum",
+    description: org.name,
+    icon: PositiveSumIcon,
+    path: `/positive-sum/${org.id}`,
+    color: "bg-orange-500",
+    featureKey: undefined as string | undefined,
+  }));
+  const featureItems = visibleItems.filter(item => isFeatureEnabled(item.featureKey));
+  const afterActions = featureItems.findIndex(item => item.path === "/actions") + 1;
+  const enabledItems = afterActions > 0
+    ? [...featureItems.slice(0, afterActions), ...positiveSumItems, ...featureItems.slice(afterActions)]
+    : [...featureItems, ...positiveSumItems];
   const disabledItems = visibleItems.filter(item => !isFeatureEnabled(item.featureKey));
 
   return (
@@ -318,7 +324,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {isAssociationMember && <OpportunitiesSection />}
+        {positiveSumOrgs.length > 0 && <OpportunitiesSection orgIds={positiveSumOrgs.map(org => org.id)} />}
 
         {disabledItems.length > 0 && (
           <Collapsible

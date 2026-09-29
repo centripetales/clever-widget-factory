@@ -9,11 +9,11 @@ import { useJoinOption, useOpportunities, usePass } from '@/hooks/positiveSum/us
 import type { Opportunity } from '@/types/positiveSum';
 import { SuggestOptionDialog } from './SuggestOptionDialog';
 
-// Goals that need options and options that need people, across every org
-// the person belongs to. Fetched only when asked; refreshed once a day.
-export function OpportunitiesSection() {
+// Goals that need options and options that need people, across the orgs
+// with Positive Sum turned on. Fetched only when asked; refreshed once a day.
+export function OpportunitiesSection({ orgIds }: { orgIds: string[] }) {
   const [requested, setRequested] = useState(false);
-  const { data: items = [], isFetching } = useOpportunities(requested);
+  const { data: items = [], isFetching } = useOpportunities(requested, orgIds);
   const [suggesting, setSuggesting] = useState<{ item: Opportunity; change: boolean } | null>(null);
   const join = useJoinOption();
   const pass = usePass();

@@ -169,6 +169,13 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
     if (!orgId || !memberOrgIds.includes(orgId)) throw new HttpError(403, 'Not a member of that organization');
   };
   const body = JSON.parse(event.body || '{}');
+  const query = event.queryStringParameters || {};
+  // Limit reads to the requested orgs (e.g. the Positive Sum page's org, or the
+  // orgs with Positive Sum turned on); only ever orgs the person belongs to.
+  const scopedOrgIds = raw => {
+    const requested = String(raw || '').split(',').map(id => id.trim()).filter(Boolean);
+    return requested.length ? memberOrgIds.filter(id => requested.includes(id)) : memberOrgIds;
+  };
   const optionRoute = path.match(/\/positive-sum\/options\/([0-9a-f-]{36})\/(join|approve|pass)$/);
   const goalContextRoute = path.match(/\/positive-sum\/goals\/([0-9a-f-]{36})\/context$/);
 
@@ -376,8 +383,9 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
 
     // GET /positive-sum/opportunities — today's list (refreshes once a day)
     if (httpMethod === 'GET' && path.endsWith('/positive-sum/opportunities')) {
-      if (memberOrgIds.length === 0) return { statusCode: 200, data: [] };
-      const records = await loadRecords(client, memberOrgIds);
+      const orgIds = scopedOrgIds(query.org_ids);
+      if (orgIds.length === 0) return { statusCode: 200, data: [] };
+      const records = await loadRecords(client, orgIds);
       const today = dayKey();
       const passed = new Set(records.passes.filter(p => p.person === String(userId)).map(p => p.item_id));
 
@@ -388,7 +396,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
              ON om.cognito_user_id = a.created_by::text AND om.organization_id = a.organization_id
           WHERE a.organization_id = ANY($1::uuid[]) AND a.status IN ($2, 'not_started')
           ORDER BY a.created_at DESC`,
-        [memberOrgIds, OPEN_STATUS]
+        [orgIds, OPEN_STATUS]
       );
       const myGoalIds = new Set(open.filter(a => isGoal(a) && String(a.created_by) === String(userId)).map(a => a.id));
       const available = open.filter(a => {
@@ -411,7 +419,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       if (!todays || todays.item_ids.length === 0) {
         ids = available.slice(0, DAILY_LIST_SIZE).map(a => a.id);
         await insertRecord(client, {
-          organizationId: authContext.organization_id || memberOrgIds[0], userId,
+          organizationId: orgIds[0], userId,
           type: STATE_TYPES.OPPORTUNITY_LIST, payload: { date: today, item_ids: ids }, links: [],
         });
       }
@@ -433,8 +441,9 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
 
     // GET /positive-sum/mine — my goals, my policies, waiting on me
     if (httpMethod === 'GET' && path.endsWith('/positive-sum/mine')) {
-      if (memberOrgIds.length === 0) return { statusCode: 200, data: { goals: [], policies: [], waiting: [] } };
-      const records = await loadRecords(client, memberOrgIds);
+      const orgIds = scopedOrgIds(query.org_id);
+      if (orgIds.length === 0) return { statusCode: 200, data: { goals: [], policies: [], waiting: [] } };
+      const records = await loadRecords(client, orgIds);
       const { options, index } = await implementorsIndex(client, records.contexts);
       const recipientApprovals = records.approvals.filter(a => a.basis === 'recipient');
       const valueOf = o => optionValue(o, recipientApprovals, index);
@@ -443,7 +452,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         `SELECT ${ACTION_COLUMNS} FROM actions
           WHERE organization_id = ANY($1::uuid[]) AND created_by = $2 AND NOT (id = ANY($3::uuid[]))
           ORDER BY created_at DESC`,
-        [memberOrgIds, userId, Object.keys(records.contexts)]
+        [orgIds, userId, Object.keys(records.contexts)]
       );
       const optionsFor = goalId => options.filter(o => (records.contexts[o.id].goal_ids || []).includes(goalId));
       const approvedBy = (optionId, person, basis) =>

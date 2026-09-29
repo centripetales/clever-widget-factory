@@ -245,7 +245,7 @@ function AppContent() {
           }
         />
         <Route
-          path="/positive-sum"
+          path="/positive-sum/:orgId"
           element={
             <ProtectedRoute>
               <PositiveSum />

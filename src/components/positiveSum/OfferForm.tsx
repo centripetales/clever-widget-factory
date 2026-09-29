@@ -5,31 +5,23 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { AssetSelector } from '@/components/AssetSelector';
 import { useToast } from '@/hooks/use-toast';
-import { useOrganization } from '@/hooks/useOrganization';
-import { useAssociations } from '@/hooks/positiveSum/useAssociations';
 import { useCreatePolicy } from '@/hooks/positiveSum/usePositiveSum';
-import { OrgPicker } from './OrgPicker';
 
 // An offer is a policy: a standing suggestion others can build options from.
 // It describes how it's done, not what anyone gets in return.
-export function OfferForm() {
-  const { organization } = useOrganization();
-  const { associations } = useAssociations();
-  // Post to the association by default so other members can see it.
-  const defaultOrgId = associations[0]?.id ?? organization?.id ?? '';
+export function OfferForm({ organizationId }: { organizationId: string }) {
   const { toast } = useToast();
   const createPolicy = useCreatePolicy();
-  const [orgId, setOrgId] = useState('');
   const [policy, setPolicy] = useState('');
   const [conditions, setConditions] = useState('');
   const [tools, setTools] = useState<{ required_tools: string[] }>({ required_tools: [] });
 
-  const canSubmit = policy.trim() && (orgId || defaultOrgId);
+  const canSubmit = policy.trim();
 
   const submit = async () => {
     try {
       await createPolicy.mutateAsync({
-        organization_id: orgId || defaultOrgId,
+        organization_id: organizationId,
         policy: policy.trim(),
         conditions: conditions.trim() || undefined,
         required_tools: tools.required_tools,
@@ -67,7 +59,6 @@ export function OfferForm() {
         <Label>Tool (optional)</Label>
         <AssetSelector formData={tools} setFormData={setTools} />
       </div>
-      <OrgPicker value={orgId || defaultOrgId} onChange={setOrgId} />
       <Button className="w-full" disabled={!canSubmit || createPolicy.isPending} onClick={submit}>
         {createPolicy.isPending ? 'Saving...' : 'Share offer'}
       </Button>
