@@ -24,3 +24,8 @@ for verb in join approve pass; do
   ./add-api-endpoint.sh "/api/positive-sum/options/{id}/$verb" OPTIONS $L
   ./add-api-endpoint.sh "/api/positive-sum/options/{id}/$verb" POST $L
 done
+
+./add-api-endpoint.sh /api/positive-sum/actions OPTIONS $L
+./add-api-endpoint.sh "/api/positive-sum/actions/{id}" OPTIONS $L
+./add-api-endpoint.sh "/api/positive-sum/actions/{id}/evidence" OPTIONS $L
+./add-api-endpoint.sh "/api/positive-sum/actions/{id}/evidence" GET $L

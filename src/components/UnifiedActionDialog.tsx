@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
-import { apiService, getApiData } from '@/lib/apiService';
+import { apiService, getApiData, errorMessage } from '@/lib/apiService';
 import { toolHistoryQueryKey } from '@/lib/queryKeys';
 import {
   Paperclip,
@@ -50,6 +50,8 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import TiptapEditor from './TiptapEditor';
 import { StatesInline } from './StatesInline';
+import { EvidenceChecklist } from '@/components/positiveSum/EvidenceChecklist';
+import { useActionEvidence } from '@/hooks/positiveSum/usePositiveSum';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { stateService } from '@/services/stateService';
 import { AssetSelector } from './AssetSelector';
@@ -245,7 +247,8 @@ export function ActionForm({
       console.error('Error saving action:', error);
       toast({
         title: "Error",
-        description: "Failed to save action",
+        // Server messages explain what's needed (e.g. evidence photos before completing).
+        description: errorMessage(error, "Failed to save action"),
         variant: "destructive"
       });
     },
@@ -290,6 +293,7 @@ export function ActionForm({
   const { data: actionStates } = useStates(organizationId ?? '', { entity_type: 'action', entity_id: action?.id });
   const [searchParams] = useSearchParams();
   const autoOpenedMaxwellRef = useRef(false);
+  const { data: evidence } = useActionEvidence(action?.id);
 
   const handleMaxwellOpenChange = (open: boolean) => {
     if (onMaxwellOpenChange) {
@@ -1439,16 +1443,22 @@ export function ActionForm({
 
           <TabsContent value="observations" className="mt-4">
             {action?.id ? (
+              <div className="space-y-3">
+              {evidence && <EvidenceChecklist evidence={evidence} />}
               <StatesInline
                 entity_type="action"
                 entity_id={action.id}
                 source_organization_id={(action as any).organization_id}
+                extraLinks={evidence?.is_option
+                  ? evidence.required_tools.map(t => ({ entity_type: 'tool' as const, entity_id: t.id }))
+                  : []}
                 toolId={
                   (Array.isArray(formData.required_tools) ? formData.required_tools[0] : undefined) ||
                   formData.asset_id ||
                   undefined
                 }
               />
+              </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">

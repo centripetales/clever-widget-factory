@@ -537,6 +537,15 @@ export const apiService = {
  * Helper to get data from API response
  * Most API responses follow the pattern: { data: ... }
  */
+/**
+ * Human-readable message from a thrown API error (a plain ApiError object,
+ * not an Error instance) or any other thrown value.
+ */
+export function errorMessage(error: unknown, fallback = 'Something went wrong'): string {
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message ? message : fallback;
+}
+
 export function getApiData<T>(response: { data?: T }): T {
   return response.data as T;
 }

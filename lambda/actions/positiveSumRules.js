@@ -99,6 +99,21 @@ function isApproved(option, approvals) {
   return implementorIds(option).every(id => agreed.has(id));
 }
 
+// Association default evidence for completing an action that came from an
+// option: at least one photo of the result, and for each required tool a
+// photo linked to that tool (the return photo).
+// observations: [{ photos, tool_ids }] — observations (with photo counts)
+// linked to the action. Returns what's still missing.
+function missingEvidence(requiredTools, observations) {
+  const withPhotos = observations.filter(o => o.photos > 0);
+  const missing = [];
+  if (withPhotos.length === 0) missing.push({ kind: 'result_photo' });
+  for (const toolId of requiredTools || []) {
+    if (!withPhotos.some(o => (o.tool_ids || []).includes(toolId))) missing.push({ kind: 'return_photo', tool_id: toolId });
+  }
+  return missing;
+}
+
 // "Once a day" follows the farm's calendar day.
 function dayKey(date = new Date()) {
   return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
@@ -118,5 +133,6 @@ module.exports = {
   needsImplementorApproval,
   qualifiesForAutoApproval,
   isApproved,
+  missingEvidence,
   dayKey,
 };

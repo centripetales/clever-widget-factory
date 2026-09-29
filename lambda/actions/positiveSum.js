@@ -16,6 +16,7 @@ const {
   needsImplementorApproval,
   qualifiesForAutoApproval,
   isApproved,
+  missingEvidence,
   dayKey,
 } = require('./positiveSumRules');
 
@@ -146,6 +147,30 @@ async function pastExperiences(client, personId, contexts, approvals) {
   }));
 }
 
+// Evidence for an action that came from an option: what's still missing
+// before it can be completed, with tool names for the checklist.
+async function evidenceFor(client, action, records) {
+  if (!records.contexts[action.id]) return { is_option: false, required_tools: [], missing: [] };
+  const { rows: observations } = await client.query(
+    `SELECT (SELECT COUNT(*) FROM state_photos sp WHERE sp.state_id = s.id)::int AS photos,
+            ARRAY(SELECT l.entity_id::text FROM state_links l WHERE l.state_id = s.id AND l.entity_type = 'tool') AS tool_ids
+       FROM states s JOIN state_links sl ON sl.state_id = s.id
+      WHERE sl.entity_type = 'action' AND sl.entity_id = $1
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE $2)`,
+    [action.id, `${STATE_PREFIX}%`]
+  );
+  const toolIds = action.required_tools || [];
+  const { rows: tools } = toolIds.length
+    ? await client.query(`SELECT id::text, name FROM tools WHERE id::text = ANY($1::text[])`, [toolIds])
+    : { rows: [] };
+  const toolName = Object.fromEntries(tools.map(t => [t.id, t.name]));
+  return {
+    is_option: true,
+    required_tools: toolIds.map(id => ({ id, name: toolName[id] || 'tool' })),
+    missing: missingEvidence(toolIds, observations).map(m => ({ ...m, tool_name: m.tool_id ? toolName[m.tool_id] : undefined })),
+  };
+}
+
 function isGoal(a) {
   return !!(a.expected_state && a.expected_state.trim()) && !(a.policy && a.policy.trim());
 }
@@ -171,6 +196,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
   const body = JSON.parse(event.body || '{}');
   const optionRoute = path.match(/\/positive-sum\/options\/([0-9a-f-]{36})\/(join|approve|pass)$/);
   const goalContextRoute = path.match(/\/positive-sum\/goals\/([0-9a-f-]{36})\/context$/);
+  const evidenceRoute = path.match(/\/positive-sum\/actions\/([0-9a-f-]{36})\/evidence$/);
 
   return withClient(dbConfig, async client => {
     // POST /positive-sum/goals — recipient states initial and desired state
@@ -216,6 +242,15 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           offers: offers.map(o => summarize(o, { created_by_name: o.created_by_name })),
         },
       };
+    }
+
+    // GET /positive-sum/actions/:id/evidence — photos still needed to complete
+    if (httpMethod === 'GET' && evidenceRoute) {
+      const [action] = await loadActions(client, [evidenceRoute[1]]);
+      if (!action) throw new HttpError(404, 'Action not found');
+      requireMember(action.organization_id);
+      const records = await loadRecords(client, [action.organization_id]);
+      return { statusCode: 200, data: await evidenceFor(client, action, records) };
     }
 
     // POST /positive-sum/policies — an implementor's standing suggestion
@@ -483,6 +518,20 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
   });
 }
 
+// Completion check for the actions lambda: null when the action may be
+// completed, otherwise a message naming the missing photos.
+async function completionBlocker(dbConfig, actionId) {
+  return withClient(dbConfig, async client => {
+    const [action] = await loadActions(client, [actionId]);
+    if (!action) return null;
+    const records = await loadRecords(client, [action.organization_id]);
+    const { missing } = await evidenceFor(client, action, records);
+    if (missing.length === 0) return null;
+    const needs = missing.map(m => m.kind === 'result_photo' ? 'a photo of the result' : `a return photo of the ${m.tool_name || 'tool'}`);
+    return `Before completing, add ${needs.join(' and ')}.`;
+  });
+}
+
 // When an option's action completes, the goals it served are done.
 async function completeGoalsForOption(dbConfig, optionId, organizationId) {
   return withClient(dbConfig, async client => {
@@ -497,4 +546,4 @@ async function completeGoalsForOption(dbConfig, optionId, organizationId) {
   });
 }
 
-module.exports = { handlePositiveSum, completeGoalsForOption, HttpError };
+module.exports = { handlePositiveSum, completeGoalsForOption, completionBlocker, HttpError };

@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { errorMessage } from '@/lib/apiService';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -39,7 +40,7 @@ export default function PositiveSum() {
       await approve.mutateAsync({ optionId, goalId });
       toast({ title: 'Approved' });
     } catch (error) {
-      toast({ title: 'Could not approve', description: String(error), variant: 'destructive' });
+      toast({ title: 'Could not approve', description: errorMessage(error), variant: 'destructive' });
     }
   };
 

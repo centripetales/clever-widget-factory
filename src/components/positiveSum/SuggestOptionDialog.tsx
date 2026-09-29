@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { errorMessage } from '@/lib/apiService';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -56,7 +57,7 @@ export function SuggestOptionDialog({
       onOpenChange(false);
       toast({ title: parentOptionId ? 'Change suggested' : 'Option suggested' });
     } catch (error) {
-      toast({ title: 'Could not save option', description: String(error), variant: 'destructive' });
+      toast({ title: 'Could not save option', description: errorMessage(error), variant: 'destructive' });
     }
   };
 

@@ -16,6 +16,7 @@ export const sharedToolsQueryKey = (orgId?: string) => ['shared_tools', orgId];
 // Positive Sum query keys
 export const positiveSumMineQueryKey = () => ['positive_sum', 'mine'];
 export const positiveSumOpportunitiesQueryKey = () => ['positive_sum', 'opportunities'];
+export const positiveSumEvidenceQueryKey = (actionId?: string) => ['positive_sum', 'evidence', actionId];
 
 // Checkouts query key removed — checkout system deprecated
 

@@ -3,7 +3,7 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { getAuthorizerContext, buildOrganizationFilter } = require('/opt/nodejs/authorizerContext');
 const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
-const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
+const { handlePositiveSum, completeGoalsForOption, completionBlocker } = require('./positiveSum');
 const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
@@ -419,6 +419,14 @@ exports.handler = async (event) => {
       }
       
       const currentAction = currentActionResult[0];
+
+      // Actions from Positive Sum options need their evidence photos first.
+      if (actionData.status === 'completed' && currentAction.status !== 'completed') {
+        const blocker = await completionBlocker(dbConfig, actionId);
+        if (blocker) {
+          return { statusCode: 400, headers, body: JSON.stringify({ error: blocker }) };
+        }
+      }
       
       // Execute dynamic sharing updates if shared_with_partners is specified
       if (shared_with_partners !== undefined) {

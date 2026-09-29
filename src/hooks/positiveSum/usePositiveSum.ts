@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiService, getApiData } from '@/lib/apiService';
-import { positiveSumMineQueryKey, positiveSumOpportunitiesQueryKey } from '@/lib/queryKeys';
+import { positiveSumEvidenceQueryKey, positiveSumMineQueryKey, positiveSumOpportunitiesQueryKey } from '@/lib/queryKeys';
 import type {
+  ActionEvidence,
   MyPositiveSum,
   NewGoal,
   NewOption,
@@ -31,6 +32,19 @@ export function useOpportunities(enabled: boolean) {
     queryKey: positiveSumOpportunitiesQueryKey(),
     queryFn: async () => getApiData(await apiService.get('/positive-sum/opportunities')) ?? [],
     enabled,
+  });
+}
+
+/**
+ * Photos still needed before an action that came from an option can be
+ * completed (association default evidence).
+ * GET /api/positive-sum/actions/:id/evidence
+ */
+export function useActionEvidence(actionId: string | undefined) {
+  return useQuery<ActionEvidence>({
+    queryKey: positiveSumEvidenceQueryKey(actionId),
+    queryFn: async () => getApiData(await apiService.get(`/positive-sum/actions/${actionId}/evidence`)),
+    enabled: !!actionId,
   });
 }
 

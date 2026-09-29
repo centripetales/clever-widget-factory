@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/apiService';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -43,7 +44,7 @@ export function GoalForm() {
       setFiles([]);
       toast({ title: 'Shared with the network', description: 'Others can now suggest options.' });
     } catch (error) {
-      toast({ title: 'Could not share', description: String(error), variant: 'destructive' });
+      toast({ title: 'Could not share', description: errorMessage(error), variant: 'destructive' });
     }
   };
 

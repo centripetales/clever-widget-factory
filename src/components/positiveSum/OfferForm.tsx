@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/apiService';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -38,7 +39,7 @@ export function OfferForm() {
       setTools({ required_tools: [] });
       toast({ title: 'Offer shared' });
     } catch (error) {
-      toast({ title: 'Could not save offer', description: String(error), variant: 'destructive' });
+      toast({ title: 'Could not save offer', description: errorMessage(error), variant: 'destructive' });
     }
   };
 

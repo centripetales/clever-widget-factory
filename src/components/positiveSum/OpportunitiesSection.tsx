@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/apiService';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +24,7 @@ export function OpportunitiesSection() {
       await fn();
       toast({ title: label });
     } catch (error) {
-      toast({ title: 'Something went wrong', description: String(error), variant: 'destructive' });
+      toast({ title: 'Something went wrong', description: errorMessage(error), variant: 'destructive' });
     }
   };
 
