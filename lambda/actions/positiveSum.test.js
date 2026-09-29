@@ -10,7 +10,6 @@ const {
   needsImplementorApproval,
   qualifiesForAutoApproval,
   isApproved,
-  missingEvidence,
   dayKey,
 } = require('./positiveSumRules');
 
@@ -141,25 +140,5 @@ describe('Maxwell agent adapter', () => {
 
   it('rejects unknown operations', () => {
     expect(toRequest({ apiPath: '/deleteEverything' }, {})).toBeNull();
-  });
-});
-
-describe('evidence to complete', () => {
-  it('needs a result photo', () => {
-    expect(missingEvidence([], [])).toEqual([{ kind: 'result_photo' }]);
-    expect(missingEvidence([], [{ photos: 0, tool_ids: [] }])).toEqual([{ kind: 'result_photo' }]);
-    expect(missingEvidence([], [{ photos: 1, tool_ids: [] }])).toEqual([]);
-  });
-
-  it('needs a return photo linked to each borrowed tool', () => {
-    const result = { photos: 2, tool_ids: [] };
-    expect(missingEvidence(['picker', 'crate'], [result])).toEqual([
-      { kind: 'return_photo', tool_id: 'picker' },
-      { kind: 'return_photo', tool_id: 'crate' },
-    ]);
-    expect(missingEvidence(['picker'], [result, { photos: 1, tool_ids: ['picker'] }])).toEqual([]);
-    expect(missingEvidence(['picker'], [{ photos: 0, tool_ids: ['picker'] }])).toEqual([
-      { kind: 'result_photo' }, { kind: 'return_photo', tool_id: 'picker' },
-    ]);
   });
 });

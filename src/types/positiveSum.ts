@@ -50,12 +50,6 @@ export interface MyPositiveSum {
   waiting: WaitingItem[];
 }
 
-export interface ActionEvidence {
-  is_option: boolean;
-  required_tools: { id: string; name: string }[];
-  missing: { kind: 'result_photo' | 'return_photo'; tool_id?: string; tool_name?: string }[];
-}
-
 export interface NewGoal {
   organization_id: string;
   initial_state: string;

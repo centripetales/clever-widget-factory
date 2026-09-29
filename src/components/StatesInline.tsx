@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useToast } from '@/hooks/use-toast';
@@ -52,13 +51,10 @@ interface StatesInlineProps {
    * (src/pages/AddObservation.tsx) which always knows its own linked tool.
    */
   toolId?: string | null;
-  /** Additional entities new observations link to — e.g. a borrowed tool, so the photo lands in its history too. */
-  extraLinks?: { entity_type: 'tool'; entity_id: string }[];
 }
 
-export function StatesInline({ entity_type, entity_id, source_organization_id, toolId, extraLinks = [] }: StatesInlineProps) {
+export function StatesInline({ entity_type, entity_id, source_organization_id, toolId }: StatesInlineProps) {
   const { toast } = useToast();
-  const queryClient = useQueryClient();
   const { uploadFiles } = useFileUpload();
   const { user } = useAuth();
   const { organization } = useOrganization();
@@ -490,12 +486,10 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
           links: [{
             entity_type,
             entity_id
-          }, ...extraLinks]
+          }]
         };
 
         const savedObservation = await createState(data);
-        // Positive Sum evidence checklists read these observations.
-        queryClient.invalidateQueries({ queryKey: ['positive_sum', 'evidence'] });
 
         if (savedObservation?.id) {
           try {
