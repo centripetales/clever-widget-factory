@@ -124,6 +124,7 @@ const SKILL_COMPLIANCE = loadPrompt('skill-compliance-estimator.txt');
 const SKILL_FINANCIAL = loadPrompt('skill-financial-analysis.txt');
 const SKILL_ASSET_CREATION = loadPrompt('asset-creation.txt');
 const SKILL_RIGHTS = loadPrompt('rights.txt');
+const SKILL_POSITIVE_SUM = loadPrompt('positive-sum.txt');
 
 // --- Keyword detection for skill routing ---
 const COMPLIANCE_KEYWORDS = /\b(compliance|bir|sec|denr|arta|nwrb|sss|pagibig|philhealth|government|gov|permit|filing|regulation|regulatory)\b/i;
@@ -135,9 +136,11 @@ const RIGHTS_KEYWORDS = /\b(rights?|file a|report|complain(t|ts)?|violat(e|ed|io
  * Detect skill based on message intent. Returns the skill prompt to prepend.
  * Priority order matters — more specific skills take precedence.
  */
-function detectSkill(message, hasImage) {
+function detectSkill(message, hasImage, sessionAttributes = {}) {
   // Asset creation: image + creation intent
   if (hasImage && SKILL_ASSET_CREATION && ASSET_CREATION_KEYWORDS.test(message)) return SKILL_ASSET_CREATION;
+  // Positive Sum: the panel is open on a goal — help shape options for it
+  if (SKILL_POSITIVE_SUM && sessionAttributes.positiveSumRole === 'goal') return SKILL_POSITIVE_SUM;
   // Compliance: government/regulatory questions
   if (SKILL_COMPLIANCE && COMPLIANCE_KEYWORDS.test(message)) return SKILL_COMPLIANCE;
   // Rights: consumer/labor rights
@@ -151,8 +154,8 @@ function detectSkill(message, hasImage) {
 /**
  * Build the instruction prefix for the message.
  */
-function buildInstructionPrefix(message, hasImage) {
-  const skill = detectSkill(message, hasImage);
+function buildInstructionPrefix(message, hasImage, sessionAttributes) {
+  const skill = detectSkill(message, hasImage, sessionAttributes);
   return `${skill}\n\n`;
 }
 
@@ -294,7 +297,7 @@ exports.handler = async (event) => {
   }
 
   // Build enhanced message with instruction prefix and entity context
-  let enhancedMessage = buildInstructionPrefix(message, hasImage);
+  let enhancedMessage = buildInstructionPrefix(message, hasImage, sessionAttributes);
   const isAssetCreation = hasImage && ASSET_CREATION_KEYWORDS.test(message);
 
   // Skip entity context for asset creation — the user is creating a new item,

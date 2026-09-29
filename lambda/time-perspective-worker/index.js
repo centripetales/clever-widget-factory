@@ -166,6 +166,7 @@ async function fetchDayObservations(client, organizationId, date) {
       AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
       AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
       AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"maxwell_interaction"%')
+      AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"positive_sum.%')
     ORDER BY s.captured_at
   `;
   const result = await client.query(sql);

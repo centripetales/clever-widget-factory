@@ -157,6 +157,9 @@ exports.handler = async (event) => {
     policy: normalizeContextText(sessionAttributes.policy),
     implementation: normalizeContextText(sessionAttributes.implementation, 999999),
     organization_id: authContext.organization_id,
+    // Server-set identity for tools that act on the user's behalf (after the
+    // client's attributes, so it can't be overridden).
+    cognito_user_id: authContext.cognito_user_id || '',
     current_date: new Date().toISOString().split('T')[0],
   };
 

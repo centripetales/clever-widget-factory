@@ -3,6 +3,8 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { getAuthorizerContext, buildOrganizationFilter } = require('/opt/nodejs/authorizerContext');
 const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
+const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
+const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
@@ -45,8 +47,42 @@ async function queryJSON(sql) {
   }
 }
 
+// Positive Sum helpers shared by the web routes and the Maxwell action group.
+function queueActionEmbedding(action) {
+  const embeddingSource = composeActionPolicySource(action);
+  if (!embeddingSource || !embeddingSource.trim()) return;
+  sqs.send(new SendMessageCommand({
+    QueueUrl: EMBEDDINGS_QUEUE_URL,
+    MessageBody: JSON.stringify({
+      entity_type: 'action_policy',
+      entity_id: action.id,
+      embedding_source: embeddingSource,
+      organization_id: action.organization_id
+    })
+  })).catch(error => console.error('Failed to queue action_policy embedding:', error));
+}
+
+function notifyActionChanged(action, event) {
+  return broadcastInvalidation({
+    entityType: 'action',
+    entityId: action.id,
+    mutationType: 'updated',
+    organizationId: action.organization_id,
+    excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+  }).catch(err => console.error('[ACTIONS] Broadcast failed:', err.message));
+}
+
 exports.handler = async (event) => {
   console.log('Event:', JSON.stringify(event, null, 2));
+
+  // Maxwell action group "PositiveSum" (no API Gateway authorizer on these)
+  if (isAgentEvent(event)) {
+    return handleAgentEvent(event, {
+      dbConfig,
+      queueEmbedding: queueActionEmbedding,
+      notify: action => notifyActionChanged(action, event),
+    });
+  }
   
   const { httpMethod, path, queryStringParameters } = event;
   const authContext = getAuthorizerContext(event);
@@ -86,6 +122,23 @@ exports.handler = async (event) => {
         },
         body: ''
       };
+    }
+
+    // Positive Sum: goals, policies, options, approvals, opportunities
+    if (path.includes('/positive-sum/')) {
+      try {
+        const { statusCode, data } = await handlePositiveSum({
+          event, authContext, dbConfig,
+          queueEmbedding: queueActionEmbedding,
+          notify: action => notifyActionChanged(action, event),
+        });
+        return { statusCode, headers, body: JSON.stringify({ data }) };
+      } catch (error) {
+        if (error.statusCode) {
+          return { statusCode: error.statusCode, headers, body: JSON.stringify({ error: error.message }) };
+        }
+        throw error;
+      }
     }
 
     // My actions endpoint - filter by Cognito user ID
@@ -476,6 +529,15 @@ exports.handler = async (event) => {
         
         const sql = `UPDATE actions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''} RETURNING *`;
         result = await queryJSON(sql);
+      }
+
+      // Completing an option's action completes the goals it served.
+      if (actionData.status === 'completed' && currentAction.status !== 'completed') {
+        try {
+          await completeGoalsForOption(dbConfig, actionId, currentAction.organization_id);
+        } catch (err) {
+          console.error('[POSITIVE SUM] Failed to complete goals for option:', err.message);
+        }
       }
       
       // Queue embedding generation if title or policy changed — those are the

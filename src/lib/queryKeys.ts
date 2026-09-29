@@ -13,6 +13,13 @@ export const toolsQueryKey = () => ['tools'];
 export const partsQueryKey = () => ['parts'];
 export const sharedToolsQueryKey = (orgId?: string) => ['shared_tools', orgId];
 
+// Positive Sum query keys
+// Prefix keys (no argument) match every org's entry, for invalidation.
+export const positiveSumMineQueryKey = (orgId?: string) =>
+  orgId ? ['positive_sum', 'mine', orgId] : ['positive_sum', 'mine'];
+export const positiveSumOpportunitiesQueryKey = (orgIds?: string[]) =>
+  orgIds ? ['positive_sum', 'opportunities', [...orgIds].sort().join(',')] : ['positive_sum', 'opportunities'];
+
 // Checkouts query key removed — checkout system deprecated
 
 export const actionScoresQueryKey = (start?: string, end?: string) => [

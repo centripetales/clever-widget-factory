@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { useFeatureFlag } from '../hooks/useFeatureFlag';
+import { useFeatureFlag, orgHasFeature } from '../hooks/useFeatureFlag';
 
 // Mock useOrganization
 const mockUseOrganization = vi.fn();
@@ -54,5 +54,14 @@ describe('useFeatureFlag', () => {
     const { isFeatureEnabled } = useFeatureFlag();
     expect(isFeatureEnabled(undefined)).toBe(true);
     expect(isFeatureEnabled('')).toBe(true);
+  });
+
+  it('keeps opt-in features off unless an org lists them', () => {
+    mockUseOrganization.mockReturnValue({ organization: { id: 'org-1', settings: {} } });
+    expect(useFeatureFlag().isFeatureEnabled('positive_sum')).toBe(false);
+    expect(orgHasFeature({ settings: null }, 'positive_sum')).toBe(false);
+    expect(orgHasFeature({ settings: { enabled_features: ['positive_sum'] } }, 'positive_sum')).toBe(true);
+    expect(orgHasFeature({ settings: { enabled_features: ['analytics'] } }, 'positive_sum')).toBe(false);
+    expect(orgHasFeature({ settings: {} }, 'analytics')).toBe(true);
   });
 });

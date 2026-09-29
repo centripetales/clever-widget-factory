@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useNavigate } from 'react-router-dom';
 import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
+import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
+import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
@@ -33,6 +35,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
 
   const { isFeatureEnabled } = useFeatureFlag();
+  const positiveSumOrgs = usePositiveSumOrgs();
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [lockedFeatureName, setLockedFeatureName] = useState('');
   const [disabledSectionOpen, setDisabledSectionOpen] = useState(false);
@@ -189,7 +192,21 @@ export default function Dashboard() {
     return shouldShow;
   });
 
-  const enabledItems = visibleItems.filter(item => isFeatureEnabled(item.featureKey));
+  // One Positive Sum card per org that has it turned on, after Actions —
+  // each opens Positive Sum in that org.
+  const positiveSumItems = positiveSumOrgs.map(org => ({
+    title: "Positive Sum",
+    description: org.name,
+    icon: PositiveSumIcon,
+    path: `/positive-sum/${org.id}`,
+    color: "bg-orange-500",
+    featureKey: undefined as string | undefined,
+  }));
+  const featureItems = visibleItems.filter(item => isFeatureEnabled(item.featureKey));
+  const afterActions = featureItems.findIndex(item => item.path === "/actions") + 1;
+  const enabledItems = afterActions > 0
+    ? [...featureItems.slice(0, afterActions), ...positiveSumItems, ...featureItems.slice(afterActions)]
+    : [...featureItems, ...positiveSumItems];
   const disabledItems = visibleItems.filter(item => !isFeatureEnabled(item.featureKey));
 
   return (
@@ -305,6 +322,7 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
 
         {disabledItems.length > 0 && (
           <Collapsible

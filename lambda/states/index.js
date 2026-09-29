@@ -392,6 +392,7 @@ async function listStates(event, authContext, headers) {
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[learning_objective]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[capability_profile]%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"maxwell_interaction"%')
+        AND (s.state_text IS NULL OR s.state_text NOT LIKE '{"type":"positive_sum.%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[summary:%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[stale][summary:%')
         AND (s.state_text IS NULL OR s.state_text NOT LIKE '[photo_analysis]%')
@@ -714,6 +715,26 @@ async function createState(event, authContext, headers) {
     await handleSharingUpdate(client, state.id, actualSharedWithPartners, organizationId);
 
     await client.query('COMMIT');
+
+    // Positive Sum: an option's action starts at its first observation.
+    const linkedActionIds = links.filter(link => link.entity_type === 'action').map(link => link.entity_id);
+    if (linkedActionIds.length > 0) {
+      try {
+        await client.query(
+          `UPDATE actions a SET status = 'in_progress', updated_at = NOW()
+            WHERE a.id = ANY($1::uuid[]) AND a.status = 'not_started'
+              AND EXISTS (
+                SELECT 1 FROM state_links cl JOIN states c ON c.id = cl.state_id
+                 WHERE cl.entity_type = 'action' AND cl.entity_id = a.id
+                   AND c.state_text LIKE '{"type":"positive_sum.option_context"%'
+                   AND c.state_text LIKE '%"option_id":"' || a.id::text || '"%'
+              )`,
+          [linkedActionIds]
+        );
+      } catch (startErr) {
+        console.error('[STATES] Failed to start Positive Sum action:', startErr.message);
+      }
+    }
 
     // Mark any existing daily time summaries as stale for this day (PHT timezone)
     try {

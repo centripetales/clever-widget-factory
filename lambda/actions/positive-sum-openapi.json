@@ -1,0 +1,131 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Maxwell Positive Sum API",
+    "version": "1.0.0",
+    "description": "Helps people shape options for desired states in the Positive Sum network. Vocabulary: a desired state (internally 'goal') is what someone would like to be different — how things are now (initial state) and how they'd like them to be; an option is a specific proposed action with an initial state (starting point and conditions), how it's done, and a final state (what counts as done, with photo evidence); an open option isn't tied to any desired state and can be built on."
+  },
+  "paths": {
+    "/getGoalContext": {
+      "get": {
+        "operationId": "getGoalContext",
+        "description": "Get a desired state (goal), the options already suggested for it, and other open options in its organization that could be built on. Call this first when helping someone shape an option. Information is always free to read.",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The goal's id. Defaults to the action currently being discussed."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The desired state, its options, and open options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/createOption": {
+      "post": {
+        "operationId": "createOption",
+        "description": "Save an option for a desired state. Use this ONLY after the person has seen the full option (starting point, how it's done, what counts as done, people needed) and explicitly confirms it ('yes', 'save it', 'looks good'). Never invoke without confirmation. Never include payment or compensation terms: value returns from the network, not per transaction.",
+        "parameters": [
+          {
+            "name": "goal_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated desired state (goal) ids this option serves. Defaults to the one being discussed."
+          },
+          {
+            "name": "source_option_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated ids of open options this option builds on (e.g. borrowing a tool someone made available). Their implementors implement this option and must agree unless the association default applies. Omit when the person is suggesting to do it themselves."
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short title for the option"
+          },
+          {
+            "name": "initial_state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Starting point and conditions, e.g. what a tool may be used for"
+          },
+          {
+            "name": "policy",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "How it's done (method and conditions), without compensation terms"
+          },
+          {
+            "name": "final_state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "What counts as done, including the photos that show it (e.g. harvest photo and return photo of a borrowed tool)"
+          },
+          {
+            "name": "capacity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Number of people needed (default 1)"
+          },
+          {
+            "name": "parent_option_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Set when this is a suggested change to an existing option (counterproposal)"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The saved option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
