@@ -80,8 +80,8 @@ replaced by capabilities + open options), *board*/*post*.
 
 ### 2.1 Positive Sum page as a conversation (branch `positive-sum-conversation`)
 - The page's main path is a **copyable prompt** for the person's own AI
-  (Gemini, ChatGPT, Claude). The AI presents the mission and vision (stubbed
-  until policies hold them), what's expected of members, then asks about
+  (Gemini, ChatGPT, Claude). The AI presents the mission, vision and principles
+  (from the "Farmer association" Google Doc until org policies hold them), what's expected of members, then asks about
   their **capabilities** — **human capital** (skills, experience) and
   **assets** they want to track — and what they'd like to be different, and
   discusses today's opportunities (a snapshot in the prompt). It returns JSON

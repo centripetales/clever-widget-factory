@@ -13,6 +13,8 @@ describe('buildConversationPrompt', () => {
     });
     expect(prompt).toContain('Positive Sum');
     expect(prompt).toContain('2026-09-29');
+    expect(prompt).toContain('To make collaboration easier and more valuable for farmers.');
+    expect(prompt).toContain('Value Diversity');
     expect(prompt).toContain('now "One buyer" → would like "Better prices"');
     expect(prompt).toContain('Borrow fruit picker');
     expect(prompt).toContain('"kind": "human_capital"');

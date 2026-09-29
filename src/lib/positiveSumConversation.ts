@@ -27,10 +27,19 @@ export interface ConversationResult {
   assets: ConversationAsset[];
 }
 
-// Stub until the org's policies hold its mission, vision and expectations.
-const MISSION = `Positive Sum is a network of neighbors who create more value together than apart — 1+1=3.
-Mission: build a system where each person contributes their knowledge, experience and resources, creates value for others, and gets back more than they put in. Value returns from the network, not from each transaction.
-Vision: a place where capable people are seen and trusted because of what they actually do, and where sharing what works makes everyone better off.`;
+// From the "Farmer association" doc (Mission, Vision & Principles), until the
+// org's policies hold this text.
+const MISSION = `Mission: To make collaboration easier and more valuable for farmers.
+
+Vision: Communities where collaboration is transparent, investment is grounded in demonstrated value, and people can benefit from the value they create for others.
+
+Principles:
+- Make Experience Impactful
+- Surface High-Value Actions
+- Take Responsibility for Outcomes
+- Raise the Standard of Professional Practice — we hold ourselves and those we work with to a higher standard of professional practice, conduct, and accountability.
+- Embrace Experimentation, Collaboration, and Refinement — we are taking on a hard problem: how to collaborate for mutual success. We use technologies now available to us to explore forms of collaboration that were previously impossible.
+- Value Diversity — we value diversity in people, perspectives, approaches, and experience. Diversity creates strength, resilience, and the possibility of discovering what none of us could see alone.`;
 
 const EXPECTATIONS = `What's asked of members:
 - Be honest about what you have and what you can do. Describing a capability is not a promise to do anything.
@@ -58,7 +67,7 @@ export function buildConversationPrompt({ orgName, date, opportunities }: {
 
 Talk with me in whatever language I use. Ask ONE question at a time and keep your messages short — I may be on a phone or using voice.
 
-1. First, explain this in a few friendly sentences and invite my questions:
+1. First, explain our mission, vision and principles in a few friendly sentences and invite my questions:
 ${MISSION}
 
 ${EXPECTATIONS}
