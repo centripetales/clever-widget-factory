@@ -3,6 +3,7 @@ export const completedActionsQueryKey = () => ['actions_completed'];
 export const allActionsQueryKey = () => ['actions_all'];
 export const actionQueryKey = (actionId: string) => ['action', actionId];
 export const actionImplementationUpdatesQueryKey = (actionId: string) => ['action_implementation_updates', actionId];
+export const actionRewardQueryKey = (actionId: string) => ['action_reward', actionId];
 
 // Exploration query keys
 export const explorationsQueryKey = () => ['explorations'];

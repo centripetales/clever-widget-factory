@@ -5,6 +5,7 @@ const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
 const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
+const { handleReward, buildReward } = require('./reward');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
@@ -84,6 +85,12 @@ exports.handler = async (event) => {
     });
   }
   
+  // Async rewards rebuild, started by POST /actions/{id}/reward
+  if (event.rewardBuild) {
+    await buildReward({ ...event.rewardBuild, dbConfig });
+    return { ok: true };
+  }
+
   const { httpMethod, path, queryStringParameters } = event;
   const authContext = getAuthorizerContext(event);
   const organizationId = authContext.organization_id || (authContext.accessible_organization_ids || [])[0];
@@ -131,6 +138,26 @@ exports.handler = async (event) => {
           event, authContext, dbConfig,
           queueEmbedding: queueActionEmbedding,
           notify: action => notifyActionChanged(action, event),
+        });
+        return { statusCode, headers, body: JSON.stringify({ data }) };
+      } catch (error) {
+        if (error.statusCode) {
+          return { statusCode: error.statusCode, headers, body: JSON.stringify({ error: error.message }) };
+        }
+        throw error;
+      }
+    }
+
+    // Rewards of an action: GET the latest, POST to rebuild from its observations
+    const rewardRoute = path.match(/\/actions\/([0-9a-f-]{36})\/reward$/);
+    if (rewardRoute && (httpMethod === 'GET' || httpMethod === 'POST')) {
+      try {
+        const { statusCode, data } = await handleReward({
+          httpMethod,
+          actionId: rewardRoute[1],
+          userId: requireCognitoUserId(authContext),
+          accessibleOrgIds: allAccessibleOrgIds.length ? allAccessibleOrgIds : accessibleOrgIds,
+          dbConfig,
         });
         return { statusCode, headers, body: JSON.stringify({ data }) };
       } catch (error) {
