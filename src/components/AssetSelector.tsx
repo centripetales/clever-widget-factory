@@ -18,7 +18,7 @@ interface Asset {
   description?: string | null;
   category?: string | null;
   source_org_name?: string;
-  in_use_action_title?: string | null;
+  open_action_count?: number;
 }
 
 interface AssetSelectorProps {
@@ -410,8 +410,8 @@ export function AssetSelector({ formData, setFormData, onAssetClick }: AssetSele
                         {asset.source_org_name && (
                           <span>• Shared by {asset.source_org_name}</span>
                         )}
-                        {asset.in_use_action_title && (
-                          <span>• In use: {asset.in_use_action_title}</span>
+                        {!!asset.open_action_count && (
+                          <span>• {asset.open_action_count} open {asset.open_action_count === 1 ? 'action' : 'actions'}</span>
                         )}
                       </div>
                     </div>

@@ -63,7 +63,7 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     accountable_person_name: prevAsset.accountable_person_name !== nextAsset.accountable_person_name,
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
     updated_at: prevAsset.updated_at !== nextAsset.updated_at,
-    in_use_action_id: prevAsset.in_use_action_id !== nextAsset.in_use_action_id
+    open_action_count: prevAsset.open_action_count !== nextAsset.open_action_count
   };
 
   const hasKeyChanges = Object.values(keyChanges).some(Boolean);
@@ -338,19 +338,23 @@ export const CombinedAssetCard = memo(({
             </div>
           )}
 
-          {asset.type === 'asset' && asset.in_use_action_id && (
+          {asset.type === 'asset' && !!asset.open_action_count && (
             <div className="text-xs">
-              <span className="font-medium">In use</span>
-              {' · '}
-              <Link
-                to={`/actions/${asset.in_use_action_id}`}
-                className="text-primary hover:underline"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {asset.in_use_action_title}
-              </Link>
-              {[asset.in_use_org_name, asset.in_use_by].filter(Boolean).map(part => ` · ${part}`).join('')}
-              {asset.in_use_since && ` · since ${new Date(asset.in_use_since).toLocaleDateString()}`}
+              <span className="font-medium">
+                {asset.open_action_count} open {asset.open_action_count === 1 ? 'action' : 'actions'}
+              </span>
+              {(asset.my_open_actions ?? []).map(openAction => (
+                <span key={openAction.id}>
+                  {' · '}
+                  <Link
+                    to={`/actions/${openAction.id}`}
+                    className="text-primary hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {openAction.title}
+                  </Link>
+                </span>
+              ))}
             </div>
           )}
 
