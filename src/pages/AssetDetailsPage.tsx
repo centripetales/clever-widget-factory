@@ -76,6 +76,14 @@ export default function AssetDetailsPage() {
           return;
         }
 
+        // Not one of this org's own tools — it may be shared with this org.
+        const sharedTool = await apiService.get(`/tools/${id}`).catch(() => null);
+        if (sharedTool?.data) {
+          setAsset({ ...sharedTool.data, type: 'asset' } as CombinedAsset);
+          setLoading(false);
+          return;
+        }
+
         const partsResult = await apiService.get('/parts?limit=2000');
         const parts = partsResult.data || [];
         const matchedPart = parts.find((p: any) => p.id === id);

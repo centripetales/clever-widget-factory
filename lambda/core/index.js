@@ -11,6 +11,21 @@ const { SYSTEM_LENSES, MAX_CUSTOM_LENSES, MAX_GAP_BOOST_RULES } = require('/opt/
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
+// The orgs whose shares reach `orgId`: itself plus every org it is a member of
+// (member_organizations, one level). Used wherever "shared with this org" is
+// decided, so sharing with a parent org flows to its member orgs.
+function shareTargetOrgsSql(orgId) {
+  const id = escapeLiteral(orgId);
+  return `(SELECT '${id}'::uuid UNION SELECT mo.organization_id FROM member_organizations mo WHERE mo.member_organization_id = '${id}'::uuid)`;
+}
+
+// Admins and leadership of an org manage which orgs are its members.
+function canManageOrganization(authContext, orgId) {
+  return (authContext.organization_memberships || []).some(
+    m => m.organization_id === orgId && ['admin', 'leadership'].includes(m.role)
+  );
+}
+
 // Helper to execute SQL and return JSON
 async function queryJSON(sql, params = []) {
   const client = await getDbClient();
@@ -419,7 +434,19 @@ exports.handler = async (event) => {
       if (httpMethod === 'GET' && path.match(/\/tools\/[a-f0-9-]+$/)) {
         const toolId = path.split('/').pop();
         const orgFilter = buildOrganizationFilter(authContext, 'tools');
-        let orgCondition = orgFilter.condition ? `AND ${orgFilter.condition}` : '';
+        // Own org's tools, plus tools shared with it (directly or with an org it
+        // is a member of) so a shared asset's page opens.
+        const sharedWithOrg = organizationId
+          ? `tools.id IN (
+              SELECT sl1.entity_id FROM state_links sl1
+              JOIN state_links sl2 ON sl1.state_id = sl2.state_id
+              WHERE sl1.entity_type = 'tool' AND sl2.entity_type = 'organization'
+                AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
+            )`
+          : null;
+        let orgCondition = orgFilter.condition
+          ? `AND (${orgFilter.condition}${sharedWithOrg ? ` OR ${sharedWithOrg}` : ''})`
+          : '';
         const sql = `SELECT json_agg(row_to_json(result)) FROM (
           SELECT 
             tools.*,
@@ -433,6 +460,7 @@ exports.handler = async (event) => {
               )
             ELSE tools.image_url 
             END as image_url,
+            CASE WHEN tools.organization_id::text != '${escapeLiteral(organizationId || '')}' THEN true ELSE false END as is_shared_inbound,
             COALESCE(open_actions.open_action_count, 0) AS open_action_count,
             open_actions.my_open_actions
           FROM tools
@@ -488,7 +516,7 @@ exports.handler = async (event) => {
               JOIN states s ON s.id = sl1.state_id
               WHERE sl1.entity_type = 'tool'
                 AND sl2.entity_type = 'organization'
-                AND sl2.entity_id::text = '${escapeLiteral(organizationId)}'
+                AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
                 AND s.organization_id::text IN (${sharedOrgsStr})
             )
           )`);
@@ -974,7 +1002,7 @@ exports.handler = async (event) => {
               JOIN states s ON s.id = sl1.state_id
               WHERE sl1.entity_type = 'part'
                 AND sl2.entity_type = 'organization'
-                AND sl2.entity_id::text = '${escapeLiteral(organizationId)}'
+                AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
                 AND s.organization_id::text IN (${sharedOrgsStr})
             )
           )`;
@@ -1749,7 +1777,11 @@ exports.handler = async (event) => {
 
         const sql = `SELECT json_agg(row_to_json(t)) FROM (
           SELECT id, name, subdomain, settings, is_active, created_at, updated_at,
-                 (SELECT COUNT(*) FROM organization_members WHERE organization_id = organizations.id AND is_active = true) as member_count
+                 (SELECT COUNT(*) FROM organization_members WHERE organization_id = organizations.id AND is_active = true) as member_count,
+                 (SELECT COALESCE(json_agg(json_build_object('id', p.id, 'name', p.name, 'settings', p.settings) ORDER BY p.name), '[]'::json)
+                    FROM member_organizations mo JOIN organizations p ON p.id = mo.organization_id
+                   WHERE mo.member_organization_id = organizations.id
+                     AND p.is_active AND COALESCE(p.settings->>'deleted', 'false') <> 'true') as member_of
           FROM organizations ${whereClause}
         ) t;`;
         
@@ -2052,6 +2084,58 @@ exports.handler = async (event) => {
         } finally {
           client.release();
         }
+      }
+    }
+
+    // Member organizations: orgs that belong to this org and receive what is
+    // shared with it. GET lists them; POST adds { member_organization_id };
+    // DELETE /member-organizations/{memberOrgId} removes one.
+    const memberOrgsRoute = path.match(/\/organizations\/([0-9a-f-]{36})\/member-organizations(?:\/([0-9a-f-]{36}))?$/);
+    if (memberOrgsRoute) {
+      const [, orgId, memberOrgId] = memberOrgsRoute;
+      if (!canAccessOrganization(authContext, orgId)) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Forbidden' }) };
+      }
+      const list = () => queryJSON(
+        `SELECT mo.id, mo.member_organization_id, o.name, mo.created_at
+           FROM member_organizations mo JOIN organizations o ON o.id = mo.member_organization_id
+          WHERE mo.organization_id = $1
+          ORDER BY o.name`,
+        [orgId]
+      );
+
+      if (httpMethod === 'GET' && !memberOrgId) {
+        return { statusCode: 200, headers, body: JSON.stringify({ data: await list() }) };
+      }
+      if (!canManageOrganization(authContext, orgId)) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Only admins and leadership can change member organizations' }) };
+      }
+      if (httpMethod === 'POST' && !memberOrgId) {
+        const body = JSON.parse(event.body || '{}');
+        const newMemberId = body.member_organization_id;
+        if (!newMemberId || newMemberId === orgId) {
+          return { statusCode: 400, headers, body: JSON.stringify({ error: 'A different organization is required' }) };
+        }
+        const exists = await queryJSON(
+          `SELECT 1 FROM organizations WHERE id = $1 AND is_active AND COALESCE(settings->>'deleted', 'false') <> 'true'`,
+          [newMemberId]
+        );
+        if (!exists.length) {
+          return { statusCode: 404, headers, body: JSON.stringify({ error: 'Organization not found' }) };
+        }
+        await queryJSON(
+          `INSERT INTO member_organizations (organization_id, member_organization_id, created_by)
+           VALUES ($1, $2, $3) ON CONFLICT (organization_id, member_organization_id) DO NOTHING`,
+          [orgId, newMemberId, authContext.cognito_user_id]
+        );
+        return { statusCode: 201, headers, body: JSON.stringify({ data: await list() }) };
+      }
+      if (httpMethod === 'DELETE' && memberOrgId) {
+        await queryJSON(
+          'DELETE FROM member_organizations WHERE organization_id = $1 AND member_organization_id = $2',
+          [orgId, memberOrgId]
+        );
+        return { statusCode: 200, headers, body: JSON.stringify({ data: await list() }) };
       }
     }
 
@@ -5676,9 +5760,11 @@ exports.handler = async (event) => {
                 o.name as source_org_name, s.captured_at as shared_at
          FROM states s
          JOIN state_links sl_org ON sl_org.state_id = s.id
-           AND sl_org.entity_type = 'organization' AND sl_org.entity_id = $1
+           AND sl_org.entity_type = 'organization'
+           AND sl_org.entity_id IN (SELECT $1::uuid UNION SELECT mo.organization_id FROM member_organizations mo WHERE mo.member_organization_id = $1::uuid)
          JOIN state_links sl_entity ON sl_entity.state_id = s.id AND sl_entity.entity_type != 'organization'
          JOIN organizations o ON o.id = s.organization_id
+         WHERE s.organization_id <> $1::uuid
          ORDER BY s.captured_at DESC`,
         [orgId]
       );

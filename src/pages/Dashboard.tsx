@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
-import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
+import { orgHasFeature } from '@/hooks/useFeatureFlag';
 import { useToast } from '@/hooks/use-toast';
 import { DebugModeToggle } from '@/components/DebugModeToggle';
 import { useSuperAdmin } from '@/hooks/useSuperAdmin';
@@ -35,7 +35,6 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
 
   const { isFeatureEnabled } = useFeatureFlag();
-  const positiveSumOrgs = usePositiveSumOrgs();
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [lockedFeatureName, setLockedFeatureName] = useState('');
   const [disabledSectionOpen, setDisabledSectionOpen] = useState(false);
@@ -192,8 +191,12 @@ export default function Dashboard() {
     return shouldShow;
   });
 
-  // One Positive Sum card per org that has it turned on, after Actions —
-  // each opens Positive Sum in that org.
+  // Positive Sum shows when the active org takes part: it has Positive Sum
+  // turned on, or it is a member of an org that does (member_organizations).
+  // One card per such org, after Actions — each opens Positive Sum there.
+  const positiveSumOrgs = !organization ? []
+    : orgHasFeature(organization, 'positive_sum') ? [organization]
+    : (organization.member_of ?? []).filter(org => orgHasFeature(org, 'positive_sum'));
   const positiveSumItems = positiveSumOrgs.map(org => ({
     title: "Positive Sum",
     description: org.name,

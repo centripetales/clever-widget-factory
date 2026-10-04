@@ -21,6 +21,7 @@ import { useProfile } from '@/hooks/useProfile';
 import { OrganizationValuesSection } from '@/components/OrganizationValuesSection';
 import { AiConfigCard } from '@/components/AiConfigCard';
 import { LensManagementCard } from '@/components/LensManagementCard';
+import { MemberOrganizationsCard } from '@/components/MemberOrganizationsCard';
 import { apiService, getApiData } from '@/lib/apiService';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { useOrganizationMembersByOrg } from '@/hooks/useOrganizationMembers';
@@ -769,6 +770,8 @@ const Organization = () => {
 
         </>
       )}
+
+      <MemberOrganizationsCard organizationId={(targetOrganization as { id: string }).id} canEdit={isAdmin} />
     </div>
   );
 };

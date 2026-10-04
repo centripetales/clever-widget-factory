@@ -36,17 +36,22 @@ export function useOrganizations() {
   const { data: organizations = [], isLoading } = useQuery<Organization[]>({
     queryKey: organizationsQueryKey(),
     queryFn: async () => {
-      const response = await apiService.get('/api/organizations');
+      // Every org the user can see, not just the active one (the org header
+      // would narrow the list to the active org).
+      const response = await apiService.get('/api/organizations', { skipOrgHeader: true } as any);
       return getApiData(response) || [];
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
   const getAllOrganizations = async (): Promise<Organization[]> => {
-    return queryClient.ensureQueryData({
+    // fetchQuery refetches when the cached list is stale (ensureQueryData
+    // would return any cached list, however old).
+    return queryClient.fetchQuery({
+      staleTime: 5 * 60 * 1000,
       queryKey: organizationsQueryKey(),
       queryFn: async () => {
-        const response = await apiService.get('/api/organizations');
+        const response = await apiService.get('/api/organizations', { skipOrgHeader: true } as any);
         return getApiData(response) || [];
       },
     });

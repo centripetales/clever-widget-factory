@@ -15,6 +15,8 @@ interface Organization {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Orgs this org is a member of (member_organizations).
+  member_of?: Array<{ id: string; name: string; settings: any }>;
 }
 
 interface OrganizationMember {

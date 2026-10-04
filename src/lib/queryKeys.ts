@@ -84,7 +84,10 @@ export const memberSettingsQueryKey = (userId: string, organizationId?: string) 
   ['member-settings', userId, organizationId ?? 'default'];
 
 // Organizations query keys
-export const organizationsQueryKey = () => ['organizations'];
+// 'accessible': every org the user can see (fetched without the active-org
+// header). Lists cached before that change held only the active org.
+export const organizationsQueryKey = () => ['organizations', 'accessible'];
+export const memberOrganizationsQueryKey = (orgId: string) => ['member_organizations', orgId];
 
 // Tool & Part History query keys
 export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];

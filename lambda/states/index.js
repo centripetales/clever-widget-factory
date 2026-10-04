@@ -273,9 +273,17 @@ async function listStates(event, authContext, headers) {
               AND sl_asset.entity_id IN (
                 SELECT sl_e.entity_id FROM state_links sl_e
                 JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id
+                JOIN states sh ON sh.id = sl_e.state_id
                 WHERE sl_e.entity_type IN ('tool', 'part', 'action')
+                  -- only the observations of the org that shared it
+                  AND sh.organization_id = s.organization_id
                   AND sl_o.entity_type = 'organization'
-                  AND sl_o.entity_id = '${organizationId}'::uuid
+                  -- shared with this org, or with an org it is a member of
+                  AND sl_o.entity_id IN (
+                    SELECT '${organizationId}'::uuid
+                    UNION SELECT mo.organization_id FROM member_organizations mo
+                     WHERE mo.member_organization_id = '${organizationId}'::uuid
+                  )
               )
           )
         )`);
