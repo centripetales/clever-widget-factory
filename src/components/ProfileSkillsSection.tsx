@@ -185,6 +185,9 @@ function ProfileSkillCard({
             <div className="flex-1 min-w-0">
               {/* Original narrative — prominent (Req 1.7) */}
               <p className="text-sm leading-relaxed">{skill.original_narrative}</p>
+              {skill.source === 'claimed' && (
+                <Badge variant="outline" className="mt-1 text-xs">Claimed</Badge>
+              )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Switch

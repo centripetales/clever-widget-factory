@@ -315,6 +315,15 @@ erDiagram
     jsonb inference_config NOT NULL
     timestamp with time zone created_at
   }
+  member_organizations {
+    uuid id PK NOT NULL
+    uuid organization_id NOT NULL
+    uuid organization_id NOT NULL
+    uuid member_organization_id NOT NULL
+    uuid member_organization_id NOT NULL
+    text created_by NOT NULL
+    timestamp with time zone created_at NOT NULL
+  }
   metric_snapshots {
     uuid snapshot_id PK NOT NULL
     uuid state_id NOT NULL
@@ -788,6 +797,8 @@ erDiagram
   organizations ||--o{ issue_history : organization_id
   organizations ||--o{ issue_requirements : organization_id
   organizations ||--o{ issues : organization_id
+  organizations ||--o{ member_organizations : member_organization_id
+  organizations ||--o{ member_organizations : organization_id
   metrics ||--o{ metric_snapshots : metric_id
   states ||--o{ metric_snapshots : state_id
   organizations ||--o{ metrics : organization_id

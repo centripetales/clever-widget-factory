@@ -37,6 +37,11 @@ export interface CombinedAsset {
   accountable_person_color?: string; // Favorite color of accountable person
   sellable?: boolean; // For stock items - whether available in Sari Sari store
   is_shared_inbound?: boolean; // true when asset belongs to a partner org shared with this org
+  // In use: derived from the most recent in-progress action requiring the tool
+  // In-progress actions involving this asset (any org); titles only for the
+  // viewer's own org.
+  open_action_count?: number;
+  my_open_actions?: Array<{ id: string; title: string }> | null;
   is_shared_outbound?: boolean; // true when this org has shared this asset to at least one other org
   shared_from_org?: string; // name/id of the org that owns the shared asset
   created_at: string;

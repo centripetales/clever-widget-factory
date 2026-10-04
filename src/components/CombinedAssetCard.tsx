@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, Camera, MapPin, Handshake, Network } from "lucide-react";
+import { Link } from "react-router-dom";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { getThumbnailUrl } from '@/lib/imageUtils';
@@ -61,7 +62,8 @@ const arePropsEqual = (prevProps: CombinedAssetCardProps, nextProps: CombinedAss
     current_quantity: prevAsset.current_quantity !== nextAsset.current_quantity,
     accountable_person_name: prevAsset.accountable_person_name !== nextAsset.accountable_person_name,
     accountable_person_color: prevAsset.accountable_person_color !== nextAsset.accountable_person_color,
-    updated_at: prevAsset.updated_at !== nextAsset.updated_at
+    updated_at: prevAsset.updated_at !== nextAsset.updated_at,
+    open_action_count: prevAsset.open_action_count !== nextAsset.open_action_count
   };
 
   const hasKeyChanges = Object.values(keyChanges).some(Boolean);
@@ -333,6 +335,26 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+            </div>
+          )}
+
+          {asset.type === 'asset' && !!asset.open_action_count && (
+            <div className="text-xs">
+              <span className="font-medium">
+                {asset.open_action_count} open {asset.open_action_count === 1 ? 'action' : 'actions'}
+              </span>
+              {(asset.my_open_actions ?? []).map(openAction => (
+                <span key={openAction.id}>
+                  {' · '}
+                  <Link
+                    to={`/actions/${openAction.id}`}
+                    className="text-primary hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {openAction.title}
+                  </Link>
+                </span>
+              ))}
             </div>
           )}
 

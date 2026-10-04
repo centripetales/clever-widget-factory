@@ -15,6 +15,8 @@ interface Organization {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Orgs this org is a member of (member_organizations).
+  member_of?: Array<{ id: string; name: string; settings: any }>;
 }
 
 interface OrganizationMember {
@@ -86,7 +88,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         // Skip org header so we get ALL orgs, not just the active one
         const response = await apiService.get('/api/organizations', {
           skipOrgHeader: true
-        } as any);
+        });
         const orgs: Organization[] = getApiData(response) || [];
         // Filter to only orgs the user is a member of
         const memberOrgIds = new Set(allMemberships.map((m: any) => m.organization_id));

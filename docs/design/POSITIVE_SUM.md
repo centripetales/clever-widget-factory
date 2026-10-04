@@ -64,21 +64,43 @@ replaced by capabilities + open options), *board*/*post*.
   default applies (a completed, photographed experience with a similar
   option). An option's action starts at its first observation; completing it
   completes the desired states it served.
-- **Opportunities:** open desired states and options with free capacity,
-  refreshed at most once a farm day (Asia/Manila), ~5 items.
+- **Opportunities** live inside the Positive Sum page (per org): open desired
+  states and options with free capacity, ~5 items, built on the first visit
+  of a farm day (Asia/Manila) and the same list for the rest of that day.
+- **Ready for you:** options suggested for your desired states, and options
+  that build on yours, waiting for your approval.
+- **Offers are retired.** An option can build on someone's open options
+  (`source_option_ids`); their implementors implement it.
 - **Maxwell:** action group `PositiveSum` (`getGoalContext`, `createOption`)
-  on agent version 32; a skill prompt when Maxwell is opened on a desired
+  on agent version 33; a skill prompt when Maxwell is opened on a desired
   state ("Plan with Maxwell"). Options are shaped in conversation and saved
   only on explicit confirmation; no compensation terms.
 
 ## 2. Decided, to build next
 
-### 2.1 Finish #166
-- Opportunities move **into the Positive Sum page** (per org); opening the
-  page is the "ask" that builds the day's list. No separate Dashboard button.
-- Remove **offers** (the "Offer something" form, "My offers", the policies
-  route, Maxwell's "offers") in favor of options and org policies.
-- "Waiting on me" becomes **"Ready for you"**.
+### 2.1 Positive Sum page as a conversation (branch `positive-sum-conversation`)
+- The page's main path is a **copyable prompt** for the person's own AI
+  (Gemini, ChatGPT, Claude). The AI greets ("Hello, or should I say Maayong aga/hapon/gab-i?",
+  by the hour), continues in the language they answer in, explains the
+  idea (value you create for others comes back through the network),
+  answers questions from background it carries (the Farmer association
+  doc's principles; the network supports those who support others,
+  offers non-contributors ways to contribute, and excludes people who harm
+  the community), then asks about
+  their **capabilities** (skills and experience) and what they'd like to be
+  different, and
+  discusses today's opportunities (a snapshot in the prompt). It returns JSON
+  (`src/lib/positiveSumConversation.ts`) that the person pastes back, reviews
+  and saves. The form stays under "or type it yourself".
+- Desired states → Positive Sum goals in the page's org. Human capital →
+  profile skills (narrative only, `source: 'claimed'` — describing a
+  capability is not a commitment; we collect, we don't judge). Physical
+  assets stay out of the conversation: people add and share them in the app
+  as they're ready. The API client can target an org
+  per request (`X-Organization-Id`, validated by the authorizer).
+- **Tool availability** is derived: a tool is *in use* while an in-progress
+  action (any org) requires it; the first observation on an action with a
+  required tool starts it. No checkout links, nothing stored on the tool.
 
 ### 2.2 Policies
 - `policy` table gains `organization_id` (always an org). A **Policy tile**

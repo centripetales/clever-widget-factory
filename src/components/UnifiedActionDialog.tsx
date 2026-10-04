@@ -50,6 +50,7 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { getThumbnailUrl } from '@/lib/imageUtils';
 import TiptapEditor from './TiptapEditor';
 import { StatesInline } from './StatesInline';
+import { RewardsSection } from './RewardsSection';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { stateService } from '@/services/stateService';
 import { AssetSelector } from './AssetSelector';
@@ -1439,16 +1440,19 @@ export function ActionForm({
 
           <TabsContent value="observations" className="mt-4">
             {action?.id ? (
-              <StatesInline
-                entity_type="action"
-                entity_id={action.id}
-                source_organization_id={(action as any).organization_id}
-                toolId={
-                  (Array.isArray(formData.required_tools) ? formData.required_tools[0] : undefined) ||
-                  formData.asset_id ||
-                  undefined
-                }
-              />
+              <>
+                <StatesInline
+                  entity_type="action"
+                  entity_id={action.id}
+                  source_organization_id={(action as any).organization_id}
+                  toolId={
+                    (Array.isArray(formData.required_tools) ? formData.required_tools[0] : undefined) ||
+                    formData.asset_id ||
+                    undefined
+                  }
+                />
+                <RewardsSection actionId={action.id} />
+              </>
             ) : (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">

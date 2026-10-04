@@ -3,6 +3,7 @@ export const completedActionsQueryKey = () => ['actions_completed'];
 export const allActionsQueryKey = () => ['actions_all'];
 export const actionQueryKey = (actionId: string) => ['action', actionId];
 export const actionImplementationUpdatesQueryKey = (actionId: string) => ['action_implementation_updates', actionId];
+export const actionRewardQueryKey = (actionId: string) => ['action_reward', actionId];
 
 // Exploration query keys
 export const explorationsQueryKey = () => ['explorations'];
@@ -83,7 +84,10 @@ export const memberSettingsQueryKey = (userId: string, organizationId?: string) 
   ['member-settings', userId, organizationId ?? 'default'];
 
 // Organizations query keys
-export const organizationsQueryKey = () => ['organizations'];
+// 'accessible': every org the user can see (fetched without the active-org
+// header). Lists cached before that change held only the active org.
+export const organizationsQueryKey = () => ['organizations', 'accessible'];
+export const memberOrganizationsQueryKey = (orgId: string) => ['member_organizations', orgId];
 
 // Tool & Part History query keys
 export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];
