@@ -16,36 +16,10 @@ export interface ConversationDesiredState {
   would_like: string;
 }
 
-export interface ConversationAsset {
-  name: string;
-  narrative: string;
-}
-
 export interface ConversationResult {
   desiredStates: ConversationDesiredState[];
   humanCapital: string[];
-  assets: ConversationAsset[];
 }
-
-// From the "Farmer association" doc (Mission, Vision & Principles), until the
-// org's policies hold this text.
-const MISSION = `Mission: To make collaboration easier and more valuable for farmers.
-
-Vision: Communities where collaboration is transparent, investment is grounded in demonstrated value, and people can benefit from the value they create for others.
-
-Principles:
-- Make Experience Impactful
-- Surface High-Value Actions
-- Take Responsibility for Outcomes
-- Raise the Standard of Professional Practice — we hold ourselves and those we work with to a higher standard of professional practice, conduct, and accountability.
-- Embrace Experimentation, Collaboration, and Refinement — we are taking on a hard problem: how to collaborate for mutual success. We use technologies now available to us to explore forms of collaboration that were previously impossible.
-- Value Diversity — we value diversity in people, perspectives, approaches, and experience. Diversity creates strength, resilience, and the possibility of discovering what none of us could see alone.`;
-
-const EXPECTATIONS = `What's asked of members:
-- Be honest about what you have and what you can do. Describing a capability is not a promise to do anything.
-- Say plainly what you would like to be different.
-- When you do take part in something, follow through, and document what happened (a short note or photo) — that is how trust is built.
-- Nobody is paid per transaction; help comes back from the network over time.`;
 
 function describeOpportunity(o: ConversationOpportunity): string {
   const who = o.created_by_name ? ` (${o.created_by_name})` : '';
@@ -55,9 +29,32 @@ function describeOpportunity(o: ConversationOpportunity): string {
   return `- Option${who}: ${o.title}. How: ${o.policy ?? ''}. Done when: ${o.desired_state ?? ''}`;
 }
 
-export function buildConversationPrompt({ orgName, date, opportunities }: {
+// Background so the AI can answer questions. Principles from the "Farmer
+// association" doc, until the org's policies hold this text.
+const BACKGROUND = `Our principles:
+- Make Experience Impactful
+- Surface High-Value Actions
+- Take Responsibility for Outcomes
+- Raise the Standard of Professional Practice — we hold ourselves and those we work with to a higher standard of professional practice, conduct, and accountability.
+- Embrace Experimentation, Collaboration, and Refinement — we are taking on a hard problem: how to collaborate for mutual success. We use technologies now available to us to explore forms of collaboration that were previously impossible.
+- Value Diversity — we value diversity in people, perspectives, approaches, and experience. Diversity creates strength, resilience, and the possibility of discovering what none of us could see alone.
+
+Who the network supports:
+- The purpose of this experiment is to support those who support others. If the network supported people who take more than they contribute, it would weaken and people would stop participating.
+- Over time the network learns when a person isn't contributing and offers them ways to contribute.
+- People who harm the community are excluded.`;
+
+// Hiligaynon greeting for the hour the prompt is copied.
+function maayong(hour: number): string {
+  if (hour < 12) return 'Maayong aga';
+  if (hour < 18) return 'Maayong hapon';
+  return 'Maayong gab-i';
+}
+
+export function buildConversationPrompt({ orgName, date, hour, opportunities }: {
   orgName: string;
   date: string;
+  hour: number;
   opportunities: ConversationOpportunity[];
 }): string {
   const options = opportunities.length
@@ -65,24 +62,36 @@ export function buildConversationPrompt({ orgName, date, opportunities }: {
     : '- Nothing is open today.';
   return `You are helping me take part in ${orgName}, part of the Positive Sum network. Today is ${date}.
 
-Talk with me in whatever language I use. Ask ONE question at a time and keep your messages short — I may be on a phone or using voice.
+Ask ONE question at a time and keep your messages short — I may be on a phone or using voice.
 
-1. First, explain our mission, vision and principles in a few friendly sentences and invite my questions:
-${MISSION}
+1. Open with exactly: "Hello, or should I say ${maayong(hour)}?" Then use whichever language I answer in for the rest of our conversation. In that language, explain the idea in a few short, friendly sentences and invite my questions. Say something close to this:
 
-${EXPECTATIONS}
+"Our community is full of people with useful skills and things: rice hull, an idle thresher, corn sold at low prices while someone else buys chicken feed. But we usually don't know who has what, who needs what, or what we could achieve together, so needs go unmet.
+
+Positive Sum is an experiment to fix that. We share capabilities and what we'd like to be different. The network looks for ways to meet people's needs and tracks who is building goodwill. If you create value for someone here, the network will look for ways to create value for you, leaving everyone better off.
+
+Do you have any questions before we start?"
+
+Answer my questions directly and honestly, using this background (don't recite it unless I ask):
+${BACKGROUND}
 
 2. Then learn about me, one question at a time:
-- My capabilities, in two forms:
-  a) Human capital — skills and experience (e.g. "I've grafted mango for 5 years").
-  b) Assets I have and want to track (e.g. a carabao, a truck, a fruit picker) — what each is and its condition.
-- What I would like to be different: how things are now, and how I'd like them to be. Help me say both clearly.
+- My capabilities. Ask these two questions, in this order:
+  a) "What do people usually come to you for help with?"
+  b) "What's something you've done or made that turned out well — something you're proud of?"
+  If an answer is general, ask one follow-up: what did I do, and how did it turn out?
+- What I would like to be different. Say: "Most of us would like to earn more, spend less, or have things a bit easier." Then ask, one at a time:
+  a) "Do you see an opportunity — something that could work here if the right people or things came together?"
+  b) "What's costing you money, time or peace of mind right now?"
+  For each answer, work out with me how things are now and how I'd like them to be, and check it with me.
 
 3. Then tell me which of these open opportunities in ${orgName} could fit me:
 ${options}
 
 Rules:
 - Don't invent anything I didn't say. Keep my own words where you can, or restate them briefly and densely without adding judgement.
+- Don't add words that make things sound bigger or smaller than I said (e.g. "frequently", "impossible").
+- You can't see the app or my records. If I ask you to look something up, say so.
 - Don't include phone numbers or other people's personal details.
 - Before finishing, show me a short summary and ask me to confirm it.
 
@@ -92,8 +101,7 @@ When I confirm, reply with ONLY this JSON in one code block (leave out anything 
   "version": 1,
   "desired_states": [{ "now": "how things are now", "would_like": "how I'd like them to be" }],
   "capabilities": [
-    { "kind": "human_capital", "narrative": "a skill or experience, in my words" },
-    { "kind": "asset", "name": "short name", "narrative": "what it is and its condition, in my words" }
+    { "kind": "human_capital", "narrative": "a skill or experience, in my words" }
   ]
 }
 \`\`\`
@@ -129,17 +137,8 @@ export function parseConversationResult(pasted: string): ConversationResult | { 
     .filter(c => (c as { kind?: unknown })?.kind === 'human_capital')
     .map(c => text((c as { narrative?: unknown }).narrative))
     .filter(Boolean);
-  const assets = capabilities
-    .filter(c => (c as { kind?: unknown })?.kind === 'asset')
-    .map(c => {
-      const narrative = text((c as { narrative?: unknown }).narrative);
-      const name = text((c as { name?: unknown }).name) || narrative.split(/[,.]/)[0].slice(0, 60);
-      return { name, narrative };
-    })
-    .filter(a => a.name);
-
-  if (!desiredStates.length && !humanCapital.length && !assets.length) {
+  if (!desiredStates.length && !humanCapital.length) {
     return { error: 'Nothing to save was found in that JSON.' };
   }
-  return { desiredStates, humanCapital, assets };
+  return { desiredStates, humanCapital };
 }

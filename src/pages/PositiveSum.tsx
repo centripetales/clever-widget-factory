@@ -2,7 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { errorMessage } from '@/lib/apiService';
 import { ArrowLeft, ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { useApproveOption, useMyPositiveSum } from '@/hooks/positiveSum/usePositiveSum';
 import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
@@ -60,12 +60,7 @@ export default function PositiveSum() {
         <div className="w-12 h-12 shrink-0 rounded-full bg-orange-500 flex items-center justify-center">
           <PositiveSumIcon className="h-10 w-10 text-white" />
         </div>
-        <div>
-          <h1 className="text-2xl font-bold">Positive Sum</h1>
-          <p className="text-sm text-muted-foreground">
-            {org ? `${org.name} · ` : ''}Ask for what you'd like to be different, and help others with theirs.
-          </p>
-        </div>
+        <h1 className="text-2xl font-bold">Positive Sum</h1>
       </div>
 
       {!org && (
@@ -78,11 +73,7 @@ export default function PositiveSum() {
 
       {org && (
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">What would you like to be different?</CardTitle>
-            <CardDescription>Share what you'd like to change, and what you're able to do.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="pt-6 space-y-4">
             <ConversationPanel org={org} />
             <Collapsible>
               <CollapsibleTrigger asChild>

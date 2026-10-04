@@ -80,17 +80,23 @@ replaced by capabilities + open options), *board*/*post*.
 
 ### 2.1 Positive Sum page as a conversation (branch `positive-sum-conversation`)
 - The page's main path is a **copyable prompt** for the person's own AI
-  (Gemini, ChatGPT, Claude). The AI presents the mission, vision and principles
-  (from the "Farmer association" Google Doc until org policies hold them), what's expected of members, then asks about
-  their **capabilities** — **human capital** (skills, experience) and
-  **assets** they want to track — and what they'd like to be different, and
+  (Gemini, ChatGPT, Claude). The AI greets ("Hello, or should I say Maayong aga/hapon/gab-i?",
+  by the hour), continues in the language they answer in, explains the
+  idea (value you create for others comes back through the network),
+  answers questions from background it carries (the Farmer association
+  doc's principles; the network supports those who support others,
+  offers non-contributors ways to contribute, and excludes people who harm
+  the community), then asks about
+  their **capabilities** (skills and experience) and what they'd like to be
+  different, and
   discusses today's opportunities (a snapshot in the prompt). It returns JSON
   (`src/lib/positiveSumConversation.ts`) that the person pastes back, reviews
   and saves. The form stays under "or type it yourself".
 - Desired states → Positive Sum goals in the page's org. Human capital →
   profile skills (narrative only, `source: 'claimed'` — describing a
-  capability is not a commitment; we collect, we don't judge). Assets →
-  tools or stock in the person's own org. The API client can target an org
+  capability is not a commitment; we collect, we don't judge). Physical
+  assets stay out of the conversation: people add and share them in the app
+  as they're ready. The API client can target an org
   per request (`X-Organization-Id`, validated by the authorizer).
 - **Tool availability** is derived: a tool is *in use* while an in-progress
   action (any org) requires it; the first observation on an action with a

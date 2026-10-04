@@ -1,26 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiService, errorMessage } from '@/lib/apiService';
 import {
-  partsQueryKey,
   positiveSumMineQueryKey,
   positiveSumOpportunitiesQueryKey,
   profileSkillsQueryKey,
-  toolsQueryKey,
 } from '@/lib/queryKeys';
 import type { ConversationDesiredState } from '@/lib/positiveSumConversation';
-
-export interface ReviewedAsset {
-  name: string;
-  narrative: string;
-  kind: 'tool' | 'stock';
-  organizationId: string;
-}
 
 export interface ReviewedConversation {
   organizationId: string; // the Positive Sum page's org
   desiredStates: ConversationDesiredState[];
   humanCapital: string[];
-  assets: ReviewedAsset[];
 }
 
 export interface SaveConversationOutcome {
@@ -32,7 +22,6 @@ export interface SaveConversationOutcome {
  * Saves what the person reviewed from their conversation:
  * - desired states → Positive Sum goals in the page's org
  * - human capital → profile skills in the page's org, marked 'claimed'
- * - assets → tools or stock in the org the person chose (their own)
  * Every item is attempted; failures are reported rather than stopping the rest.
  */
 export function useSaveConversation() {
@@ -63,21 +52,12 @@ export function useSaveConversation() {
           { organizationId: review.organizationId },
         ));
       }
-      for (const asset of review.assets) {
-        await attempt(asset.name, () => apiService.post(
-          asset.kind === 'tool' ? '/tools' : '/parts',
-          { name: asset.name, description: asset.narrative },
-          { organizationId: asset.organizationId },
-        ));
-      }
       return outcome;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: positiveSumMineQueryKey() });
       queryClient.invalidateQueries({ queryKey: positiveSumOpportunitiesQueryKey() });
       queryClient.invalidateQueries({ queryKey: profileSkillsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: toolsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: partsQueryKey() });
     },
   });
 }
