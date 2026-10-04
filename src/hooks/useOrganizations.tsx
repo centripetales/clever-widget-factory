@@ -38,7 +38,7 @@ export function useOrganizations() {
     queryFn: async () => {
       // Every org the user can see, not just the active one (the org header
       // would narrow the list to the active org).
-      const response = await apiService.get('/api/organizations', { skipOrgHeader: true } as any);
+      const response = await apiService.get('/api/organizations', { skipOrgHeader: true });
       return getApiData(response) || [];
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
@@ -51,7 +51,7 @@ export function useOrganizations() {
       staleTime: 5 * 60 * 1000,
       queryKey: organizationsQueryKey(),
       queryFn: async () => {
-        const response = await apiService.get('/api/organizations', { skipOrgHeader: true } as any);
+        const response = await apiService.get('/api/organizations', { skipOrgHeader: true });
         return getApiData(response) || [];
       },
     });

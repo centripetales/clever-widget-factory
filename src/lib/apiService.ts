@@ -149,12 +149,17 @@ async function getIdToken(): Promise<string | null> {
   }
 }
 
+// Per-request options: optimisticId for offline queueing; organizationId to
+// target one org for this request; skipOrgHeader to send no active org (e.g.
+// to list every org the person can see).
+type RequestOptions = RequestInit & { optimisticId?: string; organizationId?: string; skipOrgHeader?: boolean };
+
 /**
  * Make an authenticated API request
  */
 async function apiRequest<T = any>(
   endpoint: string,
-  options: RequestInit & { optimisticId?: string; organizationId?: string } = {},
+  options: RequestOptions = {},
   _isRetry: boolean = false
 ): Promise<T> {
   // Handle absolute URLs
@@ -216,10 +221,8 @@ async function apiRequest<T = any>(
   // honours orgs the person belongs to).
   if (options.organizationId) {
     (headers as Record<string, string>)['X-Organization-Id'] = options.organizationId;
-  } else if (activeOrganizationId && !(options as any)?.skipOrgHeader) {
+  } else if (activeOrganizationId && !options.skipOrgHeader) {
     (headers as Record<string, string>)['X-Organization-Id'] = activeOrganizationId;
-  } else if (activeOrganizationId && (options as any)?.skipOrgHeader) {
-    // skipped
   }
 
   // Add X-Connection-Id header so the backend can exclude this client
@@ -485,7 +488,7 @@ export const apiService = {
   /**
    * GET request
    */
-  async get<T = any>(endpoint: string, options?: RequestInit): Promise<T> {
+  async get<T = any>(endpoint: string, options?: RequestOptions): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'GET',
@@ -496,7 +499,7 @@ export const apiService = {
    * POST request
    * @param optimisticId - Optional temp ID for optimistic updates (will replace temp item with real data)
    */
-  async post<T = any>(endpoint: string, body?: any, options?: RequestInit & { optimisticId?: string; organizationId?: string }): Promise<T> {
+  async post<T = any>(endpoint: string, body?: any, options?: RequestOptions): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'POST',
@@ -507,7 +510,7 @@ export const apiService = {
   /**
    * PUT request
    */
-  async put<T = any>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
+  async put<T = any>(endpoint: string, body?: any, options?: RequestOptions): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'PUT',
@@ -518,7 +521,7 @@ export const apiService = {
   /**
    * DELETE request
    */
-  async delete<T = any>(endpoint: string, options?: RequestInit): Promise<T> {
+  async delete<T = any>(endpoint: string, options?: RequestOptions): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'DELETE',
@@ -528,7 +531,7 @@ export const apiService = {
   /**
    * PATCH request
    */
-  async patch<T = any>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
+  async patch<T = any>(endpoint: string, body?: any, options?: RequestOptions): Promise<T> {
     return apiRequest<T>(endpoint, {
       ...options,
       method: 'PATCH',

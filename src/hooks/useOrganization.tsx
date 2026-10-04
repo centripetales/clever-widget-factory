@@ -88,7 +88,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         // Skip org header so we get ALL orgs, not just the active one
         const response = await apiService.get('/api/organizations', {
           skipOrgHeader: true
-        } as any);
+        });
         const orgs: Organization[] = getApiData(response) || [];
         // Filter to only orgs the user is a member of
         const memberOrgIds = new Set(allMemberships.map((m: any) => m.organization_id));

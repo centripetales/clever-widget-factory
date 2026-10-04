@@ -12,6 +12,9 @@ import { useStateMutations } from '@/hooks/useStates';
 import { useActionReward } from '@/hooks/useActionReward';
 import { errorMessage } from '@/lib/apiService';
 import type { NextBestOption, RewardClaim } from '@/types/rewards';
+import {
+  balance, breakEvenRate, formatAmount, hasAny, netAtRate, savings, signFor, totalsByParty, type PartyTotals,
+} from '@/lib/rewards';
 
 const COST_BASIS_LABELS: Record<NonNullable<RewardClaim['cost_basis_method']>, string> = {
   purchase_price: 'Purchase price',
@@ -30,73 +33,6 @@ function PartyChip({ id, name, orgNames }: { id: string | null; name: string; or
       {name}
     </span>
   );
-}
-
-// Amounts are only what people stated; null means not stated. Stored amounts
-// are positive with the direction in from → to; `sign` shows them from one
-// org's point of view.
-function formatAmount(php: number | null, hours: number | null, sign: '+' | '−' | '' = '') {
-  const parts = [
-    php !== null && `${sign}₱${Math.round(php).toLocaleString()}`,
-    hours !== null && `${sign}${Math.round(hours * 10) / 10} ${hours === 1 ? 'hour' : 'hours'}`,
-  ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : 'Not stated';
-}
-
-// From the viewer's org: what it gives or spends is negative, what it receives
-// positive; claims between other parties stay unsigned.
-function signFor(claim: RewardClaim, orgId: string | undefined): '+' | '−' | '' {
-  if (!orgId) return '';
-  if (claim.from_org_id === orgId) return '−';
-  if (claim.to_org_id === orgId) return '+';
-  return '';
-}
-
-type Sums = { php: number | null; hours: number | null };
-const NONE: Sums = { php: null, hours: null };
-const add = (sums: Sums, c: RewardClaim): Sums => ({
-  php: c.php === null ? sums.php : (sums.php ?? 0) + c.php,
-  hours: c.hours === null ? sums.hours : (sums.hours ?? 0) + c.hours,
-});
-const hasAny = (s: Sums) => s.php !== null || s.hours !== null;
-
-interface PartyTotals {
-  id: string | null;
-  name: string;
-  costs: Sums;
-  benefits: Sums;
-}
-
-// Per party (org id, or the name when it isn't an org): stated costs (what it
-// gave, promised or spent itself) and benefits — shown as gained (what it
-// received).
-function totalsByParty(claims: RewardClaim[]): PartyTotals[] {
-  const totals = new Map<string, PartyTotals>();
-  const party = (id: string | null, name: string) => {
-    const key = id ?? `name:${name}`;
-    if (!totals.has(key)) totals.set(key, { id, name, costs: NONE, benefits: NONE });
-    return totals.get(key)!;
-  };
-  for (const c of claims) {
-    const from = party(c.from_org_id, c.from_name);
-    from.costs = add(from.costs, c);
-    if ((c.from_org_id ?? c.from_name) !== (c.to_org_id ?? c.to_name)) {
-      const to = party(c.to_org_id, c.to_name);
-      to.benefits = add(to.benefits, c);
-    }
-  }
-  return [...totals.values()].filter(t => hasAny(t.costs) || hasAny(t.benefits));
-}
-
-// Saved = next-best option's price − the claims it replaces, per component,
-// only when both sides were stated.
-function savings(option: NextBestOption, claims: RewardClaim[]): Sums {
-  const replaced = claims.filter(c => option.replaces.includes(c.name));
-  const saved = (key: 'php' | 'hours') =>
-    option[key] !== null && replaced.length && replaced.every(c => c[key] !== null)
-      ? option[key]! - replaced.reduce((sum, c) => sum + (c[key] as number), 0)
-      : null;
-  return { php: saved('php'), hours: saved('hours') };
 }
 
 function NextBestOptionCard({ option, claims }: { option: NextBestOption; claims: RewardClaim[] }) {
@@ -122,13 +58,12 @@ function NextBestOptionCard({ option, claims }: { option: NextBestOption; claims
 // hourly value where the action breaks even. Nothing is stored.
 function HourValue({ totals }: { totals: PartyTotals }) {
   const [rate, setRate] = useState('');
-  const money = (totals.benefits.php ?? 0) - (totals.costs.php ?? 0);
-  const hours = (totals.benefits.hours ?? 0) - (totals.costs.hours ?? 0); // negative = time spent
-  if (!hours) return null;
+  const breakEven = breakEvenRate(totals);
+  if (breakEven === null) return null;
 
-  const breakEven = -money / hours;
+  const { hours } = balance(totals);
   const value = Number(rate);
-  const net = rate.trim() && Number.isFinite(value) ? money + value * hours : null;
+  const net = rate.trim() && Number.isFinite(value) ? netAtRate(totals, value) : null;
   const peso = (n: number) => `${n < 0 ? '−' : '+'}₱${Math.abs(Math.round(n)).toLocaleString()}`;
 
   return (
