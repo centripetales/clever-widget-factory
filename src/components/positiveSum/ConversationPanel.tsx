@@ -8,10 +8,10 @@ import { useOpportunities } from '@/hooks/positiveSum/usePositiveSum';
 import { useSaveConversation } from '@/hooks/positiveSum/useSaveConversation';
 import { copyToClipboard } from '@/lib/urlUtils';
 import { InfoBubble } from '@/components/positiveSum/InfoBubble';
-import { buildConversationPrompt, parseConversationResult, type ConversationDesiredState } from '@/lib/positiveSumConversation';
+import { buildConversationPrompt, parseConversationResult } from '@/lib/positiveSumConversation';
 
 interface Review {
-  desiredStates: ConversationDesiredState[];
+  desiredStates: string[];
   humanCapital: string[];
 }
 
@@ -102,15 +102,10 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
           {review.desiredStates.length > 0 && (
             <section className="space-y-2">
               <h3 className="font-medium">What you'd like to be different</h3>
-              {review.desiredStates.map((d, i) => (
-                <div key={i} className="space-y-1 rounded-md bg-muted/40 p-2">
-                  <div className="flex justify-end">
-                    <RemoveButton onClick={() => update(r => ({ ...r, desiredStates: r.desiredStates.filter((_, j) => j !== i) }))} />
-                  </div>
-                  <Label className="text-xs">How things are now</Label>
-                  <Textarea value={d.now} onChange={e => update(r => ({ ...r, desiredStates: r.desiredStates.map((x, j) => j === i ? { ...x, now: e.target.value } : x) }))} />
-                  <Label className="text-xs">How you'd like it to be</Label>
-                  <Textarea value={d.would_like} onChange={e => update(r => ({ ...r, desiredStates: r.desiredStates.map((x, j) => j === i ? { ...x, would_like: e.target.value } : x) }))} />
+              {review.desiredStates.map((desiredState, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <Textarea value={desiredState} onChange={e => update(r => ({ ...r, desiredStates: r.desiredStates.map((x, j) => j === i ? e.target.value : x) }))} />
+                  <RemoveButton onClick={() => update(r => ({ ...r, desiredStates: r.desiredStates.filter((_, j) => j !== i) }))} />
                 </div>
               ))}
             </section>

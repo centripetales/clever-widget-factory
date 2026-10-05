@@ -11,20 +11,18 @@ export interface ConversationOpportunity {
   created_by_name?: string | null;
 }
 
-export interface ConversationDesiredState {
-  now: string;
-  would_like: string;
-}
-
+// A desired state is kept exactly as the person said it — no "now" or other
+// structure — so we can learn what they actually want to say. The initial
+// state is recorded later, on the action, when a real deal happens.
 export interface ConversationResult {
-  desiredStates: ConversationDesiredState[];
+  desiredStates: string[];
   humanCapital: string[];
 }
 
 function describeOpportunity(o: ConversationOpportunity): string {
   const who = o.created_by_name ? ` (${o.created_by_name})` : '';
   if (o.kind === 'goal') {
-    return `- Someone would like this to be different${who}: now "${o.initial_state ?? ''}" → would like "${o.desired_state ?? ''}"`;
+    return `- Desired state${who}: "${o.desired_state ?? ''}"`;
   }
   return `- Option${who}: ${o.title}. How: ${o.policy ?? ''}. Done when: ${o.desired_state ?? ''}`;
 }
@@ -75,33 +73,38 @@ Do you have any questions before we start?"
 Answer my questions directly and honestly, using this background (don't recite it unless I ask):
 ${BACKGROUND}
 
-2. Then learn about me, one question at a time:
-- My capabilities. Ask these two questions, in this order:
+2. Then learn about me. There are only two things: what I can do or have, and my desired states.
+
+What I can do or have. Ask, one at a time:
   a) "What do people usually come to you for help with?"
-  b) "What's something you've done or made that turned out well — something you're proud of?"
-  If an answer is general, ask one follow-up: what did I do, and how did it turn out?
-- What I would like to be different. Say: "Most of us would like to earn more, spend less, or have things a bit easier." Then ask, one at a time:
-  a) "Do you see an opportunity — something that could work here if the right people or things came together?"
-  b) "What's costing you money, time or peace of mind right now?"
-  For each answer, work out with me how things are now and how I'd like them to be, and check it with me.
+  b) "Do you have anything (a tool, a machine, land, a vehicle) that others might use?"
+  If an answer is vague, ask one follow-up: "What did you do, and how did it turn out?"
+
+My desired states. Say: "Most of us would like to earn more, spend less, or have things a bit easier." Then ask, one at a time:
+  a) "What would you like to be different, for you or for people around here?"
+  b) "Is there anything you'd pay for or trade for, if someone here offered it?"
+
+Keep going until I say I'm done. Let me say several things at once; don't make me go one by one.
 
 3. Then tell me which of these open opportunities in ${orgName} could fit me:
 ${options}
 
 Rules:
-- Don't invent anything I didn't say. Keep my own words where you can, or restate them briefly and densely without adding judgement.
-- Don't add words that make things sound bigger or smaller than I said (e.g. "frequently", "impossible").
+- Write down what I say in my own words. Fix spelling only. Don't add labels or framing.
+- If I list several separate things, write each as its own item.
+- Don't rephrase things back to me, and don't ask me to approve your wording. Only ask a question if you truly can't tell what I mean.
+- Don't invent anything I didn't say. Don't add words that make things sound bigger or smaller.
 - You can't see the app or my records. If I ask you to look something up, say so.
 - Don't include phone numbers or other people's personal details.
-- Before finishing, show me a short summary and ask me to confirm it.
+- At the end, show me one list in my words, with two headings: "What you can do or have" and "What you'd like to be different". Ask: "Anything missing or wrong?" Change only what I point to.
 
 When I confirm, reply with ONLY this JSON in one code block (leave out anything I didn't mention):
 \`\`\`json
 {
-  "version": 1,
-  "desired_states": [{ "now": "how things are now", "would_like": "how I'd like them to be" }],
+  "version": 2,
+  "desired_states": ["something I'd like to be different, in my words"],
   "capabilities": [
-    { "kind": "human_capital", "narrative": "a skill or experience, in my words" }
+    { "kind": "human_capital", "narrative": "something I can do or have, in my words" }
   ]
 }
 \`\`\`
@@ -128,9 +131,11 @@ export function parseConversationResult(pasted: string): ConversationResult | { 
   if (!data || typeof data !== 'object') return { error: 'Unexpected format.' };
   const obj = data as { desired_states?: unknown; capabilities?: unknown };
 
+  // Version 2 is a list of strings; version 1 objects ({ now, would_like })
+  // still parse, keeping only what the person would like.
   const desiredStates = (Array.isArray(obj.desired_states) ? obj.desired_states : [])
-    .map(d => ({ now: text((d as ConversationDesiredState)?.now), would_like: text((d as ConversationDesiredState)?.would_like) }))
-    .filter(d => d.now && d.would_like);
+    .map(d => text(typeof d === 'string' ? d : (d as { would_like?: unknown })?.would_like))
+    .filter(Boolean);
 
   const capabilities = Array.isArray(obj.capabilities) ? obj.capabilities : [];
   const humanCapital = capabilities

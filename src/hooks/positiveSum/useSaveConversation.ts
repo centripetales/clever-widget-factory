@@ -5,11 +5,10 @@ import {
   positiveSumOpportunitiesQueryKey,
   profileSkillsQueryKey,
 } from '@/lib/queryKeys';
-import type { ConversationDesiredState } from '@/lib/positiveSumConversation';
 
 export interface ReviewedConversation {
   organizationId: string; // the Positive Sum page's org
-  desiredStates: ConversationDesiredState[];
+  desiredStates: string[];
   humanCapital: string[];
 }
 
@@ -38,11 +37,10 @@ export function useSaveConversation() {
         }
       };
 
-      for (const d of review.desiredStates) {
-        await attempt(d.would_like, () => apiService.post('/positive-sum/goals', {
+      for (const desiredState of review.desiredStates) {
+        await attempt(desiredState, () => apiService.post('/positive-sum/goals', {
           organization_id: review.organizationId,
-          initial_state: d.now,
-          desired_state: d.would_like,
+          desired_state: desiredState,
         }));
       }
       for (const narrative of review.humanCapital) {

@@ -183,12 +183,14 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
   const goalContextRoute = path.match(/\/positive-sum\/goals\/([0-9a-f-]{36})\/context$/);
 
   return withClient(dbConfig, async client => {
-    // POST /positive-sum/goals — recipient states initial and desired state
+    // POST /positive-sum/goals — a desired state in the person's own words.
+    // The initial state is optional here; it's recorded on the action when a
+    // real deal happens.
     if (httpMethod === 'POST' && path.endsWith('/positive-sum/goals')) {
       const { organization_id, title, initial_state, desired_state, attachments } = body;
       requireMember(organization_id);
-      if (!initial_state?.trim() || !desired_state?.trim()) {
-        throw new HttpError(400, 'A goal needs both an initial state and a desired state');
+      if (!desired_state?.trim()) {
+        throw new HttpError(400, 'A desired state is required');
       }
       const goal = await insertAction(client, {
         organization_id, title: titleFrom(title, desired_state), description: initial_state,

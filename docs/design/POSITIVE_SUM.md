@@ -15,7 +15,7 @@ RL framing: goal-conditioned policies and the options framework.
 
 | Term | Meaning | Stored as |
 |---|---|---|
-| **Desired state** (internally *goal*) | What someone would like to be different: an initial state and a desired state, stated explicitly. UI: "What would you like to be different?" | an `actions` row: `description` (initial) + `expected_state`, no policy, status `external_proposal` |
+| **Desired state** (internally *goal*) | What someone would like to be different, in their own words — no imposed structure, so we learn what they actually want to say. The initial state is recorded on the action when a real deal happens. UI: "What would you like to be different?" | an `actions` row: `expected_state` (their words); `description` (initial state) optional, from older goals; no policy, status `external_proposal` |
 | **Policy** | An **org's** rules and values — the template for *how* actions are built (e.g. "We're an organic farm; we seek to increase diversity and the soil microbiome"; "we value people who are on time"). Never personal. | `policy` table (needs `organization_id`, see [TODO-POLICY-ORG-ID](TODO-POLICY-ORG-ID.md)) |
 | **Capability** | *Which* actions a person or org can build — their action space, like a résumé. Inferred, not declared. | not stored: a similarity search over their actions and observations (see §3.5) |
 | **Option** | A capability applied to a situation: initial state (when it applies / conditions) → how it's done → final state (what counts as done). Either aimed at a desired state or open to anyone who fits. | an `actions` row with status `external_proposal` + an `option_context` record |

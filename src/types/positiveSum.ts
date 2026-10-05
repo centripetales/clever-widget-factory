@@ -45,7 +45,6 @@ export interface MyPositiveSum {
 
 export interface NewGoal {
   organization_id: string;
-  initial_state: string;
   desired_state: string;
   attachments?: string[];
 }

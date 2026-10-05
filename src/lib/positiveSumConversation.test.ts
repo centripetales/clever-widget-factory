@@ -19,13 +19,18 @@ describe('buildConversationPrompt', () => {
     expect(prompt).toContain('support those who support others');
     expect(prompt).toContain('"Hello, or should I say Maayong hapon?"');
     expect(prompt).toContain('the network will look for ways to create value for you');
-    expect(prompt).toContain('now "One buyer" → would like "Better prices"');
+    expect(prompt).toContain('Desired state (Maria): "Better prices"');
+    expect(prompt).not.toContain('One buyer');
+    expect(prompt).not.toMatch(/"now"|What happens now/);
+    expect(prompt).toContain('"version": 2');
+    expect(prompt).toContain('write each as its own item');
     expect(prompt).toContain('Borrow fruit picker');
     expect(prompt).toContain('"kind": "human_capital"');
     expect(prompt).not.toContain('"kind": "asset"');
-    expect(prompt.indexOf('come to you for help')).toBeLessThan(prompt.indexOf("something you're proud of"));
-    expect(prompt.indexOf('Do you see an opportunity')).toBeLessThan(prompt.indexOf('costing you money, time or peace of mind'));
-    expect(prompt).toContain('what did I do, and how did it turn out?');
+    expect(prompt.indexOf('come to you for help')).toBeLessThan(prompt.indexOf('others might use'));
+    expect(prompt.indexOf('What would you like to be different')).toBeLessThan(prompt.indexOf("you'd pay for or trade for"));
+    expect(prompt).toContain('What did you do, and how did it turn out?');
+    expect(prompt).toContain("don't ask me to approve your wording");
     expect(prompt).toContain("You can't see the app or my records");
   });
 
@@ -43,8 +48,8 @@ describe('buildConversationPrompt', () => {
 
 describe('parseConversationResult', () => {
   const json = JSON.stringify({
-    version: 1,
-    desired_states: [{ now: 'One buyer comes by', would_like: 'Better corn prices' }, { now: '', would_like: 'x' }],
+    version: 2,
+    desired_states: ['Better corn prices', 'Most fruit', '  ', 42],
     capabilities: [
       { kind: 'human_capital', narrative: 'Grafted mango for 5 years' },
       { kind: 'asset', name: 'Fruit picker', narrative: 'Aluminum pole, good condition' },
@@ -56,7 +61,7 @@ describe('parseConversationResult', () => {
   it('reads a fenced block with prose around it', () => {
     const result = parseConversationResult(`Here you go!\n\`\`\`json\n${json}\n\`\`\`\nCopy it back.`);
     expect(result).toEqual({
-      desiredStates: [{ now: 'One buyer comes by', would_like: 'Better corn prices' }],
+      desiredStates: ['Better corn prices', 'Most fruit'],
       humanCapital: ['Grafted mango for 5 years'],
     });
   });
@@ -64,6 +69,11 @@ describe('parseConversationResult', () => {
   it('reads bare JSON with text around it', () => {
     const result = parseConversationResult(`Summary: ${json} thanks`);
     expect('error' in result).toBe(false);
+  });
+
+  it('still reads version 1 objects, keeping what the person would like', () => {
+    const v1 = JSON.stringify({ version: 1, desired_states: [{ now: 'One buyer', would_like: 'Better prices' }, { now: 'x', would_like: '' }] });
+    expect(parseConversationResult(v1)).toEqual({ desiredStates: ['Better prices'], humanCapital: [] });
   });
 
   it('explains what went wrong', () => {
