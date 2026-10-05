@@ -10,7 +10,10 @@ export const offlineQueryConfig = {
   gcTime: 7 * 24 * 60 * 60 * 1000, // 7 days
   networkMode: 'offlineFirst' as const, // Use cache when offline
   placeholderData: keepPreviousData,
-  refetchOnMount: false,
+  // true = refetch on mount only when stale: never fetched, older than staleTime,
+  // or invalidated (e.g. by a WebSocket cache:invalidate from another tab/device).
+  // Fresh cache still renders with no network call.
+  refetchOnMount: true,
   refetchOnWindowFocus: false,
 };
 

@@ -64,11 +64,6 @@ export default function Actions() {
     ...completedActionsQueryConfig,
     ...offlineQueryConfig,
     enabled: completedTabVisited,
-    staleTime: 24 * 60 * 60 * 1000,
-    gcTime: 7 * 24 * 60 * 60 * 1000,
-    networkMode: 'offlineFirst' as const,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
   });
 
   const loading = unresolvedLoading;
