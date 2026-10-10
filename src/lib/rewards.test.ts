@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { formatAmount, signFor, totalsByParty, savings, breakEvenRate, netAtRate, balance } from './rewards';
+import {
+  formatAmount, signFor, totalsByParty, advantage, advantageRows, nextBestStatement, noOtherOptionStatement, nextBestOptions,
+  formatBalance, breakEvenRate, netAtRate, balance,
+} from './rewards';
 import type { NextBestOption, RewardClaim } from '@/types/rewards';
 
 const SG = 'stargazer';
@@ -52,19 +55,106 @@ describe('totalsByParty', () => {
   });
 });
 
-describe('savings', () => {
+describe('advantage', () => {
   const option = (overrides: Partial<NextBestOption>): NextBestOption => ({
-    name: 'Hire a truck', php: 6000, hours: null, replaces: ['Driving payment', 'Gas'], claim: 'text', source_state_ids: [], ...overrides,
+    name: 'Hire a truck', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'cost_another_way', php: 6000, hours: null,
+    done_by: null, replaces: ['Driving payment', 'Gas'], claim: 'text', source_state_ids: [], ...overrides,
   });
 
-  it('is the next-best price minus the claims it replaces', () => {
-    expect(savings(option({}), trip)).toEqual({ php: 1500, hours: null });
+  it('is the cost another way minus the claims it replaces', () => {
+    expect(advantage(option({}), trip)).toEqual({ money: 1500, hours: 0 });
   });
 
   it('is unknown when either side was not stated', () => {
-    expect(savings(option({ php: null }), trip).php).toBeNull();
-    expect(savings(option({ replaces: ['Suckers'] }), trip).php).toBeNull();
-    expect(savings(option({ replaces: [] }), trip).php).toBeNull();
+    expect(advantage(option({ php: null }), trip)).toBeNull();
+    expect(advantage(option({ replaces: ['Suckers'] }), trip)).toBeNull();
+    expect(advantage(option({ replaces: [] }), trip)).toBeNull();
+  });
+});
+
+// 6 banana suckers from Lester's parents for ₱200 (docs/design/POSITIVE_SUM.md §2.6)
+describe('advantage on both sides of a purchase', () => {
+  const LESTER = 'lester';
+  const claims = [claim({ name: 'Paid for suckers', to_org_id: LESTER, to_name: "Lester's parents", php: 200 })];
+  const options: NextBestOption[] = [
+    {
+      name: 'May coordinates it', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'cost_another_way', php: null, hours: 2,
+      done_by: 'May', replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
+    },
+    {
+      name: 'Left in the clump', for_org_id: LESTER, for_name: "Lester's parents", kind: 'had_otherwise', php: 10, hours: null,
+      done_by: null, replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
+    },
+  ];
+
+  it('keeps hours as hours for the one who paid', () => {
+    const ours = advantage(options[0], claims)!;
+    expect(ours).toEqual({ money: -200, hours: 2 });
+    expect(formatBalance(ours)).toBe('−₱200 · +2 hours');
+    expect(breakEvenRate(ours)).toBe(100);
+    expect(netAtRate(ours, 150)).toBe(100);
+  });
+
+  it('is what was received minus what they would have had otherwise', () => {
+    expect(advantage(options[1], claims)).toEqual({ money: 190, hours: 0 });
+  });
+
+  it('gives every party a row, documented or not', () => {
+    expect(advantageRows(claims, [])).toMatchObject([
+      { id: SG, name: 'Stargazer Farm', paid: true, options: [], value: null, noOtherOption: false },
+      { id: LESTER, name: "Lester's parents", paid: false, options: [], value: null, noOtherOption: false },
+    ]);
+  });
+
+  it('adds up each party\'s documented options', () => {
+    expect(advantageRows(claims, options)).toMatchObject([
+      { id: SG, paid: true, value: { money: -200, hours: 2 }, noOtherOption: false },
+      { id: LESTER, paid: false, value: { money: 190, hours: 0 }, noOtherOption: false },
+    ]);
+  });
+
+  it('does not evaluate a party that had no other option', () => {
+    const none: NextBestOption = {
+      name: 'No other source', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'no_other_option', php: null, hours: null,
+      done_by: null, replaces: [], claim: 'text', source_state_ids: [],
+    };
+    expect(advantageRows(claims, [none])[0]).toMatchObject({ value: null, noOtherOption: true });
+  });
+});
+
+describe('next-best statements', () => {
+  it('says what the other way would have cost the one who paid', () => {
+    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'May finds the suckers.', php: '', hours: '2', who: 'May' }))
+      .toBe("Next best option for Stargazer Farm: May finds the suckers. Getting it that way would have cost 2 hours of May's time.");
+  });
+
+  it('says what the one who received would have had otherwise', () => {
+    expect(nextBestStatement({ party: "Lester's parents", paid: false, what: 'Left in the clump', php: '10', hours: '', who: '' }))
+      .toBe("Next best option for Lester's parents: Left in the clump. That would have been worth ₱10.");
+  });
+
+  it('keeps a next best with no amount, and states when there was none', () => {
+    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'Another seller', php: '', hours: '', who: '' }))
+      .toBe('Next best option for Stargazer Farm: Another seller.');
+    expect(noOtherOptionStatement('Stargazer Farm')).toBe('There was no other option for Stargazer Farm to get this.');
+  });
+});
+
+describe('nextBestOptions', () => {
+  it('reads rewards built with a single option as a cost for whoever paid', () => {
+    const old = { name: 'Hire a truck', php: 6000, hours: null, replaces: ['Gas'], claim: 'text', source_state_ids: [] };
+    expect(nextBestOptions({ claims: trip, next_best_option: old })).toEqual([
+      { ...old, kind: 'cost_another_way', done_by: null, for_org_id: SG, for_name: 'Stargazer Farm' },
+    ]);
+    expect(nextBestOptions({ claims: trip, next_best_option: null })).toEqual([]);
+  });
+});
+
+describe('formatBalance', () => {
+  it('signs money and time, and leaves out time when there is none', () => {
+    expect(formatBalance({ money: 190, hours: 0 })).toBe('+₱190');
+    expect(formatBalance({ money: 0, hours: 0 })).toBe('+₱0');
+    expect(formatBalance({ money: 0, hours: -1 })).toBe('−1 hour');
   });
 });
 
@@ -73,12 +163,12 @@ describe('break-even', () => {
 
   it('finds the hourly value where the action nets to zero', () => {
     expect(balance(stargazer)).toEqual({ money: 19500, hours: -24 });
-    expect(breakEvenRate(stargazer)).toBe(812.5);
-    expect(netAtRate(stargazer, 812.5)).toBe(0);
-    expect(netAtRate(stargazer, 500)).toBe(7500);
+    expect(breakEvenRate(balance(stargazer))).toBe(812.5);
+    expect(netAtRate(balance(stargazer), 812.5)).toBe(0);
+    expect(netAtRate(balance(stargazer), 500)).toBe(7500);
   });
 
   it('is null when no time is involved', () => {
-    expect(breakEvenRate(totalsByParty(trip).find(t => t.id === PASTOR)!)).toBeNull();
+    expect(breakEvenRate(balance(totalsByParty(trip).find(t => t.id === PASTOR)!))).toBeNull();
   });
 });

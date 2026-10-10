@@ -38,6 +38,7 @@ import {
   type PhotoItem,
 } from '@/components/shared/PhotoUploadPanel';
 import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { TransactionRewards } from '@/components/positiveSum/TransactionRewards';
 import type { FinancialRecordEdit } from '@/types/financialRecords';
 
 export default function FinancialRecordDetail() {
@@ -440,6 +441,9 @@ export default function FinancialRecordDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Rewards — expenses only for now (docs/design/POSITIVE_SUM.md §2.6) */}
+      {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} />}
 
       {/* Metadata */}
       <Card className="mt-4">

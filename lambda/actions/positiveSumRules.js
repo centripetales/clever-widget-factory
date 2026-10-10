@@ -14,6 +14,8 @@ const STATE_TYPES = {
   APPROVAL: 'positive_sum.approval',
   PASS: 'positive_sum.pass',
   OPPORTUNITY_LIST: 'positive_sum.opportunity_list',
+  // The transaction an action was made from, and the other organization in it.
+  TRANSACTION_CONTEXT: 'positive_sum.transaction_context',
 };
 
 // Open desired states and options not yet chosen stay out of normal action lists,

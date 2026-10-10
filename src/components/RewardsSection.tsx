@@ -13,7 +13,8 @@ import { useActionReward } from '@/hooks/useActionReward';
 import { errorMessage } from '@/lib/apiService';
 import type { NextBestOption, RewardClaim } from '@/types/rewards';
 import {
-  balance, breakEvenRate, formatAmount, hasAny, netAtRate, savings, signFor, totalsByParty, type PartyTotals,
+  advantage, advantageRows, balance, breakEvenRate, formatAmount, formatBalance, hasAny, netAtRate, nextBestOptions,
+  nextBestStatement, noOtherOptionStatement, signFor, totalsByParty, type AdvantageRow, type Balance,
 } from '@/lib/rewards';
 
 const COST_BASIS_LABELS: Record<NonNullable<RewardClaim['cost_basis_method']>, string> = {
@@ -35,41 +36,65 @@ function PartyChip({ id, name, orgNames }: { id: string | null; name: string; or
   );
 }
 
-function NextBestOptionCard({ option, claims }: { option: NextBestOption; claims: RewardClaim[] }) {
-  const saved = savings(option, claims);
+const OPTION_KIND_LABELS: Record<NextBestOption['kind'], string> = {
+  cost_another_way: 'Cost another way',
+  had_otherwise: 'Would have had otherwise',
+  no_other_option: 'No other option',
+};
+
+function NextBestOptionCard({ option, claims, orgNames }: {
+  option: NextBestOption;
+  claims: RewardClaim[];
+  orgNames: Record<string, string>;
+}) {
+  const value = advantage(option, claims);
+  const party = option.for_org_id ? orgNames[option.for_org_id] ?? option.for_name : option.for_name;
   return (
     <div className="space-y-1 rounded-md border border-dashed p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium break-words">Next-best option: {option.name}</span>
-        <span className="font-medium">{formatAmount(option.php, option.hours)}</span>
+        {option.kind !== 'no_other_option' && <span className="font-medium">{formatAmount(option.php, option.hours)}</span>}
       </div>
-      {hasAny(saved) && (
-        <p className="text-sm font-medium">Saved {formatAmount(saved.php, saved.hours)}</p>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {party && <PartyChip id={option.for_org_id} name={option.for_name} orgNames={orgNames} />}
+        <Badge variant="outline">{OPTION_KIND_LABELS[option.kind]}</Badge>
+        {option.done_by && option.hours !== null && <span>Time: {option.done_by}</span>}
+        {!!option.stated_by?.length && <span>Documented by {option.stated_by.join(', ')}</span>}
+      </div>
+      {value && (
+        <p className="text-sm font-medium">Advantage{party ? ` for ${party}` : ''}: {formatBalance(value)}</p>
       )}
       <p className="text-sm text-muted-foreground break-words">{option.claim}</p>
       {option.replaces.length > 0 && (
         <p className="text-xs text-muted-foreground break-words">Instead of: {option.replaces.join(', ')}</p>
       )}
+      {value && (
+        <HourValue
+          value={value}
+          label={option.done_by ? `An hour of ${option.done_by}'s time is worth ₱` : 'An hour of that time is worth ₱'}
+          netLabel="Advantage"
+        />
+      )}
     </div>
   );
 }
 
-// Converts the viewer org's hours to pesos at a value it chooses, or finds the
-// hourly value where the action breaks even. Nothing is stored.
-function HourValue({ totals }: { totals: PartyTotals }) {
+// Converts hours to pesos at a value the viewer chooses, or finds the hourly
+// value where money and time break even. Nothing is stored.
+function HourValue({ value, label, netLabel }: { value: Balance; label: string; netLabel: string }) {
   const [rate, setRate] = useState('');
-  const breakEven = breakEvenRate(totals);
+  const breakEven = breakEvenRate(value);
   if (breakEven === null) return null;
 
-  const { hours } = balance(totals);
-  const value = Number(rate);
-  const net = rate.trim() && Number.isFinite(value) ? netAtRate(totals, value) : null;
+  const { hours } = value;
+  const entered = Number(rate);
+  const net = rate.trim() && Number.isFinite(entered) ? netAtRate(value, entered) : null;
   const peso = (n: number) => `${n < 0 ? '−' : '+'}₱${Math.abs(Math.round(n)).toLocaleString()}`;
 
   return (
     <div className="space-y-1 rounded-md bg-muted/40 p-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span>My hour is worth ₱</span>
+        <span>{label}</span>
         <Input
           type="number"
           inputMode="decimal"
@@ -90,27 +115,151 @@ function HourValue({ totals }: { totals: PartyTotals }) {
       </div>
       {net !== null && (
         <p>
-          Net for this action:{' '}
+          {netLabel}:{' '}
           <span className={net < 0 ? 'font-medium text-destructive' : 'font-medium text-green-700 dark:text-green-400'}>{peso(net)}</span>
         </p>
       )}
       {breakEven < 0 && (
         <p className="text-muted-foreground">
-          {hours < 0 ? 'Even with time valued at zero, this action cost more money than it brought in.' : 'Gained time and money — no break-even to find.'}
+          {hours < 0 ? 'Even with time valued at zero, this cost more money than it brought in.' : 'Gained time and money — no break-even to find.'}
         </p>
       )}
     </div>
   );
 }
 
+// One party's advantage, and the fields for documenting its next-best option.
+// What is entered is saved as the person's observation, so it stays their
+// claim and they are credited with documenting it.
+function AdvantageRowView({ row, orgNames, onSave }: {
+  row: AdvantageRow;
+  orgNames: Record<string, string>;
+  onSave: (text: string) => Promise<boolean>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [what, setWhat] = useState('');
+  const [php, setPhp] = useState('');
+  const [hours, setHours] = useState('');
+  const [who, setWho] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const party = row.id ? orgNames[row.id] ?? row.name : row.name;
+  const documentedBy = [...new Set(row.options.flatMap(o => o.stated_by ?? []))];
+
+  const save = async (text: string) => {
+    setSaving(true);
+    const ok = await onSave(text);
+    setSaving(false);
+    if (ok) {
+      setAdding(false);
+      setWhat('');
+      setPhp('');
+      setHours('');
+      setWho('');
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="min-w-0"><PartyChip id={row.id} name={row.name} orgNames={orgNames} /></span>
+        <span className={row.value ? 'font-medium' : 'text-muted-foreground'}>
+          {row.value ? formatBalance(row.value) : row.noOtherOption ? 'Not evaluated' : row.options.length ? 'Not stated' : 'Next best not documented'}
+        </span>
+      </div>
+      {row.noOtherOption && !row.value && (
+        <p className="text-xs text-muted-foreground">No other option — this expanded what {party} can do, so there is nothing to compare it with.</p>
+      )}
+      {documentedBy.length > 0 && <p className="text-xs text-muted-foreground">Documented by {documentedBy.join(', ')}</p>}
+
+      {adding ? (
+        <div className="space-y-2 pt-1">
+          <Textarea
+            rows={2}
+            placeholder={row.paid ? `What would ${party} have done otherwise to get this?` : `What would ${party} have had otherwise?`}
+            value={what}
+            onChange={e => setWhat(e.target.value)}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Input className="w-32" type="number" inputMode="decimal" placeholder="₱, optional" value={php} onChange={e => setPhp(e.target.value)} />
+            <Input className="w-32" type="number" inputMode="decimal" placeholder="Hours, optional" value={hours} onChange={e => setHours(e.target.value)} />
+            {hours.trim() && (
+              <Input className="w-40" placeholder="Whose hours?" value={who} onChange={e => setWho(e.target.value)} />
+            )}
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {row.paid && (
+              <Button variant="outline" size="sm" className="mr-auto" disabled={saving} onClick={() => save(noOtherOptionStatement(party))}>
+                No other option
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              disabled={saving || !what.trim()}
+              onClick={() => save(nextBestStatement({ party, paid: row.paid, what, php, hours, who }))}
+            >
+              {saving ? 'Saving...' : 'Save and rebuild'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setAdding(true)}>
+            {row.options.length ? 'Add another next best' : 'Document next best'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// More about what happened, said in the person's own words; saved as an
+// observation and followed by a rebuild.
+function AddObservation({ onAdd }: { onAdd: (text: string) => Promise<boolean> }) {
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    if (await onAdd(text.trim())) setText('');
+    setSaving(false);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Textarea
+        rows={2}
+        placeholder="What happened, or what would you (or they) have done otherwise?"
+        value={text}
+        onChange={e => setText(e.target.value)}
+      />
+      <div className="flex justify-end">
+        <Button size="sm" disabled={saving || !text.trim()} onClick={save}>
+          {saving ? 'Saving...' : 'Add and rebuild'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type EntityLink = { entity_type: string; entity_id: string };
+
 // Rewards of an action: claims derived from its observations by AI, rebuilt on
 // request. Adjustments are saved as observations so a rebuild keeps them.
-export function RewardsSection({ actionId }: { actionId: string }) {
-  const [open, setOpen] = useState(false);
+// For an action made from a transaction, `alsoLinkTo` is the transaction:
+// people add observations here, linked to both; `justCreated` opens it while
+// the first build, started with the action, is still running.
+export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
+  actionId: string;
+  alsoLinkTo?: EntityLink;
+  justCreated?: boolean;
+}) {
+  const [open, setOpen] = useState(justCreated);
   const { toast } = useToast();
   const { organization } = useOrganization();
   const { createState } = useStateMutations(organization?.id ?? '', { entity_type: 'action', entity_id: actionId });
-  const { data, isLoading, rebuild, isBuilding } = useActionReward(actionId, open);
+  const { data, isLoading, rebuild, isBuilding } = useActionReward(actionId, open, justCreated);
 
   const orgNames = data?.org_names ?? {};
   const claims = data?.claims;
@@ -121,24 +270,36 @@ export function RewardsSection({ actionId }: { actionId: string }) {
       onError: error => toast({ title: 'Could not rebuild', description: errorMessage(error), variant: 'destructive' }),
     });
 
-  const saveAdjustment = async (c: RewardClaim, php: string, hours: string, note: string) => {
+  const links: EntityLink[] = [{ entity_type: 'action', entity_id: actionId }, ...(alsoLinkTo ? [alsoLinkTo] : [])];
+
+  const saveObservation = async (text: string, failure: string) => {
+    try {
+      await createState({ state_text: text, photos: [], links });
+      startRebuild();
+      return true;
+    } catch (error) {
+      toast({ title: failure, description: errorMessage(error), variant: 'destructive' });
+      return false;
+    }
+  };
+
+  const saveAdjustment = (c: RewardClaim, php: string, hours: string, note: string) => {
     const amounts = [php.trim() && `₱${php.trim()}`, hours.trim() && `${hours.trim()} hours`].filter(Boolean).join(' and ');
     const parts = [
       `Adjustment to "${c.name}" (${partyName(c.from_org_id, c.from_name)} → ${partyName(c.to_org_id, c.to_name)}):`,
       amounts && `the amount is ${amounts}.`,
       note.trim(),
     ].filter(Boolean);
-    try {
-      await createState({ state_text: parts.join(' '), photos: [], links: [{ entity_type: 'action', entity_id: actionId }] });
-      startRebuild();
-      return true;
-    } catch (error) {
-      toast({ title: 'Could not save the adjustment', description: errorMessage(error), variant: 'destructive' });
-      return false;
-    }
+    return saveObservation(parts.join(' '), 'Could not save the adjustment');
   };
 
   const totals = claims ? totalsByParty(claims) : [];
+  const options = data && claims ? nextBestOptions(data) : [];
+  const rows = claims ? advantageRows(claims, options) : [];
+  const evaluated = rows.flatMap(r => (r.value ? [r.value] : []));
+  const advantageTotal = evaluated.reduce<Balance>(
+    (sum, v) => ({ money: sum.money + v.money, hours: sum.hours + v.hours }), { money: 0, hours: 0 }
+  );
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-4 rounded-md border">
@@ -157,7 +318,9 @@ export function RewardsSection({ actionId }: { actionId: string }) {
       <CollapsibleContent className="space-y-3 px-3 pb-3">
         {isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
         {!isLoading && !data && (
-          <p className="text-sm text-muted-foreground">No rewards yet. Add observations about what happened, then rebuild.</p>
+          <p className="text-sm text-muted-foreground">
+            {isBuilding ? 'Building the rewards...' : 'No rewards yet. Add observations about what happened, then rebuild.'}
+          </p>
         )}
         {data && !claims && (
           <p className="text-sm text-muted-foreground">These rewards were built in an older format. Rebuild to update them.</p>
@@ -170,7 +333,36 @@ export function RewardsSection({ actionId }: { actionId: string }) {
           <ClaimCard key={`${c.name}-${i}`} claim={c} orgNames={orgNames} sign={signFor(c, organization?.id)} onAdjust={saveAdjustment} />
         ))}
 
-        {claims && data?.next_best_option && <NextBestOptionCard option={data.next_best_option} claims={claims} />}
+        {claims && options.map((o, i) => (
+          <NextBestOptionCard key={`${o.name}-${i}`} option={o} claims={claims} orgNames={orgNames} />
+        ))}
+
+        {rows.length > 0 && (
+          <div className="space-y-2 rounded-md bg-muted/40 p-2 text-sm">
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Advantage</span>
+              <InfoBubble>
+                How much better this was for each party than its next-best option — what it would otherwise have done
+                or had. The next best never happened, so it is the claim of whoever documents it, and they are credited
+                with documenting it.
+              </InfoBubble>
+            </div>
+            {rows.map(row => (
+              <AdvantageRowView
+                key={row.id ?? row.name}
+                row={row}
+                orgNames={orgNames}
+                onSave={text => saveObservation(text, 'Could not save the next best')}
+              />
+            ))}
+            {evaluated.length > 1 && (
+              <div className="flex items-center justify-between gap-2 border-t pt-2 font-medium">
+                <span>Total</span>
+                <span>{formatBalance(advantageTotal)}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {totals.length > 0 && (
           <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1 rounded-md bg-muted/40 p-2 text-sm">
@@ -193,8 +385,10 @@ export function RewardsSection({ actionId }: { actionId: string }) {
 
         {(() => {
           const mine = totals.find(t => t.id && t.id === organization?.id);
-          return mine ? <HourValue totals={mine} /> : null;
+          return mine ? <HourValue value={balance(mine)} label="My hour is worth ₱" netLabel="Net for this action" /> : null;
         })()}
+
+        {alsoLinkTo && <AddObservation onAdd={text => saveObservation(text, 'Could not save the observation')} />}
 
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">

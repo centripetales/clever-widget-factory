@@ -58,3 +58,25 @@ export interface NewOption {
   capacity?: number;
   parent_option_id?: string | null;
 }
+
+// The action behind a transaction (lambda/actions/transaction.js).
+export interface NamedOrganization {
+  id: string;
+  name: string;
+}
+
+export interface TransactionAction {
+  action_id: string;
+  other_org: NamedOrganization;
+}
+
+// The LLM's draft for the review; the organization has no id when it isn't in the app yet.
+export interface TransactionDraft {
+  other_org: { id: string | null; name: string };
+  llm_generation_config_id: string;
+}
+
+export interface NewTransactionAction {
+  other_org_id: string;
+  llm_generation_config_id?: string;
+}

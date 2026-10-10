@@ -166,13 +166,15 @@ expense.
 - **Where:** Transaction Detail gets an expandable **Rewards** section, the
   same as on an action. Opening it creates nothing.
 - **First build — draft, review, save.** An LLM drafts from the expense
-  (description, photo descriptions, stock adjustment, amount, date): the
+  (description, photo descriptions, amount, date — a stock adjustment is not
+  linked to its expense in the data, so it is not part of the draft): the
   **other organization** (the seller), the **existing state** and the
   **final state** (the inventory change, e.g. "no banana suckers" → "6
   banana suckers for the hillside rows"). The person confirms or edits;
   then the action is created and the rewards build.
 - **The action:** in the expense's org; **assignee = the person tracking
-  the transaction** (they are responsible for the record); already
+  the transaction** (the one who recorded it; they are responsible for
+  the record); already
   completed, dated the transaction date; `description` = existing state,
   `expected_state` = final state. It is reached **only via the
   transaction** — not in everyday action lists.
@@ -216,12 +218,61 @@ parents, ₱200 paid.
 | Stargazer (paid ₱200) | May coordinates it: 2 hours | 2 h at the viewer's rate − ₱200 (₱0 at ₱100/h) |
 | Lester's parents (received ₱200) | Suckers left in the clump: ~₱10 | ₱200 − ₱10 = ₱190 |
 
+Built from the revision: the Advantage block with next-best fields and
+"no other option" (reward prompt `reward-v8`), and the expense review
+reduced to the other organization. Not built: neighborhood price, time
+perspective.
+
+Code (written 2026-10-10): `lambda/actions/transaction.js`
+(routes `/financial-records/{id}/action[/draft]` and
+`/positive-sum/organizations`, added by
+`scripts/add-transaction-reward-endpoints.sh`), reward prompt `reward-v7`,
+`TransactionRewards.tsx` on Transaction Detail. Rewards built before v7
+still show; a rebuild moves them to the new shape.
+
+Revised after the first run on a real expense (2026-10-10, not built):
+
+- **Reward vs advantage.** A reward is what moved because of an action;
+  a cash transfer is a recorded fact (the expense). **Advantage** is the
+  claim: the reward against the party's next-best option, which never
+  happened and is always someone's estimate. Advantage is what we are
+  after; it is computed, never stored.
+- **No existing/final state in the expense review.** The description
+  already says what was traded; the review asks only for the other
+  organization.
+- **Expenses are not forced into the action reward flow.** One person
+  (Mae) keeps the expenses; others track actions. A payment someone states
+  on an action stays their claim, and an expense stays its recorder's; the
+  two are not reconciled or required to match. Not bureaucratic.
+- **Keep the auditable path; add next-best fields.** What moved stays as
+  claims grounded in what people recorded. Documenting a party's next-best
+  option is extra fields on top (what, ₱ and/or hours, whose hours, or "no
+  other option"), saved as the documenter's own observation. Knowing the
+  options expands what the org can do, so **the person who documents a
+  next best is credited** ("Documented by").
+- **Advantage block, always shown**, one row per party: not asked yet (the
+  row is the prompt — "What would <party> have done otherwise to get
+  this?") / next best stated → advantage / **no other option** →
+  capability expanding, advantage not evaluated ("not buying" is a
+  non-action, not a next best). The tracker states both sides; other
+  parties are not expected to comment.
+- **Neighborhood price as the next best.** The reward build pulls similar
+  transactions (for now mostly the org's own past purchases) and derives a
+  price for the same thing; it shows the transactions it used so the
+  baseline stays a claim with evidence.
+- **Time as a perspective on an observation**: hours spent, by whom, on
+  what or whom (e.g. the SEC) — as stated, or estimated when not stated
+  and marked as such — so time can be totalled across observations. (The
+  existing `time-perspective-worker` estimates whole days and stores
+  summary observations; this is per observation.)
+- **Later:** after a sale, asking "make this available to others in your
+  network?"; **network credit**, which flows from the advantage a person
+  provided to others and is simple once advantage can be calculated.
+
 Open:
 - Sales (money coming in) — the mirror of this; not in the first slice.
 - An org created this way has no people. How its own people later join
   and take it over is not defined.
-- Which person is "tracking the transaction" when the one who opens
-  Rewards is not the one who recorded the expense.
 - What a later edit or delete of the expense does to its action.
 
 ## 3. Direction (decided in principle, details open)

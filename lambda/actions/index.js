@@ -1,11 +1,12 @@
 const { Client } = require('pg');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { getAuthorizerContext, buildOrganizationFilter } = require('/opt/nodejs/authorizerContext');
+const { getAuthorizerContext, buildOrganizationFilter, hasPermission } = require('/opt/nodejs/authorizerContext');
 const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
 const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
 const { handleReward, buildReward } = require('./reward');
+const { handleTransactionAction, handleOrganizations, transactionForAction } = require('./transaction');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
@@ -48,6 +49,14 @@ async function queryJSON(sql) {
   }
 }
 
+// Actions made from a transaction are reached only via the transaction, so
+// they stay out of action lists (docs/design/POSITIVE_SUM.md §2.6).
+const NOT_FROM_TRANSACTION = `NOT EXISTS (
+  SELECT 1 FROM state_links tl JOIN states ts ON ts.id = tl.state_id
+  WHERE tl.entity_type = 'action' AND tl.entity_id = a.id
+    AND ts.state_text LIKE '{"type":"positive_sum.transaction_context"%'
+)`;
+
 // Positive Sum helpers shared by the web routes and the Maxwell action group.
 function queueActionEmbedding(action) {
   const embeddingSource = composeActionPolicySource(action);
@@ -87,7 +96,7 @@ exports.handler = async (event) => {
   
   // Async rewards rebuild, started by POST /actions/{id}/reward
   if (event.rewardBuild) {
-    await buildReward({ ...event.rewardBuild, dbConfig });
+    await buildReward({ ...event.rewardBuild, dbConfig, loadTransaction: transactionForAction });
     return { ok: true };
   }
 
@@ -129,6 +138,38 @@ exports.handler = async (event) => {
         },
         body: ''
       };
+    }
+
+    // The action behind a transaction (rewards from an expense), and the
+    // organizations people can name as the other party in one
+    const transactionRoute = path.match(/\/financial-records\/([0-9a-f-]{36})\/action(\/draft)?$/);
+    const organizationsRoute = path.endsWith('/positive-sum/organizations');
+    if ((transactionRoute || organizationsRoute) && (httpMethod === 'GET' || httpMethod === 'POST')) {
+      try {
+        const body = JSON.parse(event.body || '{}');
+        const orgIds = allAccessibleOrgIds.length ? allAccessibleOrgIds : accessibleOrgIds;
+        const auth = {
+          userId: requireCognitoUserId(authContext),
+          accessibleOrgIds: orgIds,
+          canReadOrgData: hasPermission(authContext, 'data:read:all') || hasPermission(authContext, 'data:read:org'),
+          isSuperAdmin: hasPermission(authContext, 'data:read:all'),
+        };
+        const { statusCode, data } = organizationsRoute
+          ? await handleOrganizations({ httpMethod, name: httpMethod === 'GET' ? queryStringParameters?.name : body.name, auth, dbConfig })
+          : await handleTransactionAction({ httpMethod, recordId: transactionRoute[1], isDraft: !!transactionRoute[2], body, auth, dbConfig });
+        // A new action from a transaction gets its rewards built straight away;
+        // the action is saved either way, and the person can rebuild.
+        if (transactionRoute && statusCode === 201) {
+          await handleReward({ httpMethod: 'POST', actionId: data.action_id, userId: auth.userId, accessibleOrgIds: orgIds, dbConfig })
+            .catch(error => console.error('[TRANSACTION] rewards build not started:', error.message));
+        }
+        return { statusCode, headers, body: JSON.stringify({ data }) };
+      } catch (error) {
+        if (error.statusCode) {
+          return { statusCode: error.statusCode, headers, body: JSON.stringify({ error: error.message }) };
+        }
+        throw error;
+      }
     }
 
     // Positive Sum: goals, policies, options, approvals, opportunities
@@ -210,6 +251,7 @@ exports.handler = async (event) => {
           WHERE entity_type = 'action'
         ) updates ON a.id = updates.action_id
         WHERE om.cognito_user_id = '${cognitoUserId}'
+          AND ${NOT_FROM_TRANSACTION}
         ORDER BY a.created_at DESC
       ) t;`;
       
@@ -997,6 +1039,8 @@ exports.handler = async (event) => {
       }
       if (id) {
         whereConditions.push(`a.id = '${id.replace(/'/g, "''")}'`);
+      } else {
+        whereConditions.push(NOT_FROM_TRANSACTION);
       }
       if (assigned_to) {
         whereConditions.push(`a.assigned_to = '${assigned_to.replace(/'/g, "''")}'`);

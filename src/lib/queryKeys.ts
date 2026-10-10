@@ -21,6 +21,10 @@ export const positiveSumMineQueryKey = (orgId?: string) =>
 export const positiveSumOpportunitiesQueryKey = (orgIds?: string[]) =>
   orgIds ? ['positive_sum', 'opportunities', [...orgIds].sort().join(',')] : ['positive_sum', 'opportunities'];
 
+// The action behind a transaction, and organizations with a similar name
+export const transactionActionQueryKey = (recordId: string) => ['transaction_action', recordId];
+export const similarOrganizationsQueryKey = (name: string) => ['positive_sum', 'organizations', name];
+
 // Checkouts query key removed — checkout system deprecated
 
 export const actionScoresQueryKey = (start?: string, end?: string) => [

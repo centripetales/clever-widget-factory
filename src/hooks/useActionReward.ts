@@ -10,9 +10,13 @@ const GIVE_UP_MS = 3 * 60 * 1000;
 /**
  * The action's rewards, plus a rebuild that runs in the background: POST starts
  * it, then the query polls until a newer result (or a failure) is saved.
+ * `alreadyBuilding`: a build was started elsewhere (an action just made from a
+ * transaction), so poll for its result from the start.
  */
-export function useActionReward(actionId: string, enabled: boolean) {
-  const [building, setBuilding] = useState<{ since: number; previous: string | null } | null>(null);
+export function useActionReward(actionId: string, enabled: boolean, alreadyBuilding = false) {
+  const [building, setBuilding] = useState<{ since: number; previous: string | null } | null>(
+    () => (alreadyBuilding ? { since: Date.now(), previous: null } : null)
+  );
 
   const query = useQuery({
     queryKey: actionRewardQueryKey(actionId),

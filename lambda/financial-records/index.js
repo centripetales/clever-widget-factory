@@ -18,6 +18,20 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// A transaction's description is its first observation. Later observations
+// (e.g. what someone would have done otherwise, for its rewards) are linked to
+// it too, so every read picks the first one.
+const DESCRIPTION_STATE_JOIN =
+  ' LEFT JOIN LATERAL (' +
+  '   SELECT ds.id, ds.state_text FROM state_links sl JOIN states ds ON ds.id = sl.state_id' +
+  '   WHERE sl.entity_id = fr.id AND sl.entity_type = \'financial_record\'' +
+  '   ORDER BY ds.created_at, ds.id LIMIT 1' +
+  ' ) s ON true';
+const DESCRIPTION_STATE_LOOKUP =
+  'SELECT sl.state_id FROM state_links sl JOIN states ds ON ds.id = sl.state_id' +
+  ' WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'' +
+  ' ORDER BY ds.created_at, ds.id LIMIT 1';
+
 /**
  * Recompute balance_after for all Cash records in an org from a given date forward.
  * Call this after any insert/update/delete that affects Cash transactions.
@@ -304,8 +318,7 @@ async function listRecords(queryParams, authContext) {
     'SELECT fr.*, s.state_text AS description, s.id AS state_id,' +
     ' COALESCE(om.full_name, \'Unknown\') AS created_by_name' +
     ' FROM financial_records fr' +
-    ' LEFT JOIN state_links sl ON sl.entity_id = fr.id AND sl.entity_type = \'financial_record\'' +
-    ' LEFT JOIN states s ON s.id = sl.state_id' +
+    DESCRIPTION_STATE_JOIN +
     ' LEFT JOIN organization_members om' +
     '   ON fr.created_by::text = om.cognito_user_id::text' +
     '   AND om.organization_id = fr.organization_id' +
@@ -351,8 +364,7 @@ async function getRecord(id, authContext) {
     'SELECT fr.*, s.state_text AS description, s.id AS state_id,' +
     ' COALESCE(om.full_name, \'Unknown\') AS created_by_name' +
     ' FROM financial_records fr' +
-    ' LEFT JOIN state_links sl ON sl.entity_id = fr.id AND sl.entity_type = \'financial_record\'' +
-    ' LEFT JOIN states s ON s.id = sl.state_id' +
+    DESCRIPTION_STATE_JOIN +
     ' LEFT JOIN organization_members om' +
     '   ON fr.created_by::text = om.cognito_user_id::text' +
     '   AND om.organization_id = fr.organization_id' +
@@ -387,9 +399,9 @@ async function getRecord(id, authContext) {
     ' LEFT JOIN state_links sl_pap ON sl_pap.state_id = s_trans.id AND sl_pap.entity_type = \'photo_analysis_param\'' +
     ' LEFT JOIN photo_analysis_params pap ON sl_pap.entity_id = pap.id' +
     ' LEFT JOIN llm_generation_configs lgc ON sl_pap.entity_id = lgc.id' +
-    ' WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'' +
+    ' WHERE sl.entity_type = \'financial_record\' AND sp.state_id = $1' +
     ' ORDER BY sp.photo_order',
-    [id]
+    [record.state_id]
   );
 
   // Fetch edit history with editor names, sorted by edited_at DESC
@@ -439,7 +451,7 @@ async function updateRecord(event, id, authContext) {
 
   // Fetch linked state_id (needed for description/photo updates)
   const stateLinkResult = await pool.query(
-    'SELECT sl.state_id FROM state_links sl WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'',
+    DESCRIPTION_STATE_LOOKUP,
     [id]
   );
   const stateId = stateLinkResult.rows.length > 0 ? stateLinkResult.rows[0].state_id : null;
@@ -495,8 +507,7 @@ async function updateRecord(event, id, authContext) {
       'SELECT fr.*, s.state_text AS description, s.id AS state_id,' +
       ' COALESCE(om.full_name, \'Unknown\') AS created_by_name' +
       ' FROM financial_records fr' +
-      ' LEFT JOIN state_links sl ON sl.entity_id = fr.id AND sl.entity_type = \'financial_record\'' +
-      ' LEFT JOIN states s ON s.id = sl.state_id' +
+      DESCRIPTION_STATE_JOIN +
       ' LEFT JOIN organization_members om' +
       '   ON fr.created_by::text = om.cognito_user_id::text' +
       '   AND om.organization_id = fr.organization_id' +
@@ -600,8 +611,7 @@ async function updateRecord(event, id, authContext) {
       'SELECT fr.*, s.state_text AS description, s.id AS state_id,' +
       ' COALESCE(om.full_name, \'Unknown\') AS created_by_name' +
       ' FROM financial_records fr' +
-      ' LEFT JOIN state_links sl ON sl.entity_id = fr.id AND sl.entity_type = \'financial_record\'' +
-      ' LEFT JOIN states s ON s.id = sl.state_id' +
+      DESCRIPTION_STATE_JOIN +
       ' LEFT JOIN organization_members om' +
       '   ON fr.created_by::text = om.cognito_user_id::text' +
       '   AND om.organization_id = fr.organization_id' +
@@ -684,7 +694,7 @@ async function deleteRecord(id, authContext) {
 
   // Look up linked state before deleting the financial_record
   const stateLinkResult = await pool.query(
-    'SELECT sl.state_id FROM state_links sl WHERE sl.entity_id = $1 AND sl.entity_type = \'financial_record\'',
+    DESCRIPTION_STATE_LOOKUP,
     [id]
   );
   const stateId = stateLinkResult.rows.length > 0 ? stateLinkResult.rows[0].state_id : null;
