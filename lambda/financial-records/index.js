@@ -463,8 +463,18 @@ async function updateRecord(event, id, authContext) {
     const oldVal = existing[field];
     const newVal = body[field];
 
-    const oldStr = oldVal === null || oldVal === undefined ? null : String(oldVal);
-    const newStr = newVal === null || newVal === undefined ? null : String(newVal);
+    // pg returns NUMERIC as a string ("-5000.00") and DATE as a Date object,
+    // so normalize both sides before comparing to avoid false audit entries
+    const normalize = (val) => {
+      if (val === null || val === undefined) return null;
+      if (field === 'amount') return String(Number(val));
+      if (field === 'transaction_date') {
+        return val instanceof Date ? val.toISOString().slice(0, 10) : String(val).slice(0, 10);
+      }
+      return String(val);
+    };
+    const oldStr = normalize(oldVal);
+    const newStr = normalize(newVal);
 
     if (oldStr !== newStr) {
       changes.push({ field, oldValue: oldStr, newValue: newStr });
