@@ -157,6 +157,73 @@ replaced by capabilities + open options), *board*/*post*.
   ([PARTNER_AGENCY_RBAC](PARTNER_AGENCY_RBAC.md)), which would grant
   whole-org access and never had its tables created.
 
+### 2.6 Rewards from a transaction (decided 2026-10-10)
+Rewards belong to actions (RL: reward is of an action). A person recording
+an expense should not have to create one, so the action is made for them —
+and only when they use the reward flow. A plain expense stays a plain
+expense.
+
+- **Where:** Transaction Detail gets an expandable **Rewards** section, the
+  same as on an action. Opening it creates nothing.
+- **First build — draft, review, save.** An LLM drafts from the expense
+  (description, photo descriptions, stock adjustment, amount, date): the
+  **other organization** (the seller), the **existing state** and the
+  **final state** (the inventory change, e.g. "no banana suckers" → "6
+  banana suckers for the hillside rows"). The person confirms or edits;
+  then the action is created and the rewards build.
+- **The action:** in the expense's org; **assignee = the person tracking
+  the transaction** (they are responsible for the record); already
+  completed, dated the transaction date; `description` = existing state,
+  `expected_state` = final state. It is reached **only via the
+  transaction** — not in everyday action lists.
+- **One observation, linked to both.** The expense's observation
+  (description + photos) is also linked to the action; nothing is copied.
+  The Rewards section has a short input for more ("what would you have done
+  otherwise?"); each is an observation linked to both the transaction and
+  the action. Another party who wants to give their perspective adds
+  observations the same way.
+- **The other organization is an org, not a person.** If it isn't in the
+  app, a **small create-organization flow** runs inside the review:
+  similar names from **all orgs, names only**, are shown so the person
+  picks an existing one or confirms theirs is new. Anyone can create an
+  org this way; the creator is **not** made a member of it (a super-admin
+  is seeded as today). The chosen org and the transaction are kept in a
+  `positive_sum.` bookkeeping record on the action and given to the reward
+  build as context.
+- **The paid amount is a fact, not a claim to find.** Amount, date and
+  paying org come from the transaction; the LLM only looks for what else
+  moved and for next-best options.
+
+Changes to the reward model (apply to every action, not only these):
+
+- **Several next-best options, each for a named party**, each attributed
+  to whoever stated it (anyone may state one for either side — it is their
+  claim). Replaces the single `next_best_option`.
+- **Two kinds:** for the one who paid, what the same thing would have cost
+  another way; for the one who received, what they would have had
+  otherwise.
+- **Hours stay hours**, with who would have done them. Pesos appear only
+  on view, through the existing "My hour is worth ₱ / Calc my break-even"
+  control. Nothing about rates is stored.
+- **Value created** per party and in total is computed in the app from
+  the claims and next-best options, never stored — as "Saved" is today.
+
+Worked example (the expense that exists): 6 banana suckers from Lester's
+parents, ₱200 paid.
+
+| Party | Next-best option (stated by Stefan) | Value created |
+|---|---|---|
+| Stargazer (paid ₱200) | May coordinates it: 2 hours | 2 h at the viewer's rate − ₱200 (₱0 at ₱100/h) |
+| Lester's parents (received ₱200) | Suckers left in the clump: ~₱10 | ₱200 − ₱10 = ₱190 |
+
+Open:
+- Sales (money coming in) — the mirror of this; not in the first slice.
+- An org created this way has no people. How its own people later join
+  and take it over is not defined.
+- Which person is "tracking the transaction" when the one who opens
+  Rewards is not the one who recorded the expense.
+- What a later edit or delete of the expense does to its action.
+
 ## 3. Direction (decided in principle, details open)
 
 ### 3.1 Reach follows give and receive
