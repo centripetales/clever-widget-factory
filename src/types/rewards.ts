@@ -25,8 +25,7 @@ export interface NextBestOption {
   // (capability expanding: there is no advantage to work out).
   kind: 'cost_another_way' | 'had_otherwise' | 'no_other_option';
   php: number | null;
-  hours: number | null;
-  done_by: string | null; // who would have spent the hours
+  hours: number | null; // the party's own time: an organization's, never a named person's
   replaces: string[]; // names of the claims it stands in place of
   claim: string;
   source_state_ids: string[];
@@ -37,7 +36,7 @@ export interface ActionRewards {
   claims?: RewardClaim[]; // absent on rewards built before claims; rebuild to update
   next_best_options?: NextBestOption[];
   // Rewards built before several options: one, always a cost for whoever paid.
-  next_best_option?: Omit<NextBestOption, 'for_org_id' | 'for_name' | 'kind' | 'done_by'> | null;
+  next_best_option?: Omit<NextBestOption, 'for_org_id' | 'for_name' | 'kind'> | null;
   org_names: Record<string, string>;
   context_state_ids: string[];
   generated_by?: string;

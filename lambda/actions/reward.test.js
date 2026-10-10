@@ -101,7 +101,7 @@ describe('validateNextBestOptions', () => {
   const orgIds = orgs.map(o => o.id);
   const option = overrides => ({
     name: 'Hire a truck to Iloilo', for_org_id: STARGAZER, for_name: 'Stargazer Farm', kind: 'cost_another_way',
-    php: 6000, hours: null, done_by: null, replaces: ['Paid Pastor for gas', 'Driving payment'],
+    php: 6000, hours: null, replaces: ['Paid Pastor for gas', 'Driving payment'],
     claim: 'Stefan: 1.5k driver + 4.5k gas = 6000.', source_state_ids: [OBS], ...overrides,
   });
   const check = (list, claimNames = ['Paid Pastor for gas']) =>
@@ -122,9 +122,10 @@ describe('validateNextBestOptions', () => {
     expect(check([none])).toEqual([none]);
   });
 
-  it('keeps hours as hours with who would have done them', () => {
-    const [kept] = check([option({ php: null, hours: 2, done_by: ' May ' })]);
-    expect(kept).toMatchObject({ php: null, hours: 2, done_by: 'May' });
+  it('keeps hours as hours, and never who would have spent them', () => {
+    const [kept] = check([option({ php: null, hours: 2, done_by: 'May' })]);
+    expect(kept).toMatchObject({ php: null, hours: 2 });
+    expect(kept).not.toHaveProperty('done_by');
   });
 
   it('drops options with no party, no kind, no claim text, or bad amounts', () => {

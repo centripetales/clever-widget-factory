@@ -67,7 +67,7 @@ export function nextBestOptions(data: Pick<ActionRewards, 'claims' | 'next_best_
   if (!old) return [];
   const payer = (data.claims ?? []).find(c => old.replaces.includes(c.name));
   return [{
-    ...old, kind: 'cost_another_way', done_by: null,
+    ...old, kind: 'cost_another_way',
     for_org_id: payer?.from_org_id ?? null, for_name: payer?.from_name ?? '',
   }];
 }
@@ -78,8 +78,17 @@ export interface Balance { money: number; hours: number }
 // in place of: what the alternative would have cost minus what was paid, or
 // what was received minus what the party would have had otherwise. Null when
 // the option or any claim it replaces has no stated amount.
+//
+// A purchase can appear as two claims, the payment one way and the goods at
+// the same price the other way. Only the party's own side counts — what it
+// gave when comparing costs, what it received when comparing what it would
+// have had — so the price is not counted twice.
 export function advantage(option: NextBestOption, claims: RewardClaim[]): Balance | null {
-  const replaced = claims.filter(c => option.replaces.includes(c.name));
+  const named = claims.filter(c => option.replaces.includes(c.name));
+  const isParty = (id: string | null, name: string) => (id ?? name) === (option.for_org_id ?? option.for_name);
+  const ownSide = named.filter(c =>
+    option.kind === 'had_otherwise' ? isParty(c.to_org_id, c.to_name) : isParty(c.from_org_id, c.from_name));
+  const replaced = ownSide.length ? ownSide : named;
   const stated = (s: Sums) => s.php !== null || s.hours !== null;
   if (!stated(option) || !replaced.length || !replaced.every(stated)) return null;
   const sign = option.kind === 'had_otherwise' ? -1 : 1;
@@ -125,12 +134,12 @@ export function advantageRows(claims: RewardClaim[], options: NextBestOption[]):
 
 // A documented next best, in a sentence the rewards build reads back the same
 // way; saved as the person's observation so it stays their claim.
-export function nextBestStatement({ party, paid, what, php, hours, who }: {
-  party: string; paid: boolean; what: string; php: string; hours: string; who: string;
+export function nextBestStatement({ party, paid, what, php, hours }: {
+  party: string; paid: boolean; what: string; php: string; hours: string;
 }) {
   const amounts = [
     php.trim() && `₱${php.trim()}`,
-    hours.trim() && `${hours.trim()} hours${who.trim() ? ` of ${who.trim()}'s time` : ''}`,
+    hours.trim() && `${hours.trim()} hours`,
   ].filter(Boolean).join(' and ');
   const worth = paid ? `Getting it that way would have cost ${amounts}.` : `That would have been worth ${amounts}.`;
   return [`Next best option for ${party}: ${what.trim().replace(/\.$/, '')}.`, amounts && worth].filter(Boolean).join(' ');

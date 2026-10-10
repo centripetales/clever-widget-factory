@@ -11,7 +11,7 @@ const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 // Most capable Claude model this account can invoke on Bedrock (Opus 5 /
 // Sonnet 5 are not enabled for it yet).
 const MODEL_ID = process.env.REWARD_MODEL_ID || 'us.anthropic.claude-opus-4-6-v1';
-const PROMPT_VERSION = 'reward-v8';
+const PROMPT_VERSION = 'reward-v10';
 const INFERENCE_CONFIG = { max_tokens: 8000, effort: 'low' };
 
 const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -52,10 +52,10 @@ Transaction:
 Next-best options (as many as were stated, each for one party):
 - Record one only when someone said what the alternative was. Anyone may state one for any party; it is their claim, not an established fact.
 - for_org_id and for_name: the party whose alternative it is, matched to the organization list like any other party.
-- kind: "cost_another_way" when it is what getting the same thing another way would have cost that party (e.g. hiring a truck instead of the pastor driving; a coordinator spending 2 hours finding the suckers); "had_otherwise" when it is what that party would have had without this action (e.g. the suckers left in the clump, worth about 10); "no_other_option" when someone said that party had no other way to get this — php and hours are then null. Not doing it at all is not an alternative; never record it as one.
+- kind: "cost_another_way" when it is what getting the same thing another way would have cost that party (e.g. hiring a truck instead of the pastor driving; 2 hours of asking around to find the suckers); "had_otherwise" when it is what that party would have had without this action (e.g. the suckers left in the clump, worth about 10); "no_other_option" when someone said that party had no other way to get this — php and hours are then null. Not doing it at all is not an alternative; never record it as one.
 - php and hours are as stated. Here only, you may add up stated parts (e.g. "1.5k driver + 4.5k gas" = 6000); show the working in its claim. Never turn hours into pesos: keep hours as hours and keep any stated hourly rate in the claim.
-- done_by: who would have spent the hours, as people named them; null when there are no hours or nobody was named.
-- replaces: the names of the claims above that this alternative stands in place of for that party — only those for the same outcome (e.g. the transport payments, not goods received on the trip; for a seller, the payment they received).
+- Hours are the party's own: time belongs to the organization, never to a named person. Do not attribute hours to an individual in the name or the claim ("about 2 hours of asking around", not "2 hours of May's time").
+- replaces: the names of the claims above that this alternative stands in place of for that party — only those for the same outcome, and only that party's own side of it: what it paid for "cost_another_way" (e.g. the transport payments, not goods received on the trip), what it received for "had_otherwise" (e.g. for a seller, the payment). Never list both the payment and the goods bought with it.
 
 Call record_claims once with all claims and next-best options. If the observations describe nothing moving between organizations, call it with an empty list.`;
 
@@ -95,12 +95,11 @@ const TOOL = {
             kind: { type: 'string', enum: OPTION_KINDS },
             php: { type: ['number', 'null'] },
             hours: { type: ['number', 'null'] },
-            done_by: { type: ['string', 'null'] },
             replaces: { type: 'array', items: { type: 'string' } },
             claim: { type: 'string' },
             source_state_ids: { type: 'array', items: { type: 'string' } },
           },
-          required: ['name', 'for_org_id', 'for_name', 'kind', 'php', 'hours', 'done_by', 'replaces', 'claim', 'source_state_ids'],
+          required: ['name', 'for_org_id', 'for_name', 'kind', 'php', 'hours', 'replaces', 'claim', 'source_state_ids'],
         },
       },
     },
@@ -243,7 +242,6 @@ function validateNextBestOptions(input, claimNames, orgIds, observationIds) {
       kind: OPTION_KINDS.includes(o?.kind) ? o.kind : null,
       php: amount(o?.php),
       hours: amount(o?.hours),
-      done_by: text(o?.done_by) || null,
       replaces: (Array.isArray(o?.replaces) ? o.replaces : []).filter(n => claimNames.includes(n)),
       claim: text(o?.claim),
       source_state_ids: (Array.isArray(o?.source_state_ids) ? o.source_state_ids : []).filter(id => observationIds.includes(id)),

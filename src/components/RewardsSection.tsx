@@ -42,38 +42,22 @@ const OPTION_KIND_LABELS: Record<NextBestOption['kind'], string> = {
   no_other_option: 'No other option',
 };
 
-function NextBestOptionCard({ option, claims, orgNames }: {
-  option: NextBestOption;
-  claims: RewardClaim[];
-  orgNames: Record<string, string>;
-}) {
-  const value = advantage(option, claims);
-  const party = option.for_org_id ? orgNames[option.for_org_id] ?? option.for_name : option.for_name;
+// A documented next-best option, shown under its party's advantage.
+function NextBestOptionDetail({ option, value }: { option: NextBestOption; value: Balance | null }) {
   return (
-    <div className="space-y-1 rounded-md border border-dashed p-2">
+    <div className="space-y-1 rounded-md border border-dashed bg-background p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium break-words">Next-best option: {option.name}</span>
+        <span className="font-medium break-words">Next best: {option.name}</span>
         {option.kind !== 'no_other_option' && <span className="font-medium">{formatAmount(option.php, option.hours)}</span>}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {party && <PartyChip id={option.for_org_id} name={option.for_name} orgNames={orgNames} />}
         <Badge variant="outline">{OPTION_KIND_LABELS[option.kind]}</Badge>
-        {option.done_by && option.hours !== null && <span>Time: {option.done_by}</span>}
         {!!option.stated_by?.length && <span>Documented by {option.stated_by.join(', ')}</span>}
+        {value && <span>Expected advantage against it: {formatBalance(value)}</span>}
       </div>
-      {value && (
-        <p className="text-sm font-medium">Advantage{party ? ` for ${party}` : ''}: {formatBalance(value)}</p>
-      )}
       <p className="text-sm text-muted-foreground break-words">{option.claim}</p>
       {option.replaces.length > 0 && (
         <p className="text-xs text-muted-foreground break-words">Instead of: {option.replaces.join(', ')}</p>
-      )}
-      {value && (
-        <HourValue
-          value={value}
-          label={option.done_by ? `An hour of ${option.done_by}'s time is worth ₱` : 'An hour of that time is worth ₱'}
-          netLabel="Advantage"
-        />
       )}
     </div>
   );
@@ -131,8 +115,9 @@ function HourValue({ value, label, netLabel }: { value: Balance; label: string; 
 // One party's advantage, and the fields for documenting its next-best option.
 // What is entered is saved as the person's observation, so it stays their
 // claim and they are credited with documenting it.
-function AdvantageRowView({ row, orgNames, onSave }: {
+function AdvantageRowView({ row, claims, orgNames, onSave }: {
   row: AdvantageRow;
+  claims: RewardClaim[];
   orgNames: Record<string, string>;
   onSave: (text: string) => Promise<boolean>;
 }) {
@@ -140,11 +125,9 @@ function AdvantageRowView({ row, orgNames, onSave }: {
   const [what, setWhat] = useState('');
   const [php, setPhp] = useState('');
   const [hours, setHours] = useState('');
-  const [who, setWho] = useState('');
   const [saving, setSaving] = useState(false);
 
   const party = row.id ? orgNames[row.id] ?? row.name : row.name;
-  const documentedBy = [...new Set(row.options.flatMap(o => o.stated_by ?? []))];
 
   const save = async (text: string) => {
     setSaving(true);
@@ -155,7 +138,6 @@ function AdvantageRowView({ row, orgNames, onSave }: {
       setWhat('');
       setPhp('');
       setHours('');
-      setWho('');
     }
   };
 
@@ -170,7 +152,10 @@ function AdvantageRowView({ row, orgNames, onSave }: {
       {row.noOtherOption && !row.value && (
         <p className="text-xs text-muted-foreground">No other option — this expanded what {party} can do, so there is nothing to compare it with.</p>
       )}
-      {documentedBy.length > 0 && <p className="text-xs text-muted-foreground">Documented by {documentedBy.join(', ')}</p>}
+      {row.options.map((o, i) => (
+        <NextBestOptionDetail key={`${o.name}-${i}`} option={o} value={row.options.length > 1 ? advantage(o, claims) : null} />
+      ))}
+      {row.value && <HourValue value={row.value} label={`An hour of ${party}'s time is worth ₱`} netLabel="Expected advantage" />}
 
       {adding ? (
         <div className="space-y-2 pt-1">
@@ -181,11 +166,8 @@ function AdvantageRowView({ row, orgNames, onSave }: {
             onChange={e => setWhat(e.target.value)}
           />
           <div className="flex flex-wrap gap-2">
-            <Input className="w-32" type="number" inputMode="decimal" placeholder="₱, optional" value={php} onChange={e => setPhp(e.target.value)} />
-            <Input className="w-32" type="number" inputMode="decimal" placeholder="Hours, optional" value={hours} onChange={e => setHours(e.target.value)} />
-            {hours.trim() && (
-              <Input className="w-40" placeholder="Whose hours?" value={who} onChange={e => setWho(e.target.value)} />
-            )}
+            <Input className="w-36" type="number" inputMode="decimal" placeholder="Total ₱, optional" value={php} onChange={e => setPhp(e.target.value)} />
+            <Input className="w-36" type="number" inputMode="decimal" placeholder="Hours, optional" value={hours} onChange={e => setHours(e.target.value)} />
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {row.paid && (
@@ -197,7 +179,7 @@ function AdvantageRowView({ row, orgNames, onSave }: {
             <Button
               size="sm"
               disabled={saving || !what.trim()}
-              onClick={() => save(nextBestStatement({ party, paid: row.paid, what, php, hours, who }))}
+              onClick={() => save(nextBestStatement({ party, paid: row.paid, what, php, hours }))}
             >
               {saving ? 'Saving...' : 'Save and rebuild'}
             </Button>
@@ -333,31 +315,28 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
           <ClaimCard key={`${c.name}-${i}`} claim={c} orgNames={orgNames} sign={signFor(c, organization?.id)} onAdjust={saveAdjustment} />
         ))}
 
-        {claims && options.map((o, i) => (
-          <NextBestOptionCard key={`${o.name}-${i}`} option={o} claims={claims} orgNames={orgNames} />
-        ))}
-
         {rows.length > 0 && (
           <div className="space-y-2 rounded-md bg-muted/40 p-2 text-sm">
             <div className="flex items-center gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Advantage</span>
+              <span className="text-xs font-medium text-muted-foreground">Expected advantage</span>
               <InfoBubble>
                 How much better this was for each party than its next-best option — what it would otherwise have done
-                or had. The next best never happened, so it is the claim of whoever documents it, and they are credited
-                with documenting it.
+                or had. The next best never happened, so the advantage is expected, not measured: it is the view of
+                whoever documents it, for their own side or the other party's, and they are credited with documenting it.
               </InfoBubble>
             </div>
             {rows.map(row => (
               <AdvantageRowView
                 key={row.id ?? row.name}
                 row={row}
+                claims={claims ?? []}
                 orgNames={orgNames}
                 onSave={text => saveObservation(text, 'Could not save the next best')}
               />
             ))}
             {evaluated.length > 1 && (
               <div className="flex items-center justify-between gap-2 border-t pt-2 font-medium">
-                <span>Total</span>
+                <span>Total expected</span>
                 <span>{formatBalance(advantageTotal)}</span>
               </div>
             )}
@@ -416,6 +395,13 @@ function ClaimCard({ claim, orgNames, sign, onAdjust }: {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Start from what the claim says now, so an adjustment changes it rather than restating it.
+  const startAdjusting = () => {
+    setPhp(claim.php?.toString() ?? '');
+    setHours(claim.hours?.toString() ?? '');
+    setAdjusting(true);
+  };
+
   const save = async () => {
     setSaving(true);
     const ok = await onAdjust(claim, php, hours, note);
@@ -456,14 +442,14 @@ function ClaimCard({ claim, orgNames, sign, onAdjust }: {
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setAdjusting(false)}>Cancel</Button>
-            <Button size="sm" disabled={saving || (!php.trim() && !hours.trim() && !note.trim())} onClick={save}>
+            <Button size="sm" disabled={saving || (php === (claim.php?.toString() ?? '') && hours === (claim.hours?.toString() ?? '') && !note.trim())} onClick={save}>
               {saving ? 'Saving...' : 'Save and rebuild'}
             </Button>
           </div>
         </div>
       ) : (
         <div className="flex justify-end">
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setAdjusting(true)}>Adjust</Button>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={startAdjusting}>Adjust</Button>
         </div>
       )}
     </div>

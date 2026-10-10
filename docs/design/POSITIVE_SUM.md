@@ -204,7 +204,8 @@ Changes to the reward model (apply to every action, not only these):
 - **Two kinds:** for the one who paid, what the same thing would have cost
   another way; for the one who received, what they would have had
   otherwise.
-- **Hours stay hours**, with who would have done them. Pesos appear only
+- **Hours stay hours, and belong to the org** — never assigned to a named
+  person (reducing people to numbers breeds resentment). Pesos appear only
   on view, through the existing "My hour is worth ₱ / Calc my break-even"
   control. Nothing about rates is stored.
 - **Value created** per party and in total is computed in the app from
@@ -215,7 +216,7 @@ parents, ₱200 paid.
 
 | Party | Next-best option (stated by Stefan) | Value created |
 |---|---|---|
-| Stargazer (paid ₱200) | May coordinates it: 2 hours | 2 h at the viewer's rate − ₱200 (₱0 at ₱100/h) |
+| Stargazer (paid ₱200) | Asking around: 2 hours | 2 h at the viewer's rate − ₱200 (₱0 at ₱100/h) |
 | Lester's parents (received ₱200) | Suckers left in the clump: ~₱10 | ₱200 − ₱10 = ₱190 |
 
 Built from the revision: the Advantage block with next-best fields and
@@ -246,11 +247,13 @@ Revised after the first run on a real expense (2026-10-10, not built):
   two are not reconciled or required to match. Not bureaucratic.
 - **Keep the auditable path; add next-best fields.** What moved stays as
   claims grounded in what people recorded. Documenting a party's next-best
-  option is extra fields on top (what, ₱ and/or hours, whose hours, or "no
+  option is extra fields on top (what, ₱ and/or hours, or "no
   other option"), saved as the documenter's own observation. Knowing the
   options expands what the org can do, so **the person who documents a
   next best is credited** ("Documented by").
-- **Advantage block, always shown**, one row per party: not asked yet (the
+- **Expected advantage block, always shown** ("expected" for both sides:
+  the next best never happened, and the tracker states the other party's
+  side from their perspective), one row per party: not asked yet (the
   row is the prompt — "What would <party> have done otherwise to get
   this?") / next best stated → advantage / **no other option** →
   capability expanding, advantage not evaluated ("not buying" is a

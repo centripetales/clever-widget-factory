@@ -58,7 +58,7 @@ describe('totalsByParty', () => {
 describe('advantage', () => {
   const option = (overrides: Partial<NextBestOption>): NextBestOption => ({
     name: 'Hire a truck', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'cost_another_way', php: 6000, hours: null,
-    done_by: null, replaces: ['Driving payment', 'Gas'], claim: 'text', source_state_ids: [], ...overrides,
+    replaces: ['Driving payment', 'Gas'], claim: 'text', source_state_ids: [], ...overrides,
   });
 
   it('is the cost another way minus the claims it replaces', () => {
@@ -78,12 +78,12 @@ describe('advantage on both sides of a purchase', () => {
   const claims = [claim({ name: 'Paid for suckers', to_org_id: LESTER, to_name: "Lester's parents", php: 200 })];
   const options: NextBestOption[] = [
     {
-      name: 'May coordinates it', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'cost_another_way', php: null, hours: 2,
-      done_by: 'May', replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
+      name: 'Asking around', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'cost_another_way', php: null, hours: 2,
+      replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
     },
     {
       name: 'Left in the clump', for_org_id: LESTER, for_name: "Lester's parents", kind: 'had_otherwise', php: 10, hours: null,
-      done_by: null, replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
+      replaces: ['Paid for suckers'], claim: 'text', source_state_ids: [],
     },
   ];
 
@@ -97,6 +97,16 @@ describe('advantage on both sides of a purchase', () => {
 
   it('is what was received minus what they would have had otherwise', () => {
     expect(advantage(options[1], claims)).toEqual({ money: 190, hours: 0 });
+  });
+
+  it('counts the price once when the goods are also a claim at that price', () => {
+    const both = [
+      ...claims,
+      claim({ name: 'Suckers', from_org_id: LESTER, from_name: "Lester's parents", to_org_id: SG, to_name: 'Stargazer Farm', php: 200 }),
+    ];
+    const replacing = (o: NextBestOption) => ({ ...o, replaces: ['Paid for suckers', 'Suckers'] });
+    expect(advantage(replacing({ ...options[0], php: 200, hours: 1 }), both)).toEqual({ money: 0, hours: 1 });
+    expect(advantage(replacing(options[1]), both)).toEqual({ money: 190, hours: 0 });
   });
 
   it('gives every party a row, documented or not', () => {
@@ -116,7 +126,7 @@ describe('advantage on both sides of a purchase', () => {
   it('does not evaluate a party that had no other option', () => {
     const none: NextBestOption = {
       name: 'No other source', for_org_id: SG, for_name: 'Stargazer Farm', kind: 'no_other_option', php: null, hours: null,
-      done_by: null, replaces: [], claim: 'text', source_state_ids: [],
+      replaces: [], claim: 'text', source_state_ids: [],
     };
     expect(advantageRows(claims, [none])[0]).toMatchObject({ value: null, noOtherOption: true });
   });
@@ -124,17 +134,17 @@ describe('advantage on both sides of a purchase', () => {
 
 describe('next-best statements', () => {
   it('says what the other way would have cost the one who paid', () => {
-    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'May finds the suckers.', php: '', hours: '2', who: 'May' }))
-      .toBe("Next best option for Stargazer Farm: May finds the suckers. Getting it that way would have cost 2 hours of May's time.");
+    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'Asking around the community.', php: '200', hours: '1' }))
+      .toBe('Next best option for Stargazer Farm: Asking around the community. Getting it that way would have cost ₱200 and 1 hours.');
   });
 
   it('says what the one who received would have had otherwise', () => {
-    expect(nextBestStatement({ party: "Lester's parents", paid: false, what: 'Left in the clump', php: '10', hours: '', who: '' }))
+    expect(nextBestStatement({ party: "Lester's parents", paid: false, what: 'Left in the clump', php: '10', hours: '' }))
       .toBe("Next best option for Lester's parents: Left in the clump. That would have been worth ₱10.");
   });
 
   it('keeps a next best with no amount, and states when there was none', () => {
-    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'Another seller', php: '', hours: '', who: '' }))
+    expect(nextBestStatement({ party: 'Stargazer Farm', paid: true, what: 'Another seller', php: '', hours: '' }))
       .toBe('Next best option for Stargazer Farm: Another seller.');
     expect(noOtherOptionStatement('Stargazer Farm')).toBe('There was no other option for Stargazer Farm to get this.');
   });
@@ -144,7 +154,7 @@ describe('nextBestOptions', () => {
   it('reads rewards built with a single option as a cost for whoever paid', () => {
     const old = { name: 'Hire a truck', php: 6000, hours: null, replaces: ['Gas'], claim: 'text', source_state_ids: [] };
     expect(nextBestOptions({ claims: trip, next_best_option: old })).toEqual([
-      { ...old, kind: 'cost_another_way', done_by: null, for_org_id: SG, for_name: 'Stargazer Farm' },
+      { ...old, kind: 'cost_another_way', for_org_id: SG, for_name: 'Stargazer Farm' },
     ]);
     expect(nextBestOptions({ claims: trip, next_best_option: null })).toEqual([]);
   });
