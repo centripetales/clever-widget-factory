@@ -279,6 +279,54 @@ Open:
   and take it over is not defined.
 - What a later edit or delete of the expense does to its action.
 
+### 2.7 Situations and proposed collaborations (2026-10-11, built)
+- **A proposed collaboration is an action.** Its **title** is the proposal,
+  in full; its **existing state** is the situation it answers, copied as
+  text when it is proposed (later rewording of the situation does not
+  change it); its desired state is left for later; its author is the
+  assignee. Clicking it on the page opens the action. A proposal with no
+  situation yet has an empty existing state until it is linked.
+- **Joining** makes the person a participant on the action and always puts
+  an observation on it: what they wrote about their ideas and how they want
+  to be involved, or "Joined". The first join moves the action from open
+  proposal to "not started", so it shows in the joiner's Actions list. It
+  can be joined until it is done, and deleted only while nobody has joined.
+- **Who can open it:** anyone who can see its card — people of the org and
+  of its member organizations — and anyone who is on the action.
+- Every proposal carries a `positive_sum.collaboration` record (with no
+  situation id when unlinked): by its fields alone it would read as a
+  situation. Proposals saved earlier, with the text as the desired state,
+  are still recognised.
+- **The word people see is "situation"**, not challenge: it is close to
+  *state* in meaning, and neutral — a situation is where the group thinks a
+  higher-advantage option exists, whether it reads as a problem or an
+  opening. People state how things are **without a solution**; solutions
+  come afterwards, as proposed collaborations. The code and the stored
+  records still say `challenge`.
+- A **challenge** is something a person is running into, in their own
+  words: how things are, with nothing proposed yet. Stored as an `actions`
+  row with only `description` (no desired state, no policy), status
+  `external_proposal`. Everyone in the org sees the open challenges.
+- People **vote** for a challenge that matters to them too (the action's
+  `participants`), and **propose a collaboration** for it: a desired state
+  linked to the challenge by a `positive_sum.collaboration` record.
+- The page has one list, **Challenges**; a person's desired states appear
+  as **proposed collaborations** under the challenges they address. Anyone
+  can **contribute** to one, with a comment about their ideas and how they
+  want to be involved (an observation on it); its author sees who is
+  contributing and what they said, links it to challenges, and can delete
+  it. A person's proposals not yet linked to a challenge are listed last so
+  they can be linked. The separate Opportunities, "Ready for you" and "my
+  proposed collaborations" sections, and "Plan with Maxwell", are gone
+  from the page (2026-10-11).
+- The conversation prompt asks one question about challenges and returns
+  them as `challenges`; it no longer asks about tools or other things a
+  person owns.
+- No new routes: challenges are created through `POST /positive-sum/goals`
+  (`{ challenge }`, or `{ challenge_id }` for a collaboration), voting and
+  taking part go through `POST /positive-sum/options/{id}/join`, and the
+  list comes back from `GET /positive-sum/mine`.
+
 ## 3. Direction (decided in principle, details open)
 
 ### 3.1 Reach follows give and receive

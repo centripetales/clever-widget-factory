@@ -4,6 +4,14 @@ const {
   stateText,
   parseState,
   implementorIds,
+  isGoal,
+  isChallenge,
+  isProposal,
+  isSituation,
+  proposalText,
+  challengeSummaries,
+  addressedChallenges,
+  takingPart,
   hasFreeCapacity,
   valueForOthers,
   sortByValue,
@@ -140,5 +148,112 @@ describe('Maxwell agent adapter', () => {
 
   it('rejects unknown operations', () => {
     expect(toRequest({ apiPath: '/deleteEverything' }, {})).toBeNull();
+  });
+});
+
+describe('takingPart', () => {
+  const goal = { id: 'store', participants: ['may', 'lester'] };
+  const comments = [
+    { action_id: 'store', person: 'may', text: 'I can run the counter on Saturdays.' },
+    { action_id: 'seeds', person: 'may', text: 'About another desired state.' },
+    { action_id: 'store', person: 'stefan', text: 'From someone who has not joined.' },
+    { action_id: 'store', person: 'may', text: 'We have a shelf to lend.' },
+  ];
+
+  it('lists each participant with what they said on this desired state, in order', () => {
+    expect(takingPart(goal, comments, { may: 'May' })).toEqual([
+      { id: 'may', name: 'May', comments: ['I can run the counter on Saturdays.', 'We have a shelf to lend.'] },
+      { id: 'lester', name: null, comments: [] },
+    ]);
+  });
+
+  it('is empty when nobody has joined', () => {
+    expect(takingPart({ id: 'store', participants: null }, comments, {})).toEqual([]);
+  });
+});
+
+describe('challenges', () => {
+  const action = overrides => ({
+    id: 'a', organization_id: 'ps', description: null, expected_state: null, policy: null,
+    created_by: 'stefan', participants: [], status: 'external_proposal', created_at: '2026-10-11T00:00:00Z', ...overrides,
+  });
+
+  it('tells a challenge from a desired state and an option', () => {
+    const challenge = action({ description: 'Coconuts are being stolen' });
+    const goal = action({ expected_state: 'Less theft' });
+    const oldGoal = action({ description: 'Coconuts are being stolen', expected_state: 'Less theft' });
+    const option = action({ description: 'Theft at night', expected_state: 'Less theft', policy: 'Take turns watching' });
+    expect([challenge, goal, oldGoal, option].map(isChallenge)).toEqual([true, false, false, false]);
+    expect([challenge, goal, oldGoal, option].map(isGoal)).toEqual([false, true, true, false]);
+  });
+
+  it('shows votes, whether I voted, and the collaborations proposed for each, most votes first', () => {
+    const theft = action({ id: 'theft', description: 'Coconuts are being stolen', participants: ['may', 'lester'] });
+    const buyers = action({ id: 'buyers', description: 'Copra buyers are unreliable', created_at: '2026-10-12T00:00:00Z' });
+    const watch = action({ id: 'watch', title: 'Neighbors report strangers', description: 'Coconuts are being stolen', created_by: 'may', assigned_to: 'may', participants: ['lester'] });
+    const summaries = challengeSummaries({
+      challenges: [buyers, theft], goals: [watch], userId: 'may', names: { stefan: 'Stefan', may: 'May' },
+      collaborations: [{ goal_id: 'watch', challenge_id: 'theft' }, { goal_id: 'deleted', challenge_id: 'theft' }],
+    });
+
+    expect(summaries.map(c => c.id)).toEqual(['theft', 'buyers']);
+    expect(summaries[0]).toMatchObject({
+      text: 'Coconuts are being stolen', owner: 'stefan', owner_name: 'Stefan', votes: 2, voted_by_me: true,
+      voters: [{ id: 'may', name: 'May' }, { id: 'lester', name: null }],
+      collaborations: [{ id: 'watch', title: 'Neighbors report strangers', created_by_name: 'May', participants: ['lester'] }],
+    });
+    expect(summaries[1]).toMatchObject({ votes: 0, voted_by_me: false, collaborations: [] });
+  });
+
+  it('takes the assignee as the owner, and whoever added it when there is none', () => {
+    const [assigned, unassigned] = challengeSummaries({
+      challenges: [
+        action({ id: 'a', description: 'One', assigned_to: 'may', created_by: 'stefan', participants: ['x'] }),
+        action({ id: 'b', description: 'Two', assigned_to: null, created_by: 'stefan' }),
+      ],
+      goals: [], collaborations: [], userId: 'may', names: { may: 'May', stefan: 'Stefan' },
+    });
+    expect(assigned).toMatchObject({ owner: 'may', owner_name: 'May', votes: 1 });
+    expect(unassigned).toMatchObject({ owner: 'stefan', owner_name: 'Stefan' });
+  });
+});
+
+describe('addressedChallenges', () => {
+  const challenges = [{ id: 'sell', description: 'No place to sell our goods' }, { id: 'theft', description: 'Coconuts are being stolen' }];
+  const links = [
+    { goal_id: 'store', challenge_id: 'sell', person: 'stefan' },
+    { goal_id: 'store', challenge_id: 'closed', person: 'may' },
+    { goal_id: 'watch', challenge_id: 'theft', person: 'may' },
+  ];
+
+  it('lists the open challenges a desired state is linked to, with who linked each', () => {
+    expect(addressedChallenges('store', links, challenges))
+      .toEqual([{ id: 'sell', text: 'No place to sell our goods', linked_by: 'stefan' }]);
+    expect(addressedChallenges('ponds', links, challenges)).toEqual([]);
+  });
+});
+
+describe('proposed collaborations', () => {
+  const action = overrides => ({ id: 'a', title: '', description: null, expected_state: null, policy: null, ...overrides });
+
+  it('are told by their collaboration record, since their fields read as a situation', () => {
+    const proposal = action({ id: 'watch', title: 'Share a night watch', description: 'Coconuts are being stolen' });
+    const situation = action({ id: 'theft', title: 'Coconuts are being stolen', description: 'Coconuts are being stolen' });
+    const marked = new Set(['watch']);
+    expect([isProposal(proposal, marked), isSituation(proposal, marked)]).toEqual([true, false]);
+    expect([isProposal(situation, marked), isSituation(situation, marked)]).toEqual([false, true]);
+  });
+
+  it('still recognises one saved the old way, by its desired state', () => {
+    expect(isProposal(action({ title: 'Less theft', expected_state: 'Less theft' }), new Set())).toBe(true);
+  });
+
+  it('reads the text from the title, or from the desired state of an older one with a shortened title', () => {
+    const long = 'Compensate people for the time and expense when reporting theft since it benefits the community';
+    expect(proposalText(action({ title: long }))).toBe(long);
+    expect(proposalText(action({ title: `${long.slice(0, 77)}...`, expected_state: long }))).toBe(long);
+    expect(proposalText(action({ title: 'Less theft', expected_state: 'Less theft' }))).toBe('Less theft');
+    // A desired state written later on the action is not the proposal's text.
+    expect(proposalText(action({ title: long, expected_state: 'Reports are paid within a week' }))).toBe(long);
   });
 });

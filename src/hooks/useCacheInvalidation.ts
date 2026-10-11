@@ -11,6 +11,8 @@ import {
   explorationsQueryKey,
   experiencesQueryKey,
   statesQueryKey,
+  positiveSumMineQueryKey,
+  positiveSumOpportunitiesQueryKey,
 } from '@/lib/queryKeys';
 
 // Shared map of stateId → { estimatedSeconds, startedAt } for active perspective jobs
@@ -67,6 +69,9 @@ export function useCacheInvalidation() {
           queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
+          // Desired states and options are action rows too.
+          queryClient.invalidateQueries({ queryKey: positiveSumMineQueryKey() });
+          queryClient.invalidateQueries({ queryKey: positiveSumOpportunitiesQueryKey() });
           if (entityId) {
             queryClient.invalidateQueries({ queryKey: actionQueryKey(entityId) });
           }

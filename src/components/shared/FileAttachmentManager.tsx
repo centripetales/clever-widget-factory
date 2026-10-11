@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Paperclip, X } from "lucide-react";
 import { useFileUpload } from "@/hooks/useFileUpload";
-import { getThumbnailUrl, getImageUrl, getOriginalUrl } from "@/lib/imageUtils";
+import { getThumbnailUrl, getImageUrl, openImage } from "@/lib/imageUtils";
 
 interface FileAttachmentManagerProps {
   attachments: string[];
@@ -104,7 +104,7 @@ export const FileAttachmentManager = ({
                       src={getThumbnailUrl(url) || ''}
                       alt={`Attachment ${index + 1}`}
                       className="h-16 w-16 object-cover rounded border cursor-pointer"
-                      onClick={() => window.open(getOriginalUrl(url) || getImageUrl(url) || url, '_blank')}
+                      onClick={() => openImage(url)}
                       onError={(e) => {
                         // Fallback to original image if thumbnail doesn't exist yet
                         const target = e.target as HTMLImageElement;

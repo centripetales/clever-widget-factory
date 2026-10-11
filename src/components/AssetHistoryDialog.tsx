@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useToolHistory, HistoryEntry, AssetHistoryEntry, ObservationHistoryEntry, ShareHistoryEntry } from "@/hooks/tools/useToolHistory";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
-import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getImageUrl, getThumbnailUrl, openImage } from '@/lib/imageUtils';
 import { useStateMutations } from "@/hooks/useStates";
 import { MaxwellInlinePanel } from "@/components/MaxwellInlinePanel";
 import { PrismIcon } from "@/components/icons/PrismIcon";
@@ -461,7 +461,8 @@ export const AssetHistoryDialog = forwardRef<HTMLDivElement, AssetHistoryDialogP
                               {entry.photos.map((photo, photoIdx) => (
                                 <div key={photo.id} className="relative">
                                   <a 
-                                    href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                    href={getImageUrl(photo.photo_url) || ''}
+                                    onClick={e => { e.preventDefault(); openImage(photo.photo_url); }}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="block"

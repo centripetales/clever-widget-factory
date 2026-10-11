@@ -5,7 +5,8 @@ const { composeActionPolicySource } = require('/opt/nodejs/embedding-composition
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
 const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
-const { handleReward, buildReward } = require('./reward');
+const { handleReward, buildReward, withClient } = require('./reward');
+const { isUuid, deleteAction } = require('./deleteAction');
 const { handleTransactionAction, handleOrganizations, transactionForAction } = require('./transaction');
 
 const sqs = new SQSClient({ region: 'us-west-2' });
@@ -311,40 +312,15 @@ exports.handler = async (event) => {
     // DELETE action
     if (httpMethod === 'DELETE' && path.includes('/actions/')) {
       const actionId = path.split('/actions/')[1];
+      if (!isUuid(actionId)) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid action id' }) };
+      }
       const orgFilter = buildOrganizationFilter(authContext, 'actions');
 
-      // An action that's a component of an experience needs its
-      // experience_components row cleaned up first — and if this was the
-      // experience's last remaining component (no other actions, no initial
-      // or final states left), the now-empty experience is deleted too
-      // rather than left behind as a blank write-up nobody can see the point of.
-      const affectedExperiences = await queryJSON(
-        `SELECT DISTINCT experience_id::text FROM experience_components WHERE action_id = '${actionId}'`
-      );
-      if (affectedExperiences.length > 0) {
-        await queryJSON(`DELETE FROM experience_components WHERE action_id = '${actionId}'`);
-        for (const { experience_id } of affectedExperiences) {
-          const remaining = await queryJSON(
-            `SELECT COUNT(*)::int as count FROM experience_components WHERE experience_id = '${experience_id}'`
-          );
-          if ((remaining[0]?.count || 0) === 0) {
-            await queryJSON(`DELETE FROM experiences WHERE id = '${experience_id}'`);
-          }
-        }
+      const deletedId = await withClient(dbConfig, client => deleteAction(client, actionId, orgFilter.condition));
+      if (!deletedId) {
+        return { statusCode: 404, headers, body: JSON.stringify({ error: 'Action not found' }) };
       }
-
-      // An observation linked to this action (state_links entity_type='action')
-      // is deliberately hidden from the History feed as a standalone entry —
-      // it's meant to surface via the action's own card instead (see
-      // docs/specs/azolla-impact-power-model.md — "states as action context").
-      // Without this cleanup, deleting the action leaves that state_links row
-      // behind pointing at nothing, so the observation is suppressed from
-      // history everywhere with no card to surface it from — effectively
-      // invisible, not just re-homed.
-      await queryJSON(`DELETE FROM state_links WHERE entity_type = 'action' AND entity_id = '${actionId}'`);
-
-      const sql = `DELETE FROM actions WHERE id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''} RETURNING id`;
-      const result = await queryJSON(sql);
 
       // Broadcast cache invalidation to WebSocket clients
       try {
@@ -362,7 +338,7 @@ exports.handler = async (event) => {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ data: result[0] })
+        body: JSON.stringify({ data: { id: deletedId } })
       };
     }
 
@@ -987,6 +963,10 @@ exports.handler = async (event) => {
       const { limit, offset = 0, assigned_to, status, linked_issue_id, asset_id, id, view_shared } = queryStringParameters || {};
       
       let whereConditions = [];
+      // Actions the user is on, in whatever org: joining a proposed
+      // collaboration makes it theirs to see, including from a member org.
+      const me = authContext.cognito_user_id;
+      const mineClause = isUuid(me) ? `('${me}'::uuid = ANY(a.participants) OR a.assigned_to::text = '${me}')` : '';
       if (organizationId && view_shared) {
         const sharedArray = Array.isArray(view_shared) ? view_shared : view_shared.split(',');
         const ownOrgChecked = sharedArray.map(s => s.trim()).includes(organizationId);
@@ -1011,9 +991,25 @@ exports.handler = async (event) => {
         }
         whereConditions.push(clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'false');
       } else if (id && accessibleOrgIds.length > 0) {
-        // Direct lookup by id: allow any org the user can access, not just the current org
+        // Direct lookup by id: allow any org the user can access, not just the
+        // current org; an action the user is on; and a proposed collaboration
+        // in an org one of the user's orgs is a member of (anyone who sees its
+        // card on the Positive Sum page can open it).
         const accessible = accessibleOrgIds.map(o => `'${o.replace(/'/g, "''")}'`).join(',');
-        whereConditions.push(`a.organization_id::text IN (${accessible})`);
+        whereConditions.push(`(
+          a.organization_id::text IN (${accessible})
+          ${mineClause ? `OR ${mineClause}` : ''}
+          OR (
+            a.organization_id IN (
+              SELECT mo.organization_id FROM member_organizations mo WHERE mo.member_organization_id::text IN (${accessible})
+            )
+            AND EXISTS (
+              SELECT 1 FROM state_links pl JOIN states ps ON ps.id = pl.state_id
+              WHERE pl.entity_type = 'action' AND pl.entity_id = a.id
+                AND ps.state_text LIKE '{"type":"positive_sum.collaboration"%'
+            )
+          )
+        )`);
       } else {
         // Default: own org + shared actions from partner orgs
         const orgFilter = buildOrganizationFilter(authContext, 'a');
@@ -1033,9 +1029,10 @@ exports.handler = async (event) => {
                 AND sl_o.entity_id::text = '${organizationId.replace(/'/g, "''")}'
             )
           )`);
+          if (mineClause) clauses.push(mineClause);
           whereConditions.push(`(${clauses.join(' OR ')})`);
         } else if (orgFilter.condition) {
-          whereConditions.push(orgFilter.condition);
+          whereConditions.push(mineClause ? `(${orgFilter.condition} OR ${mineClause})` : orgFilter.condition);
         }
       }
       if (id) {

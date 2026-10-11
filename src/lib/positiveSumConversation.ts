@@ -17,6 +17,7 @@ export interface ConversationOpportunity {
 export interface ConversationResult {
   desiredStates: string[];
   humanCapital: string[];
+  challenges: string[]; // what the person is running into, in their words
 }
 
 function describeOpportunity(o: ConversationOpportunity): string {
@@ -73,12 +74,14 @@ Do you have any questions before we start?"
 Answer my questions directly and honestly, using this background (don't recite it unless I ask):
 ${BACKGROUND}
 
-2. Then learn about me. There are only two things: what I can do or have, and my desired states.
+2. Then learn about me. There are only three things: what I can do, situations around me, and my desired states.
 
-What I can do or have. Ask, one at a time:
-  a) "What do people usually come to you for help with?"
-  b) "Do you have anything (a tool, a machine, land, a vehicle) that others might use?"
-  If an answer is vague, ask one follow-up: "What did you do, and how did it turn out?"
+What I can do. Ask: "What do people usually come to you for help with?"
+  If the answer is vague, ask one follow-up: "What did you do, and how did it turn out?"
+  Don't ask about tools, machines, land or other things I own; those are added and shared in the app, not here.
+
+Situations. Ask: "What's happening around here that we could handle better together?"
+  A situation is how things are, not what to do about it, and it doesn't need a solution: let me state a problem and leave it there. If I describe a fix, write the fix under my desired states and ask what the situation behind it is.
 
 My desired states. Say: "Most of us would like to earn more, spend less, or have things a bit easier." Then ask, one at a time:
   a) "What would you like to be different, for you or for people around here?"
@@ -96,15 +99,17 @@ Rules:
 - Don't invent anything I didn't say. Don't add words that make things sound bigger or smaller.
 - You can't see the app or my records. If I ask you to look something up, say so.
 - Don't include phone numbers or other people's personal details.
-- At the end, show me one list in my words, with two headings: "What you can do or have" and "What you'd like to be different". Ask: "Anything missing or wrong?" Change only what I point to.
+- At the end, show me one list in my words, with three headings: "What you can do", "Situations around you" and "What you'd like to be different". Ask: "Anything missing or wrong?" Change only what I point to.
+- The JSON has exactly the items of that list: one entry for each item, in the same words. Don't merge, split, reword or drop any.
 
 When I confirm, reply with ONLY this JSON in one code block (leave out anything I didn't mention):
 \`\`\`json
 {
   "version": 2,
+  "situations": ["how things are, in my words, with no solution attached"],
   "desired_states": ["something I'd like to be different, in my words"],
   "capabilities": [
-    { "kind": "human_capital", "narrative": "something I can do or have, in my words" }
+    { "kind": "human_capital", "narrative": "something I can do, in my words" }
   ]
 }
 \`\`\`
@@ -129,7 +134,7 @@ export function parseConversationResult(pasted: string): ConversationResult | { 
     return { error: "That doesn't look like complete JSON. Copy the whole block your AI gave you." };
   }
   if (!data || typeof data !== 'object') return { error: 'Unexpected format.' };
-  const obj = data as { desired_states?: unknown; capabilities?: unknown };
+  const obj = data as { desired_states?: unknown; capabilities?: unknown; situations?: unknown; challenges?: unknown };
 
   // Version 2 is a list of strings; version 1 objects ({ now, would_like })
   // still parse, keeping only what the person would like.
@@ -142,8 +147,11 @@ export function parseConversationResult(pasted: string): ConversationResult | { 
     .filter(c => (c as { kind?: unknown })?.kind === 'human_capital')
     .map(c => text((c as { narrative?: unknown }).narrative))
     .filter(Boolean);
-  if (!desiredStates.length && !humanCapital.length) {
+  // Situations were first called challenges; results from that prompt still parse.
+  const situations = obj.situations ?? obj.challenges;
+  const challenges = (Array.isArray(situations) ? situations : []).map(text).filter(Boolean);
+  if (!desiredStates.length && !humanCapital.length && !challenges.length) {
     return { error: 'Nothing to save was found in that JSON.' };
   }
-  return { desiredStates, humanCapital };
+  return { desiredStates, humanCapital, challenges };
 }

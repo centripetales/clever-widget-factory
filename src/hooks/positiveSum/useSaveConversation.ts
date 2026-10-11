@@ -10,6 +10,7 @@ export interface ReviewedConversation {
   organizationId: string; // the Positive Sum page's org
   desiredStates: string[];
   humanCapital: string[];
+  challenges: string[];
 }
 
 export interface SaveConversationOutcome {
@@ -19,6 +20,7 @@ export interface SaveConversationOutcome {
 
 /**
  * Saves what the person reviewed from their conversation:
+ * - challenges → Positive Sum challenges in the page's org
  * - desired states → Positive Sum goals in the page's org
  * - human capital → profile skills in the page's org, marked 'claimed'
  * Every item is attempted; failures are reported rather than stopping the rest.
@@ -37,6 +39,12 @@ export function useSaveConversation() {
         }
       };
 
+      for (const challenge of review.challenges) {
+        await attempt(challenge, () => apiService.post('/positive-sum/goals', {
+          organization_id: review.organizationId,
+          challenge,
+        }));
+      }
       for (const desiredState of review.desiredStates) {
         await attempt(desiredState, () => apiService.post('/positive-sum/goals', {
           organization_id: review.organizationId,

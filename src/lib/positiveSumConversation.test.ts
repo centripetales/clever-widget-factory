@@ -27,7 +27,13 @@ describe('buildConversationPrompt', () => {
     expect(prompt).toContain('Borrow fruit picker');
     expect(prompt).toContain('"kind": "human_capital"');
     expect(prompt).not.toContain('"kind": "asset"');
-    expect(prompt.indexOf('come to you for help')).toBeLessThan(prompt.indexOf('others might use'));
+    expect(prompt).toContain('What do people usually come to you for help with?');
+    expect(prompt).toContain("What's happening around here that we could handle better together?");
+    expect(prompt).toContain("it doesn't need a solution");
+    expect(prompt).toContain('"situations": [');
+    // Things a person owns are added and shared in the app, not asked about here.
+    expect(prompt).not.toContain('others might use');
+    expect(prompt).toContain("Don't ask about tools, machines, land");
     expect(prompt.indexOf('What would you like to be different')).toBeLessThan(prompt.indexOf("you'd pay for or trade for"));
     expect(prompt).toContain('What did you do, and how did it turn out?');
     expect(prompt).toContain("don't ask me to approve your wording");
@@ -49,6 +55,7 @@ describe('buildConversationPrompt', () => {
 describe('parseConversationResult', () => {
   const json = JSON.stringify({
     version: 2,
+    challenges: ['Only one corn buyer comes by', '', 7],
     desired_states: ['Better corn prices', 'Most fruit', '  ', 42],
     capabilities: [
       { kind: 'human_capital', narrative: 'Grafted mango for 5 years' },
@@ -63,6 +70,7 @@ describe('parseConversationResult', () => {
     expect(result).toEqual({
       desiredStates: ['Better corn prices', 'Most fruit'],
       humanCapital: ['Grafted mango for 5 years'],
+      challenges: ['Only one corn buyer comes by'],
     });
   });
 
@@ -73,7 +81,14 @@ describe('parseConversationResult', () => {
 
   it('still reads version 1 objects, keeping what the person would like', () => {
     const v1 = JSON.stringify({ version: 1, desired_states: [{ now: 'One buyer', would_like: 'Better prices' }, { now: 'x', would_like: '' }] });
-    expect(parseConversationResult(v1)).toEqual({ desiredStates: ['Better prices'], humanCapital: [] });
+    expect(parseConversationResult(v1)).toEqual({ desiredStates: ['Better prices'], humanCapital: [], challenges: [] });
+  });
+
+  it('reads a result that has only situations, under either name', () => {
+    expect(parseConversationResult('{"challenges": ["Coconuts are being stolen"]}'))
+      .toEqual({ desiredStates: [], humanCapital: [], challenges: ['Coconuts are being stolen'] });
+    expect(parseConversationResult('{"situations": ["Coconuts are being stolen"]}'))
+      .toEqual({ desiredStates: [], humanCapital: [], challenges: ['Coconuts are being stolen'] });
   });
 
   it('explains what went wrong', () => {

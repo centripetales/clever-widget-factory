@@ -1,5 +1,6 @@
 import { ReactNode, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { showDisplayedIfOriginalMissing } from "@/lib/imageUtils";
 
 interface PhotoThumbProps {
   src: string;
@@ -57,7 +58,7 @@ export function PhotoThumb({ src, alt, href, onClick, className = "", onError, c
               Sizing the container to the actual image keeps the X next to
               the image it belongs to. */}
           <DialogContent className="max-w-[90vw] max-h-[90vh] w-fit h-fit p-2 border-none bg-transparent shadow-none flex items-center justify-center">
-            <img src={href} alt={alt || "Full resolution"} className="max-w-full max-h-full object-contain rounded" />
+            <img src={href} alt={alt || "Full resolution"} onError={showDisplayedIfOriginalMissing} className="max-w-full max-h-full object-contain rounded" />
           </DialogContent>
         </Dialog>
       </>

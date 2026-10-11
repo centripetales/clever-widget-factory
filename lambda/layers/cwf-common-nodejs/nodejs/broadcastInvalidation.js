@@ -2,8 +2,9 @@
  * Broadcast cache invalidation events to WebSocket connections
  *
  * Used by mutation Lambdas (cwf-core-lambda, cwf-actions-lambda, etc.) to
- * notify all active WebSocket connections in the same organization when an
- * entity is created, updated, or deleted.
+ * notify the active WebSocket connections of an organization — those
+ * registered under it and those of its people — when an entity is created,
+ * updated, or deleted.
  *
  * Gracefully degrades: if WS_API_ENDPOINT is not set, the function returns
  * silently so mutation Lambdas work without WebSocket infrastructure.
@@ -46,10 +47,17 @@ async function broadcastInvalidation({ entityType, entityId, mutationType, organ
       [entityType, entityId, mutationType, organizationId, excludeConnectionId || null]
     );
 
-    // 2. Get active connections for this organization
+    // 2. Get active connections for this organization: those registered under
+    // it, and those of its people. A connection is registered under the
+    // person's primary org, so someone working in another of their orgs (e.g.
+    // an association like Positive Sum) is only reached through membership.
     const { rows: connections } = await client.query(
-      `SELECT connection_id FROM websocket_connections
-       WHERE organization_id = $1 AND disconnected_at IS NULL`,
+      `SELECT DISTINCT wc.connection_id FROM websocket_connections wc
+       WHERE wc.disconnected_at IS NULL
+         AND (wc.organization_id = $1
+              OR wc.user_id::text IN (
+                SELECT om.user_id::text FROM organization_members om
+                WHERE om.organization_id = $1 AND om.is_active = true))`,
       [organizationId]
     );
 

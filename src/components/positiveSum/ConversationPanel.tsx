@@ -13,6 +13,7 @@ import { buildConversationPrompt, parseConversationResult } from '@/lib/positive
 interface Review {
   desiredStates: string[];
   humanCapital: string[];
+  challenges: string[];
 }
 
 // Positive Sum as a conversation held in the person's own AI: copy the prompt,
@@ -47,11 +48,12 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
     setReview({
       desiredStates: result.desiredStates,
       humanCapital: result.humanCapital,
+      challenges: result.challenges,
     });
   };
 
   const update = (change: (r: Review) => Review) => setReview(r => (r ? change(r) : r));
-  const count = review ? review.desiredStates.length + review.humanCapital.length : 0;
+  const count = review ? review.desiredStates.length + review.humanCapital.length + review.challenges.length : 0;
 
   const saveReview = async () => {
     if (!review) return;
@@ -99,6 +101,18 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
 
       {review && (
         <div className="space-y-4 rounded-md border p-3">
+          {review.challenges.length > 0 && (
+            <section className="space-y-2">
+              <h3 className="font-medium">Situations around you</h3>
+              {review.challenges.map((challenge, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <Textarea value={challenge} onChange={e => update(r => ({ ...r, challenges: r.challenges.map((x, j) => j === i ? e.target.value : x) }))} />
+                  <RemoveButton onClick={() => update(r => ({ ...r, challenges: r.challenges.filter((_, j) => j !== i) }))} />
+                </div>
+              ))}
+            </section>
+          )}
+
           {review.desiredStates.length > 0 && (
             <section className="space-y-2">
               <h3 className="font-medium">What you'd like to be different</h3>
