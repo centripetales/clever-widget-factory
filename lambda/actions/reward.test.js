@@ -1,4 +1,6 @@
-const { buildContext, validateClaims, validateNextBestOptions, statedBy, personIds } = require('./reward');
+const {
+  buildContext, validateClaims, validateNextBestOptions, validateOpportunityCosts, statedBy, personIds,
+} = require('./reward');
 
 const STARGAZER = '11111111-1111-1111-1111-111111111111';
 const PASTOR_ORG = '22222222-2222-2222-2222-222222222222';
@@ -147,5 +149,17 @@ describe('statedBy', () => {
   it('names the people whose observations the option comes from', () => {
     expect(statedBy({ source_state_ids: [OBS] }, observations, people)).toEqual(['Stefan']);
     expect(statedBy({ source_state_ids: [] }, observations, people)).toEqual([]);
+  });
+});
+
+describe('validateOpportunityCosts', () => {
+  it('keeps a peso amount per party and drops anything else', () => {
+    expect(validateOpportunityCosts({ [STARGAZER]: 100, "name:Lester's parents": 0, bad: -5, text: '50', '': 10 }))
+      .toEqual({ [STARGAZER]: 100, "name:Lester's parents": 0 });
+  });
+
+  it('handles a missing or malformed value', () => {
+    expect(validateOpportunityCosts(null)).toEqual({});
+    expect(validateOpportunityCosts([1, 2])).toEqual({});
   });
 });

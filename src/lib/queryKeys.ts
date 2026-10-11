@@ -96,6 +96,8 @@ export const memberOrganizationsQueryKey = (orgId: string) => ['member_organizat
 // Tool & Part History query keys
 export const toolHistoryQueryKey = (toolId: string) => ['tool_history', toolId];
 export const toolSharesQueryKey = (toolId: string) => ['tool_shares', toolId];
+// Orgs an action, tool or stock item is shared with (useSharedStatus).
+export const shareStatusQueryKey = (entityType: string, entityId: string) => ['shareStatus', entityType, entityId];
 // The version keeps a persisted cache entry from an older response shape from
 // being read as the current one. v2: the response gained `experiences`. v3:
 // skips v2 entries saved before the endpoint returned it. v4: each reading

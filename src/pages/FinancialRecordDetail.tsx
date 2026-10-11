@@ -443,7 +443,7 @@ export default function FinancialRecordDetail() {
       </Card>
 
       {/* Rewards — expenses only for now (docs/design/POSITIVE_SUM.md §2.6) */}
-      {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} />}
+      {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} descriptionStateId={record.state_id} />}
 
       {/* Metadata */}
       <Card className="mt-4">

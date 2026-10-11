@@ -1,19 +1,24 @@
-import { Fragment, useState } from 'react';
-import { ChevronDown, RefreshCw } from 'lucide-react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { InfoBubble } from '@/components/positiveSum/InfoBubble';
 import { useToast } from '@/hooks/use-toast';
 import { useOrganization } from '@/hooks/useOrganization';
-import { useStateMutations } from '@/hooks/useStates';
+import { useStateMutations, useStates } from '@/hooks/useStates';
 import { useActionReward } from '@/hooks/useActionReward';
 import { errorMessage } from '@/lib/apiService';
 import type { NextBestOption, RewardClaim } from '@/types/rewards';
+import type { Observation } from '@/types/observations';
 import {
-  advantage, advantageRows, balance, breakEvenRate, formatAmount, formatBalance, hasAny, netAtRate, nextBestOptions,
+  advantage, advantageRows, balance, breakEvenRate, formatAmount, formatBalance, netAtRate, nextBestOptions,
   nextBestStatement, noOtherOptionStatement, signFor, totalsByParty, type AdvantageRow, type Balance,
 } from '@/lib/rewards';
 
@@ -42,8 +47,64 @@ const OPTION_KIND_LABELS: Record<NextBestOption['kind'], string> = {
   no_other_option: 'No other option',
 };
 
+// A person, shown the same way as an organization in the app.
+function NameChip({ name }: { name: string }) {
+  return (
+    <span className="inline-flex max-w-full items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground break-words">
+      {name}
+    </span>
+  );
+}
+
+// What a party's time in its expected advantage is worth in pesos — a total the
+// viewer enters, substituted for the hours. Time gained adds it; time spent
+// takes it away. Nothing is stored.
+const withTimeValued = ({ money, hours }: Balance, amount: number) => money + Math.sign(hours) * amount;
+
+function OpportunityCost({ party, chip, value, amount, onChange, onDone }: {
+  party: string;
+  chip: ReactNode;
+  value: Balance;
+  amount: string;
+  onChange: (amount: string) => void;
+  onDone: () => void; // the person finished entering it: save
+}) {
+  if (!value.hours) return null;
+  const entered = Number(amount);
+  const net = amount.trim() && Number.isFinite(entered) ? withTimeValued(value, entered) : null;
+  const peso = (n: number) => `${n < 0 ? '−' : '+'}₱${Math.abs(Math.round(n)).toLocaleString()}`;
+
+  return (
+    <div className="space-y-1 rounded-md bg-muted/40 p-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex flex-wrap items-center gap-1">Opportunity cost of {chip} time ({formatAmount(null, Math.abs(value.hours))}): ₱</span>
+        <Input
+          type="number"
+          inputMode="decimal"
+          className="h-8 w-24"
+          value={amount}
+          onChange={e => onChange(e.target.value)}
+          onBlur={onDone}
+          aria-label={`Opportunity cost of ${party} time in pesos`}
+        />
+      </div>
+      {net !== null && (
+        <p>
+          Expected advantage:{' '}
+          <span className={net < 0 ? 'font-medium text-destructive' : 'font-medium text-green-700 dark:text-green-400'}>{peso(net)}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 // A documented next-best option, shown under its party's advantage.
-function NextBestOptionDetail({ option, value }: { option: NextBestOption; value: Balance | null }) {
+function NextBestOptionDetail({ option, value, added, onDelete }: {
+  option: NextBestOption;
+  value: Balance | null;
+  added: Observation[];
+  onDelete: (id: string) => Promise<void>;
+}) {
   return (
     <div className="space-y-1 rounded-md border border-dashed bg-background p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -52,13 +113,18 @@ function NextBestOptionDetail({ option, value }: { option: NextBestOption; value
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Badge variant="outline">{OPTION_KIND_LABELS[option.kind]}</Badge>
-        {!!option.stated_by?.length && <span>Documented by {option.stated_by.join(', ')}</span>}
+        {!!option.stated_by?.length && (
+          <span className="inline-flex flex-wrap items-center gap-1">
+            Documented by {option.stated_by.map(name => <NameChip key={name} name={name} />)}
+          </span>
+        )}
         {value && <span>Expected advantage against it: {formatBalance(value)}</span>}
       </div>
       <p className="text-sm text-muted-foreground break-words">{option.claim}</p>
       {option.replaces.length > 0 && (
         <p className="text-xs text-muted-foreground break-words">Instead of: {option.replaces.join(', ')}</p>
       )}
+      <AddedSources sourceIds={option.source_state_ids} added={added} onDelete={onDelete} />
     </div>
   );
 }
@@ -112,14 +178,16 @@ function HourValue({ value, label, netLabel }: { value: Balance; label: string; 
   );
 }
 
-// One party's advantage, and the fields for documenting its next-best option.
+// One party's documented next-best options, and the fields for adding one.
 // What is entered is saved as the person's observation, so it stays their
 // claim and they are credited with documenting it.
-function AdvantageRowView({ row, claims, orgNames, onSave }: {
+function AdvantageRowView({ row, claims, orgNames, added, onSave, onDelete }: {
   row: AdvantageRow;
   claims: RewardClaim[];
   orgNames: Record<string, string>;
+  added: Observation[];
   onSave: (text: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [what, setWhat] = useState('');
@@ -145,17 +213,22 @@ function AdvantageRowView({ row, claims, orgNames, onSave }: {
     <div className="space-y-1">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="min-w-0"><PartyChip id={row.id} name={row.name} orgNames={orgNames} /></span>
-        <span className={row.value ? 'font-medium' : 'text-muted-foreground'}>
-          {row.value ? formatBalance(row.value) : row.noOtherOption ? 'Not evaluated' : row.options.length ? 'Not stated' : 'Next best not documented'}
-        </span>
+        {!row.options.length && <span className="text-muted-foreground">Not documented</span>}
       </div>
       {row.noOtherOption && !row.value && (
-        <p className="text-xs text-muted-foreground">No other option — this expanded what {party} can do, so there is nothing to compare it with.</p>
+        <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          No other option — this expanded what <PartyChip id={row.id} name={row.name} orgNames={orgNames} /> can do, so there is nothing to compare it with.
+        </p>
       )}
       {row.options.map((o, i) => (
-        <NextBestOptionDetail key={`${o.name}-${i}`} option={o} value={row.options.length > 1 ? advantage(o, claims) : null} />
+        <NextBestOptionDetail
+          key={`${o.name}-${i}`}
+          option={o}
+          value={row.options.length > 1 ? advantage(o, claims) : null}
+          added={added}
+          onDelete={onDelete}
+        />
       ))}
-      {row.value && <HourValue value={row.value} label={`An hour of ${party}'s time is worth ₱`} netLabel="Expected advantage" />}
 
       {adding ? (
         <div className="space-y-2 pt-1">
@@ -196,6 +269,57 @@ function AdvantageRowView({ row, claims, orgNames, onSave }: {
   );
 }
 
+// Something a person added here — an adjustment, a next-best option, another
+// observation — with a button to remove it. Removing deletes that observation;
+// the rewards are then rebuilt without it.
+function AddedObservation({ observation: o, onDelete }: { observation: Observation; onDelete: (id: string) => Promise<void> }) {
+  return (
+    <div className="flex items-start justify-between gap-2 rounded-md border bg-background p-2 text-sm">
+      <div className="min-w-0">
+        <p className="break-words">{o.observation_text}</p>
+        <p className="flex flex-wrap items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {o.captured_by_name && <NameChip name={o.captured_by_name} />}
+          <span>{new Date(o.captured_at).toLocaleDateString()}</span>
+        </p>
+      </div>
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" aria-label="Delete this observation">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this observation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It is removed for good and the rewards are rebuilt without it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => onDelete(o.id)}>Delete and rebuild</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// The added observations a claim or next best was built from, shown with it.
+function AddedSources({ sourceIds, added, onDelete }: {
+  sourceIds: string[];
+  added: Observation[];
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const sources = added.filter(o => sourceIds.includes(o.id));
+  if (!sources.length) return null;
+  return (
+    <div className="space-y-1 pt-1">
+      {sources.map(o => <AddedObservation key={o.id} observation={o} onDelete={onDelete} />)}
+    </div>
+  );
+}
+
 // More about what happened, said in the person's own words; saved as an
 // observation and followed by a rebuild.
 function AddObservation({ onAdd }: { onAdd: (text: string) => Promise<boolean> }) {
@@ -230,18 +354,25 @@ type EntityLink = { entity_type: string; entity_id: string };
 // Rewards of an action: claims derived from its observations by AI, rebuilt on
 // request. Adjustments are saved as observations so a rebuild keeps them.
 // For an action made from a transaction, `alsoLinkTo` is the transaction:
-// people add observations here, linked to both; `justCreated` opens it while
-// the first build, started with the action, is still running.
-export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
+// people add observations here, linked to both, and can remove them again
+// (all but `descriptionStateId`, the transaction's own description);
+// `justCreated` opens it while the first build, started with the action, is
+// still running.
+export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justCreated = false }: {
   actionId: string;
   alsoLinkTo?: EntityLink;
+  descriptionStateId?: string;
   justCreated?: boolean;
 }) {
   const [open, setOpen] = useState(justCreated);
   const { toast } = useToast();
   const { organization } = useOrganization();
-  const { createState } = useStateMutations(organization?.id ?? '', { entity_type: 'action', entity_id: actionId });
-  const { data, isLoading, rebuild, isBuilding } = useActionReward(actionId, open, justCreated);
+  const actionFilter = { entity_type: 'action', entity_id: actionId };
+  const { createState, deleteState } = useStateMutations(organization?.id ?? '', actionFilter);
+  // Only an action made from a transaction lists them here; other actions show their observations in the dialog.
+  const { data: observations = [] } = useStates(alsoLinkTo && open ? organization?.id ?? '' : '', actionFilter);
+  const added = observations.filter(o => o.id !== descriptionStateId && o.observation_text?.trim());
+  const { data, isLoading, rebuild, saveOpportunityCosts, isBuilding } = useActionReward(actionId, open, justCreated);
 
   const orgNames = data?.org_names ?? {};
   const claims = data?.claims;
@@ -265,6 +396,19 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
     }
   };
 
+  // Shown with the claim or next best it led to; anything else is listed at the end.
+  const shownIds = new Set([...(claims ?? []), ...(data && claims ? nextBestOptions(data) : [])].flatMap(x => x.source_state_ids));
+  const unplaced = added.filter(o => !shownIds.has(o.id));
+
+  const removeObservation = async (id: string) => {
+    try {
+      await deleteState(id);
+      startRebuild();
+    } catch (error) {
+      toast({ title: 'Could not delete the observation', description: errorMessage(error), variant: 'destructive' });
+    }
+  };
+
   const saveAdjustment = (c: RewardClaim, php: string, hours: string, note: string) => {
     const amounts = [php.trim() && `₱${php.trim()}`, hours.trim() && `${hours.trim()} hours`].filter(Boolean).join(' and ');
     const parts = [
@@ -278,10 +422,38 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
   const totals = claims ? totalsByParty(claims) : [];
   const options = data && claims ? nextBestOptions(data) : [];
   const rows = claims ? advantageRows(claims, options) : [];
-  const evaluated = rows.flatMap(r => (r.value ? [r.value] : []));
-  const advantageTotal = evaluated.reduce<Balance>(
-    (sum, v) => ({ money: sum.money + v.money, hours: sum.hours + v.hours }), { money: 0, hours: 0 }
-  );
+  // The opportunity cost entered for each party's time: a total in pesos that
+  // stands in for its hours. Saved with the rewards when the person leaves the field.
+  const [timeValues, setTimeValues] = useState<Record<string, string>>({});
+  const savedCosts = JSON.stringify(data?.opportunity_costs ?? {});
+  useEffect(() => {
+    setTimeValues(Object.fromEntries(Object.entries(JSON.parse(savedCosts) as Record<string, number>).map(([k, v]) => [k, String(v)])));
+  }, [savedCosts]);
+
+  const saveTimeValues = () => {
+    const costs = Object.fromEntries(Object.entries(timeValues)
+      .filter(([, v]) => v.trim() && Number.isFinite(Number(v)) && Number(v) >= 0)
+      .map(([k, v]) => [k, Number(v)]));
+    if (JSON.stringify(costs) === savedCosts) return;
+    saveOpportunityCosts.mutate(costs, {
+      onError: error => toast({ title: 'Could not save the opportunity cost', description: errorMessage(error), variant: 'destructive' }),
+    });
+  };
+  const rowKey = (row: { id: string | null; name: string }) => row.id ?? `name:${row.name}`;
+  const timeValueFor = (row: { id: string | null; name: string }) => {
+    const entered = timeValues[rowKey(row)]?.trim();
+    return entered && Number.isFinite(Number(entered)) ? Number(entered) : null;
+  };
+  const peso = (n: number) => `${n < 0 ? '−' : ''}₱${Math.abs(Math.round(n)).toLocaleString()}`;
+  const signColor = (n: number) => (n > 0 ? 'text-green-700 dark:text-green-400' : n < 0 ? 'text-destructive' : '');
+
+  const evaluated = rows.filter(r => r.value);
+  const advantageTotal = evaluated.reduce<Balance>((sum, r) => {
+    const timeValue = timeValueFor(r);
+    return timeValue === null || !r.value!.hours
+      ? { money: sum.money + r.value!.money, hours: sum.hours + r.value!.hours }
+      : { money: sum.money + withTimeValued(r.value!, timeValue), hours: sum.hours };
+  }, { money: 0, hours: 0 });
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-4 rounded-md border">
@@ -312,17 +484,24 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
         )}
 
         {claims?.map((c, i) => (
-          <ClaimCard key={`${c.name}-${i}`} claim={c} orgNames={orgNames} sign={signFor(c, organization?.id)} onAdjust={saveAdjustment} />
+          <ClaimCard
+            key={`${c.name}-${i}`}
+            claim={c}
+            orgNames={orgNames}
+            sign={signFor(c, organization?.id)}
+            added={added}
+            onAdjust={saveAdjustment}
+            onDelete={removeObservation}
+          />
         ))}
 
         {rows.length > 0 && (
           <div className="space-y-2 rounded-md bg-muted/40 p-2 text-sm">
             <div className="flex items-center gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Expected advantage</span>
+              <span className="text-xs font-medium text-muted-foreground">Next-best options</span>
               <InfoBubble>
-                How much better this was for each party than its next-best option — what it would otherwise have done
-                or had. The next best never happened, so the advantage is expected, not measured: it is the view of
-                whoever documents it, for their own side or the other party's, and they are credited with documenting it.
+                What each party would otherwise have done or had. It never happened, so it is the view of whoever
+                documents it, for their own side or the other party's, and they are credited with documenting it.
               </InfoBubble>
             </div>
             {rows.map(row => (
@@ -331,34 +510,105 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
                 row={row}
                 claims={claims ?? []}
                 orgNames={orgNames}
+                added={added}
+                onDelete={removeObservation}
                 onSave={text => saveObservation(text, 'Could not save the next best')}
               />
             ))}
-            {evaluated.length > 1 && (
-              <div className="flex items-center justify-between gap-2 border-t pt-2 font-medium">
-                <span>Total expected</span>
-                <span>{formatBalance(advantageTotal)}</span>
-              </div>
-            )}
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div className="space-y-2 rounded-md bg-muted/40 p-2 text-sm">
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Expected advantage</span>
+              <InfoBubble>
+                What each party gained from this option over its next best. Expected, not measured: the next best
+                never happened. Time stays as hours unless you enter the opportunity cost of a party's time below;
+                that amount then stands in for its hours and the Advantage column shows the working.
+              </InfoBubble>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1">
+              <span />
+              <span className="text-right text-xs font-medium text-muted-foreground">Advantage</span>
+              <span className="text-right text-xs font-medium text-muted-foreground">Time</span>
+              {rows.map(row => (
+                <Fragment key={row.id ?? row.name}>
+                  <span className="min-w-0"><PartyChip id={row.id} name={row.name} orgNames={orgNames} /></span>
+                  {row.value ? (
+                    <>
+                      <span className="text-right font-medium">
+                        {timeValueFor(row) !== null && row.value.hours
+                          ? `${peso(row.value.money)} ${row.value.hours < 0 ? '−' : '+'} ${peso(timeValueFor(row)!)}`
+                          : formatBalance({ money: row.value.money, hours: 0 })}
+                      </span>
+                      <span className="text-right font-medium">{row.value.hours ? formatBalance({ money: 0, hours: row.value.hours }) : '—'}</span>
+                    </>
+                  ) : (
+                    <span className="col-span-2 text-right text-muted-foreground">
+                      {row.noOtherOption ? 'Not evaluated — no other option' : row.options.length ? 'No amount stated' : 'Next best not documented'}
+                    </span>
+                  )}
+                </Fragment>
+              ))}
+              {evaluated.length > 1 && (
+                <>
+                  <span className="flex items-center gap-1 border-t pt-1 font-medium">
+                    Value created
+                    <InfoBubble>
+                      The expected advantage of every party added together: what exists because this option was chosen
+                      over each party's next best. It is separate from the money that changed hands — a trade creates
+                      value when the parties together come out ahead of their alternatives.
+                    </InfoBubble>
+                  </span>
+                  <span className={`border-t pt-1 text-right font-medium ${signColor(advantageTotal.money)}`}>
+                    {formatBalance({ money: advantageTotal.money, hours: 0 })}
+                  </span>
+                  <span className={`border-t pt-1 text-right font-medium ${signColor(advantageTotal.hours)}`}>
+                    {advantageTotal.hours ? formatBalance({ money: 0, hours: advantageTotal.hours }) : '—'}
+                  </span>
+                </>
+              )}
+            </div>
+            {rows.map(row => row.value && (
+              <OpportunityCost
+                key={row.id ?? row.name}
+                party={row.id ? orgNames[row.id] ?? row.name : row.name}
+                chip={<PartyChip id={row.id} name={row.name} orgNames={orgNames} />}
+                value={row.value}
+                amount={timeValues[rowKey(row)] ?? ''}
+                onChange={amount => setTimeValues(all => ({ ...all, [rowKey(row)]: amount }))}
+                onDone={saveTimeValues}
+              />
+            ))}
           </div>
         )}
 
         {totals.length > 0 && (
-          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1 rounded-md bg-muted/40 p-2 text-sm">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-3 gap-y-1 rounded-md bg-muted/40 p-2 text-sm">
             <span />
             <span className="text-right text-xs font-medium text-muted-foreground">Gained</span>
             <span className="text-right text-xs font-medium text-muted-foreground">Cost</span>
-            {totals.map(t => (
-              <Fragment key={t.id ?? t.name}>
-                <span className="min-w-0"><PartyChip id={t.id} name={t.name} orgNames={orgNames} /></span>
-                <span className="text-right text-green-700 dark:text-green-400">
-                  {hasAny(t.benefits) ? formatAmount(t.benefits.php, t.benefits.hours, '+') : '—'}
-                </span>
-                <span className="text-right text-destructive">
-                  {hasAny(t.costs) ? formatAmount(t.costs.php, t.costs.hours, '−') : '—'}
-                </span>
-              </Fragment>
-            ))}
+            <span className="text-right text-xs font-medium text-muted-foreground">Time</span>
+            {totals.map(t => {
+              // The party's own time in this action: spent is negative, received positive.
+              const timed = t.benefits.hours !== null || t.costs.hours !== null;
+              const { hours } = balance(t);
+              return (
+                <Fragment key={t.id ?? t.name}>
+                  <span className="min-w-0"><PartyChip id={t.id} name={t.name} orgNames={orgNames} /></span>
+                  <span className="text-right text-green-700 dark:text-green-400">
+                    {t.benefits.php !== null ? formatAmount(t.benefits.php, null, '+') : '—'}
+                  </span>
+                  <span className="text-right text-destructive">
+                    {t.costs.php !== null ? formatAmount(t.costs.php, null, '−') : '—'}
+                  </span>
+                  <span className="text-right">
+                    {timed ? formatAmount(null, Math.abs(hours), hours < 0 ? '−' : '+') : '—'}
+                  </span>
+                </Fragment>
+              );
+            })}
           </div>
         )}
 
@@ -368,6 +618,12 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
         })()}
 
         {alsoLinkTo && <AddObservation onAdd={text => saveObservation(text, 'Could not save the observation')} />}
+        {unplaced.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Also added here</p>
+            {unplaced.map(o => <AddedObservation key={o.id} observation={o} onDelete={removeObservation} />)}
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">
@@ -383,11 +639,13 @@ export function RewardsSection({ actionId, alsoLinkTo, justCreated = false }: {
   );
 }
 
-function ClaimCard({ claim, orgNames, sign, onAdjust }: {
+function ClaimCard({ claim, orgNames, sign, added, onAdjust, onDelete }: {
   claim: RewardClaim;
   orgNames: Record<string, string>;
   sign: '+' | '−' | '';
+  added: Observation[];
   onAdjust: (claim: RewardClaim, php: string, hours: string, note: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const [adjusting, setAdjusting] = useState(false);
   const [php, setPhp] = useState('');
@@ -427,6 +685,7 @@ function ClaimCard({ claim, orgNames, sign, onAdjust }: {
         {claim.cost_basis_method && <Badge variant="outline">{COST_BASIS_LABELS[claim.cost_basis_method]}</Badge>}
       </div>
       <p className="text-sm text-muted-foreground break-words">{claim.claim}</p>
+      <AddedSources sourceIds={claim.source_state_ids} added={added} onDelete={onDelete} />
 
       {adjusting ? (
         <div className="space-y-2 pt-1">

@@ -76,7 +76,11 @@ function OrganizationPicker({ initialName, ownOrgId, selected, onSelect }: {
 // Rewards of a transaction. Rewards belong to an action, so the first build
 // makes one from the transaction once the person confirms who was paid (an AI
 // draft they review). Until then nothing is created.
-export function TransactionRewards({ recordId, organizationId }: { recordId: string; organizationId: string }) {
+export function TransactionRewards({ recordId, organizationId, descriptionStateId }: {
+  recordId: string;
+  organizationId: string;
+  descriptionStateId?: string;
+}) {
   const { toast } = useToast();
   const { data: link, isLoading, draft, create } = useTransactionAction(recordId);
   const [open, setOpen] = useState(false);
@@ -85,7 +89,7 @@ export function TransactionRewards({ recordId, organizationId }: { recordId: str
   const [otherOrg, setOtherOrg] = useState<NamedOrganization | null>(null);
 
   if (link) {
-    return <RewardsSection actionId={link.action_id} alsoLinkTo={{ entity_type: 'financial_record', entity_id: recordId }} justCreated={create.isSuccess} />;
+    return <RewardsSection actionId={link.action_id} alsoLinkTo={{ entity_type: 'financial_record', entity_id: recordId }} descriptionStateId={descriptionStateId} justCreated={create.isSuccess} />;
   }
 
   // The draft is only a starting point: if it fails, the person fills the review in themselves.

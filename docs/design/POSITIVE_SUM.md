@@ -35,11 +35,6 @@ replaced by capabilities + open options), *board*/*post*.
 - **Not about control.** No software gates on stewardship (e.g. photos at
   pickup/return are what a good steward chooses to do). People demonstrate
   their own stewardship.
-- **Visibility is flexible, not uniform.** Seeing everything can hurt the
-  sharer (inventories used against them, jealousy). Membership marks
-  eligibility; what surfaces is decided by contribution.
-- **Scarcity drives engagement.** Opportunities arrive a few at a time, not
-  as a feed or catalog.
 - **Reputation is personal; value is relative.** Contribution is tracked per
   person (and org); what counts as value comes from each org's policy.
 - **Logic differences are org settings**, not new concepts.
@@ -109,9 +104,12 @@ replaced by capabilities + open options), *board*/*post*.
   tools onward"); composing LLMs must respect them.
 
 ### 2.3 Borrowing
-- Tools are **shared with the org behind the scenes** (never browsable);
-  sharing a tool with a Positive Sum org creates an **open option** for it
-  (terms from the tool's own policy field). No Assets "shared items" toggle.
+- **Shared tools are browsable by members** (revised 2026-10-11; to be
+  refined). A tool shared with a Positive Sum org can be seen by people in
+  that org and in its member organizations — in their Assets list and
+  wherever a tool is picked. This is how sharing already works in the app.
+  It replaces the earlier decision that shared tools are never browsable
+  and that there is no Assets "shared items" view.
 - **Request to borrow creates an action**, prefilled from what the requester
   provided (initial and desired state), the tool as required tool,
   requester + lender as participants, and the **composed policy** on it.
@@ -194,7 +192,9 @@ expense.
   build as context.
 - **The paid amount is a fact, not a claim to find.** Amount, date and
   paying org come from the transaction; the LLM only looks for what else
-  moved and for next-best options.
+  moved and for next-best options. **A purchase is one claim**: the
+  payment, described by what was bought — the goods are not a second
+  claim.
 
 Changes to the reward model (apply to every action, not only these):
 
@@ -206,10 +206,11 @@ Changes to the reward model (apply to every action, not only these):
   otherwise.
 - **Hours stay hours, and belong to the org** — never assigned to a named
   person (reducing people to numbers breeds resentment). Pesos appear only
-  on view, through the existing "My hour is worth ₱ / Calc my break-even"
-  control. Nothing about rates is stored.
-- **Value created** per party and in total is computed in the app from
-  the claims and next-best options, never stored — as "Saved" is today.
+  when someone enters the **opportunity cost of a party's time**: a total
+  that stands in for its hours in that action. What is entered is saved
+  with the action's rewards (one set per action, kept across rebuilds).
+- **Expected advantage** per party, and **value created** (their sum), are
+  computed in the app from the claims and next-best options, never stored.
 
 Worked example (the expense that exists): 6 banana suckers from Lester's
 parents, ₱200 paid.

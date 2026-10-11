@@ -7,11 +7,12 @@
 const { Client } = require('pg');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+const { STATE_TYPES, stateText, parseState } = require('./positiveSumRules');
 
 // Most capable Claude model this account can invoke on Bedrock (Opus 5 /
 // Sonnet 5 are not enabled for it yet).
 const MODEL_ID = process.env.REWARD_MODEL_ID || 'us.anthropic.claude-opus-4-6-v1';
-const PROMPT_VERSION = 'reward-v10';
+const PROMPT_VERSION = 'reward-v11';
 const INFERENCE_CONFIG = { max_tokens: 8000, effort: 'low' };
 
 const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -47,7 +48,8 @@ For each claim:
 - source_state_ids: ids of the observations it comes from.
 
 Transaction:
-- When the action comes from a transaction, the amount paid is a fact from the record. Record it as exactly one claim from the organization that paid to the organization that was paid, with that php and cost_basis_method "purchase_price"; it needs no source observations. Do not record the same payment again from the observations.
+- When the action comes from a transaction, the purchase is one thing and is recorded as exactly one claim: from the organization that paid to the organization that was paid, with the amount from the record as php and cost_basis_method "purchase_price". Its claim text says what was bought, in the words of the description (e.g. "₱200 for 10 banana suckers at 20 each, the largest 8ft tall"), and its sources are the observations that describe the purchase.
+- Do not record the goods or service bought as a second claim, and do not record the same payment again from the observations. Other things that moved (time spent, help given, a separate payment) are still their own claims.
 
 Next-best options (as many as were stated, each for one party):
 - Record one only when someone said what the alternative was. Anyone may state one for any party; it is their claim, not an established fact.
@@ -291,6 +293,47 @@ async function generationConfigId(client, { version = PROMPT_VERSION, system = S
   return inserted.rows[0].id;
 }
 
+// The opportunity cost someone entered for each party's time (pesos, by org id
+// or "name:<name>"). Entered, not derived: kept in its own bookkeeping state on
+// the action, so a rebuild leaves it alone.
+function validateOpportunityCosts(input) {
+  const entries = input && typeof input === 'object' && !Array.isArray(input) ? Object.entries(input) : [];
+  return Object.fromEntries(entries
+    .filter(([key, amount]) => key.trim() && typeof amount === 'number' && Number.isFinite(amount) && amount >= 0)
+    .slice(0, 20));
+}
+
+async function opportunityCostsState(client, actionId) {
+  const { rows } = await client.query(
+    `SELECT s.id, s.state_text FROM states s JOIN state_links sl ON sl.state_id = s.id
+      WHERE sl.entity_type = 'action' AND sl.entity_id = $1 AND s.state_text LIKE $2
+      ORDER BY s.created_at LIMIT 1`,
+    [actionId, `${stateText(STATE_TYPES.OPPORTUNITY_COSTS, {}).slice(0, -1)}%`]
+  );
+  return rows[0] ? { id: rows[0].id, values: parseState(rows[0].state_text)?.values ?? {} } : null;
+}
+
+async function saveOpportunityCosts(client, action, userId, values) {
+  const text = stateText(STATE_TYPES.OPPORTUNITY_COSTS, { action_id: action.id, values });
+  const existing = await opportunityCostsState(client, action.id);
+  if (existing) {
+    await client.query(
+      'UPDATE states SET state_text = $1, captured_by = $2, captured_at = NOW(), updated_at = NOW() WHERE id = $3',
+      [text, userId, existing.id]
+    );
+    return;
+  }
+  const { rows } = await client.query(
+    `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+     VALUES ($1, $2, $3, NOW()) RETURNING id`,
+    [action.organization_id, text, userId]
+  );
+  await client.query(
+    `INSERT INTO state_links (state_id, entity_type, entity_id) VALUES ($1, 'action', $2)`,
+    [rows[0].id, action.id]
+  );
+}
+
 async function readReward(client, actionId) {
   const { rows } = await client.query(
     `SELECT content, created_at, status, error_message FROM state_perspectives
@@ -299,7 +342,12 @@ async function readReward(client, actionId) {
     [actionId]
   );
   const row = rows[0];
-  return row ? { ...row.content, created_at: row.created_at, status: row.status, error: row.error_message } : null;
+  if (!row) return null;
+  const costs = await opportunityCostsState(client, actionId);
+  return {
+    ...row.content, opportunity_costs: costs?.values ?? {},
+    created_at: row.created_at, status: row.status, error: row.error_message,
+  };
 }
 
 // One REWARD perspective per action, replaced on each rebuild. A failed
@@ -380,12 +428,19 @@ async function buildReward({ actionId, userId, dbConfig, loadTransaction }) {
 // GET  /actions/{id}/reward — the latest rewards (or null)
 // POST /actions/{id}/reward — start a rebuild from the action's current
 //      observations; returns 202 and the caller polls GET for the result.
-async function handleReward({ httpMethod, actionId, userId, accessibleOrgIds, dbConfig }) {
+//      With { opportunity_costs } in the body it saves those instead (no rebuild).
+async function handleReward({ httpMethod, actionId, userId, accessibleOrgIds, dbConfig, body }) {
   return withClient(dbConfig, async client => {
     const action = await loadAction(client, actionId);
     if (!action || !accessibleOrgIds.includes(action.organization_id)) throw new HttpError(404, 'Action not found');
 
     if (httpMethod === 'GET') return { statusCode: 200, data: await readReward(client, actionId) };
+
+    if (body?.opportunity_costs !== undefined) {
+      const values = validateOpportunityCosts(body.opportunity_costs);
+      await saveOpportunityCosts(client, action, userId, values);
+      return { statusCode: 200, data: { opportunity_costs: values } };
+    }
 
     const observations = await loadObservations(client, actionId);
     if (!observations.length) throw new HttpError(400, 'Add observations about what happened first');
@@ -399,6 +454,7 @@ async function handleReward({ httpMethod, actionId, userId, accessibleOrgIds, db
 }
 
 module.exports = {
-  handleReward, buildReward, HttpError, buildContext, validateClaims, validateNextBestOptions, statedBy, personIds,
+  handleReward, buildReward, HttpError, buildContext, validateClaims, validateNextBestOptions, validateOpportunityCosts,
+  statedBy, personIds,
   invokeModel, generationConfigId, loadOrgs, withClient, MODEL_ID,
 };

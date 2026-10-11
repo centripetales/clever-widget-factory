@@ -1,14 +1,27 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
+import { shareStatusQueryKey } from '@/lib/queryKeys';
 
-type EntityType = 'action' | 'part' | 'tool';
+export type ShareEntityType = 'action' | 'part' | 'tool';
 
-export function useSharedStatus(entityId: string, entityType: EntityType) {
-  const queryKey = ['shareStatus', entityType, entityId] as const;
-  const queryFn = async () => {
-    const resp = await apiService.get(`/api/shares/${entityType}/${entityId}`);
-    // Assuming response shape { shares: Array<any> }
-    const shares = (resp as any)?.shares || [];
+// One org an entity is shared with; the share is a state, hence state_id.
+export interface EntityShare {
+  state_id: string;
+  target_org_id: string;
+  target_org_name: string;
+  note: string;
+}
+
+export interface ShareStatus {
+  isShared: boolean;
+  shares: EntityShare[];
+}
+
+export function useSharedStatus(entityId: string, entityType: ShareEntityType) {
+  const queryKey = shareStatusQueryKey(entityType, entityId);
+  const queryFn = async (): Promise<ShareStatus> => {
+    const resp = await apiService.get<{ shares?: EntityShare[] }>(`/api/shares/${entityType}/${entityId}`);
+    const shares = resp?.shares || [];
     return { isShared: shares.length > 0, shares };
   };
 

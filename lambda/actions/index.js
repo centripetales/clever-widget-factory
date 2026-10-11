@@ -195,6 +195,7 @@ exports.handler = async (event) => {
       try {
         const { statusCode, data } = await handleReward({
           httpMethod,
+          body: JSON.parse(event.body || '{}'),
           actionId: rewardRoute[1],
           userId: requireCognitoUserId(authContext),
           accessibleOrgIds: allAccessibleOrgIds.length ? allAccessibleOrgIds : accessibleOrgIds,

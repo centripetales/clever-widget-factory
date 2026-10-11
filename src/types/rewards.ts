@@ -37,6 +37,9 @@ export interface ActionRewards {
   next_best_options?: NextBestOption[];
   // Rewards built before several options: one, always a cost for whoever paid.
   next_best_option?: Omit<NextBestOption, 'for_org_id' | 'for_name' | 'kind'> | null;
+  // The opportunity cost someone entered for each party's time, in pesos, by
+  // org id or "name:<name>". Entered, not derived; a rebuild keeps it.
+  opportunity_costs?: Record<string, number>;
   org_names: Record<string, string>;
   context_state_ids: string[];
   generated_by?: string;
