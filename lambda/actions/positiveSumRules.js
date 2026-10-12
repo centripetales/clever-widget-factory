@@ -14,6 +14,9 @@ const STATE_TYPES = {
   APPROVAL: 'positive_sum.approval',
   PASS: 'positive_sum.pass',
   OPPORTUNITY_LIST: 'positive_sum.opportunity_list',
+  // The person saved a conversation: they have given their own input, so they
+  // now see what other people said about where we could improve.
+  CONVERSATION: 'positive_sum.conversation',
   // A collaboration (desired state) proposed for a challenge.
   COLLABORATION: 'positive_sum.collaboration',
   // The transaction an action was made from, and the other organization in it.
@@ -53,6 +56,11 @@ function isChallenge(a) {
   return !!(a.description && a.description.trim()) && !(a.expected_state && a.expected_state.trim()) &&
     !(a.policy && a.policy.trim());
 }
+
+// Until a person has given their own input, they see only their own entries,
+// so what others said doesn't shape theirs.
+const visibleSituations = (situations, userId, hasGivenInput) =>
+  situations.filter(c => hasGivenInput || challengeOwner(c) === String(userId));
 
 // The open challenges of an org as people see them: votes (people who joined
 // it), whether the viewer voted, and the collaborations proposed for each.
@@ -212,6 +220,7 @@ module.exports = {
   proposalText,
   JOINABLE_STATUSES,
   challengeOwner,
+  visibleSituations,
   challengeSummaries,
   addressedChallenges,
   takingPart,

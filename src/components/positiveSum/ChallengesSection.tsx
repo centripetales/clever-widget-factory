@@ -153,8 +153,10 @@ function CollaborationRow({ collaboration: given, mine, linkTo, userId, onDelete
 // extras on a row, and the ones not linked to any challenge yet are listed last.
 // `members` are the people of the org and of the viewer's own orgs, for
 // assigning a challenge when editing it (its voters can be assigned too).
-export function ChallengesSection({ organizationId, challenges, goals = [], members = [] }: {
+export function ChallengesSection({ organizationId, challenges, goals = [], members = [], hasGivenInput = true }: {
   organizationId: string;
+  // Other people's entries are held back until the person has saved a conversation.
+  hasGivenInput?: boolean;
   challenges: Challenge[];
   goals?: MyGoal[];
   members?: { id: string; name: string | null }[];
@@ -183,7 +185,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
   const add = () =>
     createChallenge.mutate({ organizationId, challenge: text.trim() }, {
       onSuccess: () => setText(''),
-      onError: failed('Could not add the situation'),
+      onError: failed('Could not add it'),
     });
 
   const propose = (challengeId: string) =>
@@ -215,7 +217,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
 
   return (
     <section className="space-y-3">
-      <h2 className="text-lg font-semibold">Situations we could improve together</h2>
+      <h2 className="text-lg font-semibold">Where we could improve</h2>
       <p className="text-sm text-muted-foreground">
         Describe how things are. It doesn't need a solution: those come afterwards, as proposed collaborations.
       </p>
@@ -223,10 +225,10 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
       <div className="space-y-2">
         <Textarea
           rows={2}
-          placeholder="How things are, e.g. Copra buyers are unreliable"
+          placeholder="How things are"
           value={text}
           onChange={e => setText(e.target.value)}
-          aria-label="Describe a situation"
+          aria-label="Describe where we could improve"
         />
         <div className="flex justify-end">
           {/* The page's one filled button, in the Positive Sum orange rather than the app's near-black. */}
@@ -234,12 +236,17 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
             size="sm" className="bg-orange-500 text-white hover:bg-orange-600"
             disabled={!text.trim() || createChallenge.isPending} onClick={add}
           >
-            {createChallenge.isPending ? 'Adding...' : 'Add a situation'}
+            {createChallenge.isPending ? 'Adding...' : 'Add'}
           </Button>
         </div>
       </div>
 
-      {challenges.length === 0 && <p className="text-sm text-muted-foreground">No situations yet.</p>}
+      {!hasGivenInput && (
+        <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+          What other people have said appears here once you've shared your own view in the conversation above.
+        </p>
+      )}
+      {hasGivenInput && challenges.length === 0 && <p className="text-sm text-muted-foreground">Nothing here yet.</p>}
 
       {challenges.map(challenge => {
         const mine = challenge.owner === user?.userId;
@@ -253,8 +260,8 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                   type="button"
                   disabled={challenge.voted_by_me || vote.isPending}
                   onClick={() => vote.mutate(challenge.id, { onError: failed('Could not vote') })}
-                  aria-label={`${challenge.voted_by_me ? 'You share this situation' : 'This affects me too'}, ${challenge.votes} ${challenge.votes === 1 ? 'person shares' : 'people share'} it`}
-                  title={challenge.voted_by_me ? 'You share this situation' : 'This affects me too'}
+                  aria-label={`${challenge.voted_by_me ? 'This affects you too' : 'This affects me too'}, ${challenge.votes} ${challenge.votes === 1 ? 'person shares' : 'people share'} it`}
+                  title={challenge.voted_by_me ? 'This affects you too' : 'This affects me too'}
                   className={`flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-sm transition-colors ${
                     challenge.voted_by_me
                       ? 'border-amber-600 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-900/40 dark:text-amber-100'
@@ -272,7 +279,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                         rows={2}
                         value={editing.text}
                         onChange={e => setEditing({ ...editing, text: e.target.value })}
-                        aria-label="Edit this situation"
+                        aria-label="Edit this"
                       />
                       {assignable(challenge).length > 0 && (
                         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -307,14 +314,14 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                       {mine && (
                         <div className="flex shrink-0">
                           <Button
-                            variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Edit this situation"
+                            variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Edit this"
                             onClick={() => setEditing({ id: challenge.id, text: challenge.text, assignedTo: challenge.owner })}
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
                           {challenge.votes === 0 && challenge.collaborations.length === 0 && (
                             <Button
-                              variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Delete this situation"
+                              variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Delete this"
                               onClick={() => deleteItem(challenge.id)}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -379,7 +386,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
       {unlinked.length > 0 && (
         <Card>
           <CardContent className="pt-4 space-y-3">
-            <p className="text-xs font-medium text-muted-foreground">Your proposed collaborations not linked to a situation</p>
+            <p className="text-xs font-medium text-muted-foreground">Your proposed collaborations not placed under anything above</p>
             {unlinked.map(goal => (
               <CollaborationRow
                 key={goal.id}

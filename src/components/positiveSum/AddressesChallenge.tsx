@@ -44,8 +44,8 @@ export function AddressesChallenge({ goal, challenges }: { goal: MyGoal; challen
       {others.length > 0 && (
         // The value is always empty: picking one links it, and it then moves to the list above.
         <Select value="" onValueChange={challengeId => change(challengeId)} disabled={link.isPending}>
-          <SelectTrigger className="h-9 w-full sm:w-80" aria-label="Which situation does this address?">
-            <SelectValue placeholder="Which situation does this address?" />
+          <SelectTrigger className="h-9 w-full sm:w-80" aria-label="Where does this help?">
+            <SelectValue placeholder="Where does this help?" />
           </SelectTrigger>
           <SelectContent>
             {others.map(challenge => (

@@ -79,7 +79,10 @@ export interface Challenge {
 export interface MyPositiveSum {
   goals: MyGoal[];
   ready: ReadyItem[];
-  challenges?: Challenge[]; // everyone's open challenges in the org
+  // Open entries under "Where we could improve": everyone's once the person has
+  // saved a conversation, only their own before that.
+  challenges?: Challenge[];
+  has_given_input?: boolean;
   // The people of this org and of the viewer's own orgs, for assigning a challenge.
   members?: { id: string; name: string | null }[];
 }

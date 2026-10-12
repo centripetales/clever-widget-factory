@@ -302,7 +302,9 @@ Open:
   higher-advantage option exists, whether it reads as a problem or an
   opening. People state how things are **without a solution**; solutions
   come afterwards, as proposed collaborations. The code and the stored
-  records still say `challenge`.
+  records still say `challenge`. On the page the list is headed **"Where
+  we could improve"**, and the labels avoid the noun altogether
+  (2026-10-12); "situation" remains the word for it in this doc.
 - A **challenge** is something a person is running into, in their own
   words: how things are, with nothing proposed yet. Stored as an `actions`
   row with only `description` (no desired state, no policy), status
@@ -319,9 +321,18 @@ Open:
   they can be linked. The separate Opportunities, "Ready for you" and "my
   proposed collaborations" sections, and "Plan with Maxwell", are gone
   from the page (2026-10-11).
-- The conversation prompt asks one question about challenges and returns
-  them as `challenges`; it no longer asks about tools or other things a
-  person owns.
+- **The conversation gets to know the person; it does not add proposals**
+  (2026-10-12). It says every question is optional and that answers are
+  used to help set up win-win interactions, then asks about a typical day,
+  what people come to them for (both saved to their profile, in their
+  words), and where they think we could improve (saved as their own
+  entries). It asks for their own view: nothing other people said is read
+  out, and no examples are suggested.
+- **Other people's entries appear only after a person has given their
+  input**, meaning they have saved a conversation. Before that the list
+  shows only their own, enforced on the server, so what others said does
+  not shape theirs. The same thing may then be entered by several people
+  in different words; that is accepted in exchange for unprompted input.
 - No new routes: challenges are created through `POST /positive-sum/goals`
   (`{ challenge }`, or `{ challenge_id }` for a collaboration), voting and
   taking part go through `POST /positive-sum/options/{id}/join`, and the

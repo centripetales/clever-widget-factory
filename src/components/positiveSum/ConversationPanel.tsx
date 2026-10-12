@@ -4,23 +4,23 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useOpportunities } from '@/hooks/positiveSum/usePositiveSum';
 import { useSaveConversation } from '@/hooks/positiveSum/useSaveConversation';
 import { copyToClipboard } from '@/lib/urlUtils';
 import { InfoBubble } from '@/components/positiveSum/InfoBubble';
 import { buildConversationPrompt, parseConversationResult } from '@/lib/positiveSumConversation';
 
 interface Review {
-  desiredStates: string[];
+  typicalDay: string;
   humanCapital: string[];
-  challenges: string[];
+  situations: string[];
 }
 
 // Positive Sum as a conversation held in the person's own AI: copy the prompt,
-// talk it through there, paste the JSON back, review, save.
+// talk it through there, paste the JSON back, review, save. The conversation
+// gets to know the person and asks for their own view of where we could
+// improve; proposed collaborations are added on the page, not here.
 export function ConversationPanel({ org }: { org: { id: string; name: string } }) {
   const { toast } = useToast();
-  const { data: opportunities = [] } = useOpportunities(true, [org.id]);
   const save = useSaveConversation();
   const [copied, setCopied] = useState(false);
   const [pasted, setPasted] = useState('');
@@ -32,7 +32,6 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
       orgName: org.name,
       date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }),
       hour: Number(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', hourCycle: 'h23' })),
-      opportunities,
     });
     setCopied(await copyToClipboard(prompt));
   };
@@ -46,14 +45,16 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
     }
     setParseError(null);
     setReview({
-      desiredStates: result.desiredStates,
+      typicalDay: result.typicalDay,
       humanCapital: result.humanCapital,
-      challenges: result.challenges,
+      situations: result.situations,
     });
   };
 
   const update = (change: (r: Review) => Review) => setReview(r => (r ? change(r) : r));
-  const count = review ? review.desiredStates.length + review.humanCapital.length + review.challenges.length : 0;
+  const count = review
+    ? (review.typicalDay.trim() ? 1 : 0) + review.humanCapital.length + review.situations.length
+    : 0;
 
   const saveReview = async () => {
     if (!review) return;
@@ -101,37 +102,35 @@ export function ConversationPanel({ org }: { org: { id: string; name: string } }
 
       {review && (
         <div className="space-y-4 rounded-md border p-3">
-          {review.challenges.length > 0 && (
+          {review.typicalDay && (
             <section className="space-y-2">
-              <h3 className="font-medium">Situations around you</h3>
-              {review.challenges.map((challenge, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <Textarea value={challenge} onChange={e => update(r => ({ ...r, challenges: r.challenges.map((x, j) => j === i ? e.target.value : x) }))} />
-                  <RemoveButton onClick={() => update(r => ({ ...r, challenges: r.challenges.filter((_, j) => j !== i) }))} />
-                </div>
-              ))}
-            </section>
-          )}
-
-          {review.desiredStates.length > 0 && (
-            <section className="space-y-2">
-              <h3 className="font-medium">What you'd like to be different</h3>
-              {review.desiredStates.map((desiredState, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <Textarea value={desiredState} onChange={e => update(r => ({ ...r, desiredStates: r.desiredStates.map((x, j) => j === i ? e.target.value : x) }))} />
-                  <RemoveButton onClick={() => update(r => ({ ...r, desiredStates: r.desiredStates.filter((_, j) => j !== i) }))} />
-                </div>
-              ))}
+              <h3 className="font-medium">A typical day</h3>
+              <div className="flex items-start gap-2">
+                <Textarea value={review.typicalDay} onChange={e => update(r => ({ ...r, typicalDay: e.target.value }))} />
+                <RemoveButton onClick={() => update(r => ({ ...r, typicalDay: '' }))} />
+              </div>
             </section>
           )}
 
           {review.humanCapital.length > 0 && (
             <section className="space-y-2">
-              <h3 className="font-medium">Your capabilities</h3>
+              <h3 className="font-medium">What people come to you for</h3>
               {review.humanCapital.map((narrative, i) => (
                 <div key={i} className="flex items-start gap-2">
                   <Textarea value={narrative} onChange={e => update(r => ({ ...r, humanCapital: r.humanCapital.map((x, j) => j === i ? e.target.value : x) }))} />
                   <RemoveButton onClick={() => update(r => ({ ...r, humanCapital: r.humanCapital.filter((_, j) => j !== i) }))} />
+                </div>
+              ))}
+            </section>
+          )}
+
+          {review.situations.length > 0 && (
+            <section className="space-y-2">
+              <h3 className="font-medium">Where we could improve</h3>
+              {review.situations.map((situation, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <Textarea value={situation} onChange={e => update(r => ({ ...r, situations: r.situations.map((x, j) => j === i ? e.target.value : x) }))} />
+                  <RemoveButton onClick={() => update(r => ({ ...r, situations: r.situations.filter((_, j) => j !== i) }))} />
                 </div>
               ))}
             </section>

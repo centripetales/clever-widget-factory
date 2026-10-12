@@ -32,20 +32,31 @@ describe('ChallengesSection', () => {
 
   it('adds a challenge in the person\'s words', () => {
     render(<ChallengesSection organizationId="ps" challenges={[]} />);
-    expect(screen.getByText('No situations yet.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing here yet.')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Describe a situation"), { target: { value: ' Copra buyers are unreliable ' } });
-    fireEvent.click(screen.getByText('Add a situation'));
+    fireEvent.change(screen.getByLabelText("Describe where we could improve"), { target: { value: ' Copra buyers are unreliable ' } });
+    fireEvent.click(screen.getByText('Add'));
 
     expect(createChallenge.mutate).toHaveBeenCalledWith(
       { organizationId: 'ps', challenge: 'Copra buyers are unreliable' }, expect.anything());
+  });
+
+  it('tells a person who has not given their input yet why the list is short', () => {
+    const { rerender } = render(<ChallengesSection organizationId="ps" challenges={[]} hasGivenInput={false} />);
+    expect(screen.getByText(/once you've shared your own view in the conversation above/)).toBeInTheDocument();
+    expect(screen.queryByText('Nothing here yet.')).not.toBeInTheDocument();
+    // They can still add their own.
+    expect(screen.getByLabelText('Describe where we could improve')).toBeInTheDocument();
+
+    rerender(<ChallengesSection organizationId="ps" challenges={[]} />);
+    expect(screen.queryByText(/once you've shared your own view/)).not.toBeInTheDocument();
   });
 
   it('shows votes and lets a person vote once', () => {
     render(<ChallengesSection organizationId="ps" challenges={[challenge({}), challenge({ id: 'buyers', text: 'Copra buyers are unreliable', votes: 1, voted_by_me: true })]} />);
 
     const open = screen.getByRole('button', { name: 'This affects me too, 2 people share it' });
-    const voted = screen.getByRole('button', { name: 'You share this situation, 1 person shares it' });
+    const voted = screen.getByRole('button', { name: 'This affects you too, 1 person shares it' });
     expect(open).toHaveTextContent('2');
     fireEvent.click(open);
     expect(vote.mutate).toHaveBeenCalledWith('theft', expect.anything());
@@ -78,7 +89,7 @@ describe('ChallengesSection', () => {
       challenge({ id: 'theirs', votes: 0 }),
     ]} />);
 
-    const buttons = screen.getAllByLabelText('Delete this situation');
+    const buttons = screen.getAllByLabelText('Delete this');
     expect(buttons).toHaveLength(1);
     fireEvent.click(buttons[0]);
     expect(remove.mutate).toHaveBeenCalledWith('mine', expect.anything());
@@ -93,7 +104,7 @@ describe('ChallengesSection', () => {
     expect(within(title.parentElement!).getByText('Stefan')).toBeInTheDocument();
     expect(screen.queryByLabelText('Assigned to')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit this situation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this' }));
     expect(screen.getByLabelText('Assigned to')).toHaveTextContent('Stefan');
   });
 
@@ -103,7 +114,7 @@ describe('ChallengesSection', () => {
       voters: [{ id: 'lester', name: 'Lester' }],
     })]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit this situation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this' }));
     expect(screen.getByLabelText('Assigned to')).toBeInTheDocument();
   });
 
@@ -113,10 +124,10 @@ describe('ChallengesSection', () => {
       challenge({ id: 'theirs' }),
     ]} />);
 
-    const edits = screen.getAllByRole('button', { name: 'Edit this situation' });
+    const edits = screen.getAllByRole('button', { name: 'Edit this' });
     expect(edits).toHaveLength(1);
     fireEvent.click(edits[0]);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Edit this situation' }), { target: { value: 'No shared place to sell our goods ' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit this' }), { target: { value: 'No shared place to sell our goods ' } });
     fireEvent.click(screen.getByText('Save'));
 
     // Unless changed, the assignee stays who it was.
@@ -139,8 +150,8 @@ describe('ChallengesSection', () => {
       expect(screen.getByText('Joined')).toBeInTheDocument();
       expect(screen.getByText('I can take Tuesdays.')).toBeInTheDocument();
       expect(screen.queryByText('Addresses')).not.toBeInTheDocument();
-      expect(screen.queryByLabelText('Which situation does this address?')).not.toBeInTheDocument();
-      expect(screen.queryByText('Your proposed collaborations not linked to a situation')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Where does this help?')).not.toBeInTheDocument();
+      expect(screen.queryByText('Your proposed collaborations not placed under anything above')).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByLabelText('Delete this proposed collaboration'));
       fireEvent.click(screen.getByText('Delete'));
@@ -196,9 +207,9 @@ describe('ChallengesSection', () => {
     it('lists my proposals that are not linked to any challenge, so they can be linked', () => {
       render(<ChallengesSection organizationId="ps" challenges={[challenge({})]} goals={[goal({ id: 'ponds', title: 'Clay lined ponds', desired_state: 'Clay lined ponds', addresses: [], taking_part: [] })]} />);
 
-      expect(screen.getByText('Your proposed collaborations not linked to a situation')).toBeInTheDocument();
+      expect(screen.getByText('Your proposed collaborations not placed under anything above')).toBeInTheDocument();
       expect(screen.getByText('Clay lined ponds')).toBeInTheDocument();
-      expect(screen.getByLabelText('Which situation does this address?')).toBeInTheDocument();
+      expect(screen.getByLabelText('Where does this help?')).toBeInTheDocument();
     });
   });
 });

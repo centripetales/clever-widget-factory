@@ -18,6 +18,7 @@ const {
   proposalText,
   JOINABLE_STATUSES,
   challengeOwner,
+  visibleSituations,
   challengeSummaries,
   addressedChallenges,
   takingPart,
@@ -85,7 +86,8 @@ async function loadRecords(client, orgIds) {
   const collaborations = ofType(STATE_TYPES.COLLABORATION).map(r => ({
     state_id: r.id, person: r.captured_by, goal_id: r.data.goal_id, challenge_id: r.data.challenge_id,
   }));
-  return { contexts, approvals, passes, lists, collaborations };
+  const gaveInput = new Set(ofType(STATE_TYPES.CONVERSATION).map(r => r.captured_by));
+  return { contexts, approvals, passes, lists, collaborations, gaveInput };
 }
 
 async function insertRecord(client, { organizationId, userId, type, payload, links }) {
@@ -265,6 +267,18 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         await client.query('DELETE FROM states WHERE id = ANY($1::uuid[])', [ids]);
       };
 
+      // { conversation_saved: true } — the person saved a conversation. Recorded
+      // once; from then on they see other people's entries too.
+      if (body.conversation_saved) {
+        const { gaveInput } = await loadRecords(client, [organization_id]);
+        if (!gaveInput.has(String(userId))) {
+          await insertRecord(client, {
+            organizationId: organization_id, userId, type: STATE_TYPES.CONVERSATION, payload: { date: dayKey() }, links: [],
+          });
+        }
+        return { statusCode: 200, data: { has_given_input: true } };
+      }
+
       // { delete: { id } } — the owner removes their situation, or the author
       // their proposed collaboration, while it is still open (nobody has joined).
       if (body.delete) {
@@ -302,9 +316,9 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           await notify(rows[0]);
           return { statusCode: 200, data: summarize(rows[0]) };
         }
-        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Situation not found');
-        if (challengeOwner(target) !== String(userId)) throw new HttpError(403, 'Only its owner can edit a situation');
-        if (!text) throw new HttpError(400, 'A situation needs some text');
+        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Not found');
+        if (challengeOwner(target) !== String(userId)) throw new HttpError(403, 'Only its owner can edit this');
+        if (!text) throw new HttpError(400, 'It needs some text');
         // The owner can hand the challenge to anyone in this org or their own
         // orgs, or to anyone who voted for it; it is then theirs to edit.
         const assignee = edit.assigned_to || challengeOwner(target);
@@ -332,7 +346,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           (await loadActions(client, [link.goal_id]))[0], (await loadActions(client, [link.challenge_id]))[0],
         ];
         if (!goal || goal.organization_id !== organization_id || !isProposal(goal, proposalIds)) throw new HttpError(404, 'Proposed collaboration not found');
-        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Situation not found');
+        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Not found');
         const ofGoal = collaborations.filter(l => l.goal_id === goal.id);
         const existing = ofGoal.filter(l => l.challenge_id === target.id);
         if (link.remove) {
@@ -372,7 +386,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       if (challenge_id) {
         [situation] = await loadActions(client, [challenge_id]);
         if (!situation || situation.organization_id !== organization_id || !isSituation(situation, proposalIds)) {
-          throw new HttpError(404, 'Situation not found');
+          throw new HttpError(404, 'Not found');
         }
       }
       const goal = await insertAction(client, {
@@ -701,7 +715,16 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         `SELECT ${ACTION_COLUMNS} FROM actions WHERE organization_id = ANY($1::uuid[]) AND status = $2`,
         [orgIds, OPEN_STATUS]
       );
-      const openChallenges = openRows.filter(a => !records.contexts[a.id] && isSituation(a, proposalIds));
+      // Until a person has given their own input (saved a conversation), they
+      // see only their own entries, so what others said doesn't shape theirs.
+      // Someone who saved a conversation before that was recorded has a profile entry from it.
+      const hasGivenInput = records.gaveInput.has(String(userId)) || (await client.query(
+        `SELECT 1 FROM states WHERE organization_id = ANY($1::uuid[]) AND captured_by::text = $2
+            AND state_text LIKE '[profile_skill]%' LIMIT 1`,
+        [orgIds, String(userId)]
+      )).rows.length > 0;
+      const openChallenges = visibleSituations(
+        openRows.filter(a => !records.contexts[a.id] && isSituation(a, proposalIds)), userId, hasGivenInput);
       const proposed = await loadActions(client, records.collaborations.map(link => link.goal_id));
       const challenges = challengeSummaries({
         challenges: openChallenges, goals: proposed, collaborations: records.collaborations, userId,
@@ -715,7 +738,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       }
       // The people of these orgs and of the viewer's own orgs: who a challenge can be assigned to.
       const members = await loadMembers(client, [...new Set([...orgIds, ...memberOrgIds])]);
-      return { statusCode: 200, data: { goals, ready, challenges, members } };
+      return { statusCode: 200, data: { goals, ready, challenges, members, has_given_input: hasGivenInput } };
     }
 
     throw new HttpError(404, 'Not found');

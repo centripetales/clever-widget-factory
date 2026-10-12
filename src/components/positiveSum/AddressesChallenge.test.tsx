@@ -20,7 +20,7 @@ describe('AddressesChallenge', () => {
 
     expect(screen.getByText('Addresses')).toBeInTheDocument();
     expect(screen.getByText('No place to sell our goods')).toBeInTheDocument();
-    expect(screen.getByLabelText('Which situation does this address?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Where does this help?')).toBeInTheDocument();
   });
 
   it('removes a link', () => {
@@ -30,7 +30,7 @@ describe('AddressesChallenge', () => {
     expect(mutate).toHaveBeenCalledWith(
       { organizationId: 'ps', goalId: 'store', challengeId: 'sell', remove: true }, expect.anything());
     // Every challenge is already linked, so there is nothing left to pick.
-    expect(screen.queryByLabelText('Which situation does this address?')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Where does this help?')).not.toBeInTheDocument();
   });
 
   it('shows nothing when there are no challenges at all', () => {

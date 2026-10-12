@@ -66,7 +66,8 @@ export default function PositiveSum() {
 
       {data && (
         <>
-          <ChallengesSection organizationId={org!.id} challenges={data.challenges ?? []} goals={data.goals} members={data.members} />
+          <ChallengesSection organizationId={org!.id} challenges={data.challenges ?? []} goals={data.goals} members={data.members}
+            hasGivenInput={data.has_given_input !== false} />
         </>
       )}
     </div>

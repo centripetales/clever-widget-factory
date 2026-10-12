@@ -9,6 +9,7 @@ const {
   isProposal,
   isSituation,
   proposalText,
+  visibleSituations,
   challengeSummaries,
   addressedChallenges,
   takingPart,
@@ -255,5 +256,22 @@ describe('proposed collaborations', () => {
     expect(proposalText(action({ title: 'Less theft', expected_state: 'Less theft' }))).toBe('Less theft');
     // A desired state written later on the action is not the proposal's text.
     expect(proposalText(action({ title: long, expected_state: 'Reports are paid within a week' }))).toBe(long);
+  });
+});
+
+describe('visibleSituations', () => {
+  const all = [
+    { id: 'theft', assigned_to: 'stefan', created_by: 'stefan' },
+    { id: 'buyers', assigned_to: null, created_by: 'may' },
+    { id: 'road', assigned_to: 'may', created_by: 'stefan' },
+  ];
+
+  it('shows only a person\'s own entries until they have given their input', () => {
+    expect(visibleSituations(all, 'may', false).map(c => c.id)).toEqual(['buyers', 'road']);
+    expect(visibleSituations(all, 'lester', false)).toEqual([]);
+  });
+
+  it('shows everyone\'s once they have', () => {
+    expect(visibleSituations(all, 'lester', true)).toHaveLength(3);
   });
 });
