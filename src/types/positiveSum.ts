@@ -29,8 +29,21 @@ export interface SuggestedOption extends PositiveSumItem {
   approved_by_me: boolean;
 }
 
+// Someone taking part in a desired state, with what they said about their
+// ideas and how they want to be involved.
+export interface TakingPart {
+  id: string;
+  name: string | null;
+  comments: string[];
+}
+
 export interface MyGoal extends PositiveSumItem {
   options: SuggestedOption[];
+  participants?: string[]; // who joined
+  rewards?: OfferedReward[];
+  taking_part?: TakingPart[];
+  // The open challenges this is linked to as a collaboration, and who linked each.
+  addresses?: { id: string; text: string; linked_by: string }[];
 }
 
 export interface ReadyItem extends PositiveSumItem {
@@ -38,16 +51,86 @@ export interface ReadyItem extends PositiveSumItem {
   value?: number;
 }
 
+// A reward someone attached to an action. Its tally is public: what each person
+// has shared and earned. One with a prompt (`ask`: what the payer wants and how
+// they value it, in their words) is read by AI: each observation gets a reading
+// with an amount and what would be worth more, and `php` /
+// `cap_php_per_person` / `budget_php` are the most it pays for one observation,
+// per person and in total. One without pays `php` for any photo with a description.
+export interface OfferedReward {
+  id: string;
+  action_id?: string;
+  ask?: string;
+  budget_php?: number | null;
+  spent_php?: number;
+  // Whether its owner can still change it: nothing has been read against it yet.
+  editable?: boolean;
+  // The viewer's observations for it that have no reading yet: on their way, or stuck.
+  my_reading?: { waiting: number; unread: number };
+  // What the reading said about the viewer's latest observation for it.
+  my_latest?: { shows: string; counts: boolean; php: number; feedback: string } | null;
+  php: number;
+  cap_php_per_person: number | null;
+  payer_name: string;
+  terms: string; // what a person is told before accepting
+  owner: string;
+  closed: boolean;
+  accepted_by_me: boolean;
+  tally: { id: string; name: string | null; count: number; php: number }[];
+}
+
+// A collaboration someone proposed: an action whose title says what to do and
+// whose existing state is the situation it answers.
+export interface ProposedCollaboration {
+  id: string;
+  title: string;
+  status: string;
+  created_by: string;
+  created_by_name: string | null;
+  participants: string[]; // who joined
+  rewards?: OfferedReward[];
+}
+
+// Something a person is running into, in their words. People vote for the
+// ones that matter to them too and propose collaborations for them.
+export interface Challenge {
+  id: string;
+  organization_id: string;
+  text: string;
+  owner: string; // the challenge's assignee; only they edit or delete it
+  owner_name: string | null;
+  created_at: string;
+  votes: number;
+  voted_by_me: boolean;
+  voters?: { id: string; name: string | null }[];
+  collaborations: ProposedCollaboration[];
+}
+
+// A proposed collaboration with at least one open reward on it.
+export interface Offer {
+  id: string;
+  title: string;
+  created_by?: string;
+  situation?: string | null; // what it is proposed for, when it sits under something
+  rewards: OfferedReward[];
+}
+
 export interface MyPositiveSum {
   goals: MyGoal[];
+  // Every open offer in the org. Missing in a copy saved before it existed.
+  offers?: Offer[];
   ready: ReadyItem[];
+  // Open entries under "Where we could improve".
+  challenges?: Challenge[];
+  // The people of this org and of the viewer's own orgs, for assigning a challenge.
+  members?: { id: string; name: string | null }[];
 }
 
 export interface NewGoal {
   organization_id: string;
-  initial_state: string;
   desired_state: string;
   attachments?: string[];
+  challenge_id?: string; // the challenge this collaboration is proposed for
 }
 
 export interface NewOption {
@@ -58,4 +141,26 @@ export interface NewOption {
   final_state: string;
   capacity?: number;
   parent_option_id?: string | null;
+}
+
+// The action behind a transaction (lambda/actions/transaction.js).
+export interface NamedOrganization {
+  id: string;
+  name: string;
+}
+
+export interface TransactionAction {
+  action_id: string;
+  other_org: NamedOrganization;
+}
+
+// The LLM's draft for the review; the organization has no id when it isn't in the app yet.
+export interface TransactionDraft {
+  other_org: { id: string | null; name: string };
+  llm_generation_config_id: string;
+}
+
+export interface NewTransactionAction {
+  other_org_id: string;
+  llm_generation_config_id?: string;
 }

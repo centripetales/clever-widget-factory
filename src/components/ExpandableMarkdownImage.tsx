@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getThumbnailUrl, getOriginalUrl, showDisplayedIfOriginalMissing } from '@/lib/imageUtils';
 
 export function ExpandableMarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -33,6 +33,7 @@ export function ExpandableMarkdownImage({ src, alt }: { src?: string; alt?: stri
           <div className="relative max-w-[90vw] max-h-[90vh] flex flex-col items-center">
             <img 
               src={originalUrl} 
+              onError={showDisplayedIfOriginalMissing}
               alt={alt || ''} 
               className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" 
             />

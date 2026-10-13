@@ -1,4 +1,6 @@
-const { buildContext, validateClaims, validateNextBestOption, personIds } = require('./reward');
+const {
+  buildContext, validateClaims, validateNextBestOptions, validateOpportunityCosts, statedBy, personIds,
+} = require('./reward');
 
 const STARGAZER = '11111111-1111-1111-1111-111111111111';
 const PASTOR_ORG = '22222222-2222-2222-2222-222222222222';
@@ -88,21 +90,76 @@ describe('validateClaims', () => {
   });
 });
 
-describe('validateNextBestOption', () => {
+describe('buildContext with a transaction', () => {
+  it('states the paid amount as a fact from the record', () => {
+    const text = buildContext(action, observations, people, orgs, {
+      php: 200, from_org_id: STARGAZER, from_name: 'Stargazer Farm', to_org_id: PASTOR_ORG, to_name: 'Pastor', date: '2026-10-03',
+    });
+    expect(text).toContain(`Transaction (a fact from the record): ₱200 paid by Stargazer Farm (org id ${STARGAZER}) to Pastor (org id ${PASTOR_ORG}) on 2026-10-03`);
+  });
+});
+
+describe('validateNextBestOptions', () => {
+  const orgIds = orgs.map(o => o.id);
   const option = overrides => ({
-    name: 'Hire a truck to Iloilo', php: 6000, hours: null, replaces: ['Paid Pastor for gas', 'Driving payment'],
+    name: 'Hire a truck to Iloilo', for_org_id: STARGAZER, for_name: 'Stargazer Farm', kind: 'cost_another_way',
+    php: 6000, hours: null, replaces: ['Paid Pastor for gas', 'Driving payment'],
     claim: 'Stefan: 1.5k driver + 4.5k gas = 6000.', source_state_ids: [OBS], ...overrides,
   });
+  const check = (list, claimNames = ['Paid Pastor for gas']) =>
+    validateNextBestOptions({ next_best_options: list }, claimNames, orgIds, [OBS]);
 
-  it('keeps the option and only replacements that are existing claims', () => {
-    expect(validateNextBestOption({ next_best_option: option() }, ['Paid Pastor for gas'], [OBS]))
-      .toEqual(option({ replaces: ['Paid Pastor for gas'] }));
+  it('keeps each option and only replacements that are existing claims', () => {
+    const clump = option({
+      name: 'Left in the clump', for_org_id: null, for_name: "Lester's parents", kind: 'had_otherwise', php: 10,
+    });
+    expect(check([option(), clump])).toEqual([
+      option({ replaces: ['Paid Pastor for gas'] }),
+      { ...clump, replaces: ['Paid Pastor for gas'] },
+    ]);
   });
 
-  it('is null when none was given or it does not fit', () => {
-    expect(validateNextBestOption({ next_best_option: null }, [], [OBS])).toBeNull();
-    expect(validateNextBestOption({}, [], [OBS])).toBeNull();
-    expect(validateNextBestOption({ next_best_option: option({ claim: '' }) }, [], [OBS])).toBeNull();
-    expect(validateNextBestOption({ next_best_option: option({ php: -1 }) }, [], [OBS])).toBeNull();
+  it('keeps "no other option" with no amounts', () => {
+    const none = option({ kind: 'no_other_option', php: null, replaces: [], claim: 'Stefan: there was no other way to get these.' });
+    expect(check([none])).toEqual([none]);
+  });
+
+  it('keeps hours as hours, and never who would have spent them', () => {
+    const [kept] = check([option({ php: null, hours: 2, done_by: 'May' })]);
+    expect(kept).toMatchObject({ php: null, hours: 2 });
+    expect(kept).not.toHaveProperty('done_by');
+  });
+
+  it('drops options with no party, no kind, no claim text, or bad amounts', () => {
+    expect(check([
+      option({ for_org_id: 'not-an-org', for_name: '' }),
+      option({ kind: 'cheaper' }),
+      option({ claim: '' }),
+      option({ php: -1 }),
+    ])).toEqual([]);
+  });
+
+  it('handles a missing list', () => {
+    expect(validateNextBestOptions({}, [], orgIds, [OBS])).toEqual([]);
+    expect(validateNextBestOptions(null, [], orgIds, [OBS])).toEqual([]);
+  });
+});
+
+describe('statedBy', () => {
+  it('names the people whose observations the option comes from', () => {
+    expect(statedBy({ source_state_ids: [OBS] }, observations, people)).toEqual(['Stefan']);
+    expect(statedBy({ source_state_ids: [] }, observations, people)).toEqual([]);
+  });
+});
+
+describe('validateOpportunityCosts', () => {
+  it('keeps a peso amount per party and drops anything else', () => {
+    expect(validateOpportunityCosts({ [STARGAZER]: 100, "name:Lester's parents": 0, bad: -5, text: '50', '': 10 }))
+      .toEqual({ [STARGAZER]: 100, "name:Lester's parents": 0 });
+  });
+
+  it('handles a missing or malformed value', () => {
+    expect(validateOpportunityCosts(null)).toEqual({});
+    expect(validateOpportunityCosts([1, 2])).toEqual({});
   });
 });

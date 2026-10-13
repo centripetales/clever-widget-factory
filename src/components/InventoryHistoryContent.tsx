@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { History, TrendingUp, TrendingDown, Edit, Plus, ExternalLink, Camera, Share2 } from 'lucide-react';
 import { format } from 'date-fns';
-import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getThumbnailUrl, getImageUrl, openImage } from '@/lib/imageUtils';
 import { usePartHistory, type HistoryEntry, type Observation } from '@/hooks/usePartHistory';
 
 interface InventoryHistoryContentProps {
@@ -154,7 +154,7 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
                         <div className="grid grid-cols-2 gap-2 mt-2">
                           {observation.photos.map(photo => (
                             <div key={photo.id} className="relative">
-                              <a href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''} target="_blank" rel="noopener noreferrer" className="block">
+                              <a href={getImageUrl(photo.photo_url) || ''} onClick={e => { e.preventDefault(); openImage(photo.photo_url); }} target="_blank" rel="noopener noreferrer" className="block">
                                 <img
                                   src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
                                   alt={photo.photo_description || 'Observation photo'}
@@ -207,7 +207,7 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
                       {obs.photos && obs.photos.length > 0 && (
                         <div className="grid grid-cols-2 gap-2">
                           {obs.photos.map((photo, i) => (
-                            <a key={i} href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''} target="_blank" rel="noopener noreferrer">
+                            <a key={i} href={getImageUrl(photo.photo_url) || ''} onClick={e => { e.preventDefault(); openImage(photo.photo_url); }} target="_blank" rel="noopener noreferrer">
                               <img
                                 src={getThumbnailUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
                                 alt={photo.photo_description || 'Observation photo'}

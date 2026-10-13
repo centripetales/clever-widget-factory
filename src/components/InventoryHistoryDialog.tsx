@@ -7,7 +7,7 @@ import { History, TrendingUp, TrendingDown, Edit, Plus, ExternalLink, Camera, Sh
 import { useToast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 import { apiService } from '@/lib/apiService';
-import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getThumbnailUrl, getImageUrl, openImage } from '@/lib/imageUtils';
 import { MaxwellInlinePanel } from '@/components/MaxwellInlinePanel';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 
@@ -329,7 +329,8 @@ export function InventoryHistoryDialog({ partId, partName, children, observation
                                   {observation.photos.map(photo => (
                                     <div key={photo.id} className="relative group">
                                       <a 
-                                        href={getOriginalUrl(photo.photo_url) || getImageUrl(photo.photo_url) || ''}
+                                        href={getImageUrl(photo.photo_url) || ''}
+                                        onClick={e => { e.preventDefault(); openImage(photo.photo_url); }}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="block"

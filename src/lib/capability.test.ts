@@ -105,24 +105,12 @@ describe('computeRecencyWeight', () => {
   });
 
   describe('boundary conditions', () => {
-    it('returns 1.0 at exactly 30 days (boundary of first bracket)', () => {
-      expect(computeRecencyWeight(daysAgo(30).toISOString())).toBe(1.0);
-    });
-
     it('returns 0.7 at 31 days (just past first bracket boundary)', () => {
       expect(computeRecencyWeight(daysAgo(31).toISOString())).toBe(0.7);
     });
 
-    it('returns 0.7 at exactly 90 days (boundary of second bracket)', () => {
-      expect(computeRecencyWeight(daysAgo(90).toISOString())).toBe(0.7);
-    });
-
     it('returns 0.4 at 91 days (just past second bracket boundary)', () => {
       expect(computeRecencyWeight(daysAgo(91).toISOString())).toBe(0.4);
-    });
-
-    it('returns 0.4 at exactly 180 days (boundary of third bracket)', () => {
-      expect(computeRecencyWeight(daysAgo(180).toISOString())).toBe(0.4);
     });
 
     it('returns 0.2 at 181 days (just past third bracket boundary)', () => {

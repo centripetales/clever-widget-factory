@@ -2,6 +2,7 @@
 // Rules live in positiveSumRules.js; this file is data access + HTTP.
 // All SQL here is parameterized.
 const { Client } = require('pg');
+const { deleteAction } = require('./deleteAction');
 const {
   STATE_PREFIX,
   STATE_TYPES,
@@ -10,6 +11,22 @@ const {
   stateText,
   parseState,
   implementorIds,
+  isGoal,
+  isChallenge,
+  isProposal,
+  isSituation,
+  proposalText,
+  JOINABLE_STATUSES,
+  challengeOwner,
+  challengeSummaries,
+  addressedChallenges,
+  rewardTerms,
+  readReward,
+  rewardTally,
+  offerTally,
+  awaitingReading,
+  latestReading,
+  takingPart,
   hasFreeCapacity,
   valueForOthers,
   sortByValue,
@@ -71,7 +88,20 @@ async function loadRecords(client, orgIds) {
   }));
   const passes = ofType(STATE_TYPES.PASS).map(r => ({ person: r.captured_by, item_id: r.data.item_id }));
   const lists = ofType(STATE_TYPES.OPPORTUNITY_LIST).map(r => ({ person: r.captured_by, ...r.data, captured_at: r.captured_at }));
-  return { contexts, approvals, passes, lists };
+  const collaborations = ofType(STATE_TYPES.COLLABORATION).map(r => ({
+    state_id: r.id, person: r.captured_by, goal_id: r.data.goal_id, challenge_id: r.data.challenge_id,
+  }));
+  // A reward's id is the id of the record that holds it.
+  const rewards = ofType(STATE_TYPES.REWARD).map(r => ({ ...readReward(r.data), id: r.id, owner: r.captured_by, stored: r.data }));
+  const acceptances = ofType(STATE_TYPES.REWARD_ACCEPTANCE).map(r => ({
+    reward_id: r.data.reward_id, person: r.captured_by, accepted_at: r.captured_at,
+  }));
+  // One per person: the first time they agreed.
+  const agreements = ofType(STATE_TYPES.SHARING_AGREEMENT)
+    .map(r => ({ person: r.captured_by, agreed_at: r.captured_at }))
+    .sort((a, b) => new Date(a.agreed_at) - new Date(b.agreed_at))
+    .filter((a, i, all) => all.findIndex(other => other.person === a.person) === i);
+  return { contexts, approvals, passes, lists, collaborations, rewards, acceptances, agreements };
 }
 
 async function insertRecord(client, { organizationId, userId, type, payload, links }) {
@@ -103,6 +133,44 @@ async function insertAction(client, fields) {
     ]
   );
   return rows[0];
+}
+
+// What people taking part in these desired states said on them, and their names.
+async function loadTakingPart(client, goals) {
+  const people = [...new Set(goals.flatMap(g => (g.participants || []).map(String)))];
+  if (people.length === 0) return { comments: [], names: {} };
+  const { rows: comments } = await client.query(
+    `SELECT sl.entity_id AS action_id, s.captured_by::text AS person, s.state_text AS text
+       FROM state_links sl JOIN states s ON s.id = sl.state_id
+      WHERE sl.entity_type = 'action' AND sl.entity_id = ANY($1::uuid[])
+        AND COALESCE(s.state_text, '') <> '' AND s.state_text NOT LIKE $2
+      ORDER BY s.captured_at`,
+    [goals.map(g => g.id), `${STATE_PREFIX}%`]
+  );
+  return { comments, names: await loadNames(client, people) };
+}
+
+// The people of these orgs, for choosing who a challenge is assigned to.
+async function loadMembers(client, orgIds) {
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (cognito_user_id) cognito_user_id AS id, full_name AS name FROM organization_members
+      WHERE organization_id = ANY($1::uuid[]) AND is_active AND cognito_user_id IS NOT NULL
+      ORDER BY cognito_user_id, full_name`,
+    [orgIds]
+  );
+  return rows.map(m => ({ id: String(m.id), name: (m.name || '').trim() || null }));
+}
+
+// People's names by user id, from any org they belong to.
+async function loadNames(client, userIds) {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return {};
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (cognito_user_id) cognito_user_id, full_name FROM organization_members
+      WHERE cognito_user_id = ANY($1::text[]) AND COALESCE(full_name, '') <> ''`,
+    [ids]
+  );
+  return Object.fromEntries(rows.map(m => [m.cognito_user_id, m.full_name]));
 }
 
 function titleFrom(explicit, text) {
@@ -149,10 +217,6 @@ async function pastExperiences(client, personId, contexts, approvals) {
   }));
 }
 
-function isGoal(a) {
-  return !!(a.expected_state && a.expected_state.trim()) && !(a.policy && a.policy.trim());
-}
-
 function summarize(a, extra = {}) {
   return {
     id: a.id, organization_id: a.organization_id, title: a.title,
@@ -183,17 +247,280 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
   const goalContextRoute = path.match(/\/positive-sum\/goals\/([0-9a-f-]{36})\/context$/);
 
   return withClient(dbConfig, async client => {
-    // POST /positive-sum/goals — recipient states initial and desired state
+    // People in a member organization of a Positive Sum org take part in it
+    // too (member_organizations, one level), not only its own members.
+    const { rows: parents } = await client.query(
+      'SELECT DISTINCT organization_id::text AS id FROM member_organizations WHERE member_organization_id = ANY($1::uuid[])',
+      [memberOrgIds]
+    );
+    for (const parent of parents) {
+      if (!memberOrgIds.includes(parent.id)) memberOrgIds.push(parent.id);
+    }
+
+    // POST /positive-sum/goals — a desired state in the person's own words.
+    // The initial state is optional here; it's recorded on the action when a
+    // real deal happens.
+    // With { challenge } instead, it records a challenge: something the person
+    // is running into, in their words, for others to vote on and propose
+    // collaborations for. With { challenge_id }, the desired state is a
+    // collaboration proposed for that challenge.
     if (httpMethod === 'POST' && path.endsWith('/positive-sum/goals')) {
-      const { organization_id, title, initial_state, desired_state, attachments } = body;
+      const { organization_id, initial_state, desired_state, attachments, challenge, challenge_id, link, edit } = body;
       requireMember(organization_id);
-      if (!initial_state?.trim() || !desired_state?.trim()) {
-        throw new HttpError(400, 'A goal needs both an initial state and a desired state');
+      const { collaborations } = await loadRecords(client, [organization_id]);
+      const proposalIds = new Set(collaborations.map(l => l.goal_id));
+      // Every proposal carries a collaboration record; one with no situation yet has an empty one.
+      const markProposal = (goalId, situationId) => insertRecord(client, {
+        organizationId: organization_id, userId, type: STATE_TYPES.COLLABORATION,
+        payload: { goal_id: goalId, challenge_id: situationId || null },
+        links: [{ entity_type: 'action', entity_id: goalId }, ...(situationId ? [{ entity_type: 'action', entity_id: situationId }] : [])],
+      });
+      const removeRecords = async records => {
+        const ids = records.map(l => l.state_id);
+        await client.query('DELETE FROM state_links WHERE state_id = ANY($1::uuid[])', [ids]);
+        await client.query('DELETE FROM states WHERE id = ANY($1::uuid[])', [ids]);
+      };
+
+      // { reward: { action_id, php, cap_php_per_person } } — the author of a
+      // proposed collaboration attaches a reward to it, paid by the
+      // organization they are working as. Its terms are fixed from then on:
+      // what people have earned is counted from them, so to change them the
+      // owner closes this reward and adds another.
+      if (body.reward) {
+        const [target] = await loadActions(client, [body.reward.action_id]);
+        if (!target || target.organization_id !== organization_id || !isProposal(target, proposalIds)) throw new HttpError(404, 'Proposed collaboration not found');
+        if (String(target.created_by) !== String(userId)) throw new HttpError(403, 'Only its author can add a reward');
+        const php = Number(body.reward.php);
+        const cap = body.reward.cap_php_per_person == null || body.reward.cap_php_per_person === '' ? null : Number(body.reward.cap_php_per_person);
+        if (!(php > 0) || (cap !== null && !(cap >= php))) throw new HttpError(400, 'Give an amount, and a cap no smaller than it');
+        const payerOrgId = authContext.organization_id || organization_id;
+        const payer = await client.query('SELECT name FROM organizations WHERE id = $1', [payerOrgId]);
+        // What the payer wants and how they value it, in their words. With it,
+        // an AI reads each observation against the offer and the amounts given
+        // are the most it pays: for one observation, per person, and in total.
+        // Without it, any photo with a description is paid the amount.
+        const prompt = typeof body.reward.ask === 'string' && body.reward.ask.trim() ? body.reward.ask.trim() : null;
+        const budget = body.reward.budget_php == null || body.reward.budget_php === '' ? null : Number(body.reward.budget_php);
+        if (budget !== null && !(budget >= php)) throw new HttpError(400, 'Give a budget no smaller than one payment');
+        const payerName = payer.rows[0]?.name || 'The payer';
+        const terms = rewardTerms({ php, cap_php_per_person: cap, payer_name: payerName, condition: prompt });
+        await insertRecord(client, {
+          organizationId: organization_id, userId, type: STATE_TYPES.REWARD,
+          payload: prompt
+            ? {
+              action_id: target.id, per: 'observation', payer_org_id: payerOrgId, payer_name: payerName,
+              evaluator: { kind: 'prompt', prompt },
+              max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
+              terms, closed_at: null,
+            }
+            : {
+              action_id: target.id, per: 'observation', php, cap_php_per_person: cap, payer_name: payerName,
+              payer_org_id: payerOrgId, requires_photo: true, requires_text: true, terms, closed_at: null,
+            },
+          links: [{ entity_type: 'action', entity_id: target.id }],
+        });
+        await notify(target);
+        return { statusCode: 201, data: summarize(target) };
+      }
+
+      // { reward_edit: { reward_id, php, cap_php_per_person, budget_php, ask } } —
+      // its owner changes an offer that is read by AI, while no observation has
+      // been read against it yet. After that people have been told amounts under
+      // its wording, so it is closed and a new one made instead.
+      if (body.reward_edit) {
+        const records = await loadRecords(client, [organization_id]);
+        const reward = records.rewards.find(r => r.id === body.reward_edit.reward_id);
+        if (!reward) throw new HttpError(404, 'Reward not found');
+        if (reward.owner !== String(userId)) throw new HttpError(403, 'Only its owner can change a reward');
+        if (reward.closed_at) throw new HttpError(409, 'This reward is closed');
+        if (!reward.prompt) throw new HttpError(409, 'This reward cannot be changed; close it and add another');
+        const { rows: read } = await client.query(
+          `SELECT 1 FROM state_perspectives WHERE perspective_type = 'OFFERS' AND content::text LIKE $1 LIMIT 1`,
+          [`%${reward.id}%`]
+        );
+        if (read.length) throw new HttpError(409, 'Observations have already been read against this; close it and make a new one');
+        const php = Number(body.reward_edit.php);
+        const number = value => (value == null || value === '' ? null : Number(value));
+        const cap = number(body.reward_edit.cap_php_per_person);
+        const budget = number(body.reward_edit.budget_php);
+        const prompt = typeof body.reward_edit.ask === 'string' ? body.reward_edit.ask.trim() : '';
+        if (!prompt) throw new HttpError(400, 'Say how an observation is valued');
+        if (!(php > 0) || (cap !== null && !(cap >= php)) || (budget !== null && !(budget >= php))) {
+          throw new HttpError(400, 'Give an amount, and limits no smaller than it');
+        }
+        const { type, ...data } = reward.stored;
+        await client.query('UPDATE states SET state_text = $2, updated_at = NOW() WHERE id = $1', [reward.id, stateText(STATE_TYPES.REWARD, {
+          ...data, evaluator: { kind: 'prompt', prompt }, condition: undefined,
+          max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
+        })]);
+        const [target] = await loadActions(client, [reward.action_id]);
+        if (target) await notify(target);
+        return { statusCode: 200, data: target ? summarize(target) : {} };
+      }
+
+      // { reward_accept: { reward_id } } — a person accepts a reward's terms
+      // and joins its action. Their observations there count from now on.
+      // { reward_close: { reward_id } } — its owner closes it: what was earned
+      // stays, new observations stop counting.
+      if (body.reward_accept || body.reward_close) {
+        const records = await loadRecords(client, [organization_id]);
+        const reward = records.rewards.find(r => r.id === (body.reward_accept || body.reward_close).reward_id);
+        if (!reward) throw new HttpError(404, 'Reward not found');
+        const [target] = await loadActions(client, [reward.action_id]);
+        if (!target) throw new HttpError(404, 'Reward not found');
+        if (body.reward_close) {
+          if (reward.owner !== String(userId)) throw new HttpError(403, 'Only its owner can close a reward');
+          if (!reward.closed_at) {
+            // The record as stored, with only its closing time changed.
+            const { type, ...data } = reward.stored;
+            await client.query('UPDATE states SET state_text = $2, updated_at = NOW() WHERE id = $1',
+              [reward.id, stateText(STATE_TYPES.REWARD, { ...data, closed_at: new Date().toISOString() })]);
+          }
+        } else {
+          if (reward.closed_at) throw new HttpError(409, 'This reward is closed');
+          if (reward.prompt) {
+            // One agreement covers every offer that is read: sharing through Positive Sum.
+            if (!records.agreements.some(a => a.person === String(userId))) {
+              await insertRecord(client, {
+                organizationId: organization_id, userId, type: STATE_TYPES.SHARING_AGREEMENT,
+                payload: { terms: reward.terms }, links: [],
+              });
+            }
+          } else if (!records.acceptances.some(a => a.reward_id === reward.id && a.person === String(userId))) {
+            await insertRecord(client, {
+              organizationId: organization_id, userId, type: STATE_TYPES.REWARD_ACCEPTANCE,
+              payload: { reward_id: reward.id, action_id: reward.action_id, terms: reward.terms },
+              links: [{ entity_type: 'action', entity_id: reward.action_id }],
+            });
+          }
+          if (!(target.participants || []).map(String).includes(String(userId)) && JOINABLE_STATUSES.includes(target.status)) {
+            await client.query(
+              `UPDATE actions SET participants = array_append(COALESCE(participants, ARRAY[]::uuid[]), $2::uuid),
+                      status = CASE WHEN status = $3 THEN 'not_started' ELSE status END, updated_at = NOW()
+                WHERE id = $1`,
+              [target.id, userId, OPEN_STATUS]
+            );
+          }
+        }
+        await notify(target);
+        return { statusCode: 200, data: summarize(target) };
+      }
+
+      // { delete: { id } } — the owner removes their situation, or the author
+      // their proposed collaboration, while it is still open (nobody has joined).
+      if (body.delete) {
+        const [target] = await loadActions(client, [body.delete.id]);
+        if (!target || target.organization_id !== organization_id || target.status !== OPEN_STATUS ||
+            !(isSituation(target, proposalIds) || isProposal(target, proposalIds))) {
+          throw new HttpError(404, 'Not found');
+        }
+        const owner = isSituation(target, proposalIds) ? challengeOwner(target) : String(target.created_by);
+        if (owner !== String(userId)) throw new HttpError(403, 'Only its owner can delete this');
+        await deleteAction(client, target.id, null);
+        await notify(target);
+        return { statusCode: 200, data: { id: target.id } };
+      }
+
+      // { edit: { id, text } } — the owner rewords their challenge, or the
+      // author their proposed collaboration.
+      if (edit) {
+        const [target] = await loadActions(client, [edit.id]);
+        const text = typeof edit.text === 'string' ? edit.text.trim() : '';
+        if (target && target.organization_id === organization_id && isProposal(target, proposalIds)) {
+          if (String(target.created_by) !== String(userId)) throw new HttpError(403, 'Only its author can edit this');
+          if (!JOINABLE_STATUSES.includes(target.status)) throw new HttpError(409, 'This is already done');
+          if (!text) throw new HttpError(400, 'It needs some text');
+          // The text is the action's title. An older proposal held it as the
+          // desired state; rewording it moves it to the title.
+          const wasOldLayout = proposalText(target) !== (target.title || '').trim();
+          const { rows } = await client.query(
+            `UPDATE actions SET title = $2, expected_state = CASE WHEN $4 THEN NULL ELSE expected_state END,
+                    updated_by = $3, updated_at = NOW()
+              WHERE id = $1 RETURNING ${ACTION_COLUMNS}`,
+            [target.id, text, userId, wasOldLayout]
+          );
+          if (!proposalIds.has(target.id)) await markProposal(target.id, null);
+          await notify(rows[0]);
+          return { statusCode: 200, data: summarize(rows[0]) };
+        }
+        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Not found');
+        if (challengeOwner(target) !== String(userId)) throw new HttpError(403, 'Only its owner can edit this');
+        if (!text) throw new HttpError(400, 'It needs some text');
+        // The owner can hand the challenge to anyone in this org or their own
+        // orgs, or to anyone who voted for it; it is then theirs to edit.
+        const assignee = edit.assigned_to || challengeOwner(target);
+        const allowed = [
+          challengeOwner(target), ...(target.participants || []).map(String),
+          ...(await loadMembers(client, [organization_id, ...memberOrgIds])).map(m => m.id),
+        ];
+        if (!allowed.includes(assignee)) {
+          throw new HttpError(400, 'Assign it to someone in the organization, or someone who voted for it');
+        }
+        const { rows } = await client.query(
+          `UPDATE actions SET description = $2, title = $3, updated_by = $4, assigned_to = $5, updated_at = NOW()
+            WHERE id = $1 RETURNING ${ACTION_COLUMNS}`,
+          [target.id, text, titleFrom(null, text), userId, assignee]
+        );
+        await notify(rows[0]);
+        return { statusCode: 200, data: summarize(rows[0]) };
+      }
+
+      // { link: { goal_id, challenge_id, remove? } } — say which challenge an
+      // existing desired state addresses, or take that back. Anyone in the org
+      // can link; the one who linked, or the desired state's author, can remove.
+      if (link) {
+        const [goal, target] = [
+          (await loadActions(client, [link.goal_id]))[0], (await loadActions(client, [link.challenge_id]))[0],
+        ];
+        if (!goal || goal.organization_id !== organization_id || !isProposal(goal, proposalIds)) throw new HttpError(404, 'Proposed collaboration not found');
+        if (!target || target.organization_id !== organization_id || !isSituation(target, proposalIds)) throw new HttpError(404, 'Not found');
+        const ofGoal = collaborations.filter(l => l.goal_id === goal.id);
+        const existing = ofGoal.filter(l => l.challenge_id === target.id);
+        if (link.remove) {
+          const mine = existing.filter(l => l.person === String(userId) || String(goal.created_by) === String(userId));
+          if (existing.length && !mine.length) throw new HttpError(403, 'Only whoever linked it, or its author, can remove the link');
+          await removeRecords(mine);
+          // Still a proposal, just under no situation.
+          if (ofGoal.length === mine.length) await markProposal(goal.id, null);
+        } else if (!existing.length) {
+          await removeRecords(ofGoal.filter(l => !l.challenge_id));
+          await markProposal(goal.id, target.id);
+          // The situation becomes the action's existing state, unless it already has one.
+          await client.query(
+            `UPDATE actions SET description = $2, updated_at = NOW() WHERE id = $1 AND COALESCE(description, '') = ''`,
+            [goal.id, target.description]
+          );
+        }
+        await notify(goal);
+        return { statusCode: 200, data: summarize(goal) };
+      }
+      if (typeof challenge === 'string' && challenge.trim()) {
+        const created = await insertAction(client, {
+          organization_id, title: titleFrom(null, challenge), description: challenge.trim(), created_by: userId,
+          assigned_to: userId, // its owner
+        });
+        await notify(created);
+        return { statusCode: 201, data: summarize(created) };
+      }
+      // A proposed collaboration: the text (sent as desired_state) is the
+      // action's title, in full; the situation it answers, copied as it reads
+      // now, is its existing state; the desired state is left for later. Its
+      // author is the assignee.
+      if (!desired_state?.trim()) {
+        throw new HttpError(400, 'Say what you propose');
+      }
+      let situation = null;
+      if (challenge_id) {
+        [situation] = await loadActions(client, [challenge_id]);
+        if (!situation || situation.organization_id !== organization_id || !isSituation(situation, proposalIds)) {
+          throw new HttpError(404, 'Not found');
+        }
       }
       const goal = await insertAction(client, {
-        organization_id, title: titleFrom(title, desired_state), description: initial_state,
-        expected_state: desired_state, created_by: userId, attachments,
+        organization_id, title: desired_state.trim(), description: situation ? situation.description : initial_state,
+        created_by: userId, assigned_to: userId, attachments,
       });
+      await markProposal(goal.id, situation?.id);
       await notify(goal);
       return { statusCode: 201, data: summarize(goal) };
     }
@@ -287,6 +614,54 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           links: [{ entity_type: 'action', entity_id: optionId }],
         });
         return { statusCode: 200, data: { passed: optionId } };
+      }
+
+      // POST /positive-sum/options/:id/join on a challenge — vote for it: "this
+      // matters to me too". Votes are the people who joined it.
+      const proposalIds = new Set(records.collaborations.map(l => l.goal_id));
+      if (!context && verb === 'join' && isSituation(option, proposalIds)) {
+        if (option.status !== OPEN_STATUS) throw new HttpError(409, 'This is no longer open');
+        if ((option.participants || []).map(String).includes(String(userId))) {
+          return { statusCode: 200, data: summarize(option) };
+        }
+        const { rows } = await client.query(
+          `UPDATE actions SET participants = array_append(COALESCE(participants, ARRAY[]::uuid[]), $2::uuid),
+                  updated_at = NOW()
+            WHERE id = $1 RETURNING ${ACTION_COLUMNS}`,
+          [optionId, userId]
+        );
+        await notify(rows[0]);
+        return { statusCode: 200, data: summarize(rows[0]) };
+      }
+
+      // POST /positive-sum/options/:id/join on a proposed collaboration — join
+      // it: you become a participant on the action and an observation goes on
+      // it, your comment about your ideas and how you want to be involved, or
+      // a short note when you wrote nothing. The first join moves it from an
+      // open proposal to "not started", so it shows in action lists. Joining
+      // again only adds another comment.
+      if (!context && verb === 'join' && isProposal(option, proposalIds)) {
+        if (!JOINABLE_STATUSES.includes(option.status)) throw new HttpError(409, 'This is already done');
+        const joined = (option.participants || []).map(String).includes(String(userId));
+        const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
+        if (joined && !comment) return { statusCode: 200, data: summarize(option) };
+        const { rows } = joined ? { rows: [option] } : await client.query(
+          `UPDATE actions SET participants = array_append(COALESCE(participants, ARRAY[]::uuid[]), $2::uuid),
+                  status = CASE WHEN status = $3 THEN 'not_started' ELSE status END, updated_at = NOW()
+            WHERE id = $1 RETURNING ${ACTION_COLUMNS}`,
+          [optionId, userId, OPEN_STATUS]
+        );
+        const state = await client.query(
+          `INSERT INTO states (organization_id, state_text, captured_by, captured_at)
+           VALUES ($1, $2, $3, NOW()) RETURNING id`,
+          [option.organization_id, comment || 'Joined', userId]
+        );
+        await client.query(
+          `INSERT INTO state_links (state_id, entity_type, entity_id) VALUES ($1, 'action', $2)`,
+          [state.rows[0].id, optionId]
+        );
+        await notify(rows[0]);
+        return { statusCode: 200, data: summarize(rows[0]) };
       }
 
       if (!context) throw new HttpError(400, 'Not an option');
@@ -421,7 +796,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
     // GET /positive-sum/mine — my desired states (goals) and what's ready for me
     if (httpMethod === 'GET' && path.endsWith('/positive-sum/mine')) {
       const orgIds = scopedOrgIds(query.org_id);
-      if (orgIds.length === 0) return { statusCode: 200, data: { goals: [], ready: [] } };
+      if (orgIds.length === 0) return { statusCode: 200, data: { goals: [], ready: [], challenges: [], members: [] } };
       const records = await loadRecords(client, orgIds);
       const { options, index } = await implementorsIndex(client, records.contexts);
       const recipientApprovals = records.approvals.filter(a => a.basis === 'recipient');
@@ -437,7 +812,13 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       const approvedBy = (optionId, person, basis) =>
         records.approvals.some(a => a.option_id === optionId && a.approver === person && (!basis || a.basis === basis));
 
-      const goals = mineRows.filter(isGoal).map(g => summarize(g, {
+      const proposalIds = new Set(records.collaborations.map(l => l.goal_id));
+      const myGoals = mineRows.filter(a => isProposal(a, proposalIds));
+      const { comments, names } = await loadTakingPart(client, myGoals);
+      const goals = myGoals.map(g => summarize(g, {
+        title: proposalText(g),
+        participants: (g.participants || []).map(String), // who joined
+        taking_part: takingPart(g, comments, names),
         options: sortByValue(optionsFor(g.id), valueOf).map(o => summarize(o, {
           value: valueOf(o), approved_by_me: approvedBy(o.id, String(userId), 'recipient'),
         })),
@@ -455,7 +836,81 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         ...sortByValue(toApproveAsRecipient, valueOf).map(o => summarize(o, { role: 'recipient', value: valueOf(o) })),
         ...toApproveAsImplementor.map(o => summarize(o, { role: 'implementor' })),
       ];
-      return { statusCode: 200, data: { goals, ready } };
+
+      // Everyone's open challenges in these orgs, with the collaborations proposed for each.
+      const { rows: openRows } = await client.query(
+        `SELECT ${ACTION_COLUMNS} FROM actions WHERE organization_id = ANY($1::uuid[]) AND status = $2`,
+        [orgIds, OPEN_STATUS]
+      );
+      const openChallenges = openRows.filter(a => !records.contexts[a.id] && isSituation(a, proposalIds));
+      const proposed = await loadActions(client, records.collaborations.map(link => link.goal_id));
+      const challenges = challengeSummaries({
+        challenges: openChallenges, goals: proposed, collaborations: records.collaborations, userId,
+        names: await loadNames(client, [
+          ...openChallenges.map(challengeOwner), ...openChallenges.flatMap(c => (c.participants || []).map(String)),
+          ...proposed.map(a => String(a.created_by)),
+        ]),
+      });
+      for (const goal of goals) {
+        goal.addresses = addressedChallenges(goal.id, records.collaborations, openChallenges);
+      }
+
+      // Rewards on these proposals, each with its public tally: how many
+      // qualifying observations each person who accepted it has made, and what
+      // that has earned. Counted here, not stored.
+      const rewardedIds = [...new Set(records.rewards.map(r => r.action_id))];
+      const { rows: onRewarded } = rewardedIds.length === 0 ? { rows: [] } : await client.query(
+        `SELECT sl.entity_id AS action_id, s.captured_by::text AS person, s.created_at, s.state_text AS text,
+                EXISTS (SELECT 1 FROM state_photos sp WHERE sp.state_id = s.id) AS has_photo,
+                (SELECT sp.content FROM state_perspectives sp
+                  WHERE sp.state_id = s.id AND sp.perspective_type = 'OFFERS' AND sp.status = 'SUCCESS'
+                  ORDER BY sp.created_at DESC LIMIT 1) AS reading
+           FROM state_links sl JOIN states s ON s.id = sl.state_id
+          WHERE sl.entity_type = 'action' AND sl.entity_id = ANY($1::uuid[])
+            AND COALESCE(s.state_text, '') NOT LIKE $2`,
+        [rewardedIds, `${STATE_PREFIX}%`]
+      );
+      const earnerNames = await loadNames(client, [...records.acceptances, ...records.agreements].map(a => a.person));
+      const agreed = records.agreements.some(a => a.person === String(userId));
+      const read = r => {
+        const tally = offerTally(r, records.agreements, onRewarded, earnerNames);
+        return {
+          ask: r.prompt, accepted_by_me: agreed, tally, my_latest: latestReading(r, onRewarded, userId),
+          my_reading: awaitingReading(r, records.agreements, onRewarded, userId),
+          budget_php: r.budget_php, spent_php: tally.reduce((sum, person) => sum + person.php, 0),
+          // Its owner can still change it while nothing has been read against it.
+          editable: !onRewarded.some(o => (o.reading?.offers || []).some(e => e.offer_id === r.id)),
+        };
+      };
+      const rewardsFor = actionId => records.rewards.filter(r => r.action_id === actionId).map(r => ({
+        id: r.id, php: r.php, cap_php_per_person: r.cap_php_per_person, payer_name: r.payer_name, terms: r.terms,
+        owner: r.owner, closed: !!r.closed_at, action_id: r.action_id,
+        // An offer with a prompt is read by AI and agreed to once for all such offers.
+        ...(r.prompt
+          ? read(r)
+          : {
+            accepted_by_me: records.acceptances.some(a => a.reward_id === r.id && a.person === String(userId)),
+            tally: rewardTally(r, records.acceptances, onRewarded, earnerNames),
+          }),
+      }));
+      for (const goal of goals) goal.rewards = rewardsFor(goal.id);
+      for (const challenge of challenges) {
+        for (const collaboration of challenge.collaborations) collaboration.rewards = rewardsFor(collaboration.id);
+      }
+      // Every open offer, whether or not its action sits under a situation, so
+      // one made directly under "Offers" reaches everyone.
+      const offers = proposed
+        .filter(a => orgIds.includes(a.organization_id) && JOINABLE_STATUSES.includes(a.status))
+        .filter((a, i, all) => all.findIndex(other => other.id === a.id) === i)
+        .map(a => ({
+          id: a.id, title: proposalText(a), created_by: a.created_by,
+          situation: addressedChallenges(a.id, records.collaborations, openChallenges)[0]?.text ?? null,
+          rewards: rewardsFor(a.id).filter(r => !r.closed),
+        }))
+        .filter(o => o.rewards.length > 0);
+      // The people of these orgs and of the viewer's own orgs: who a challenge can be assigned to.
+      const members = await loadMembers(client, [...new Set([...orgIds, ...memberOrgIds])]);
+      return { statusCode: 200, data: { goals, ready, challenges, members, offers } };
     }
 
     throw new HttpError(404, 'Not found');

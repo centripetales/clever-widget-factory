@@ -4,6 +4,20 @@ const {
   stateText,
   parseState,
   implementorIds,
+  isGoal,
+  isChallenge,
+  isProposal,
+  isSituation,
+  proposalText,
+  challengeSummaries,
+  addressedChallenges,
+  rewardTerms,
+  readReward,
+  rewardTally,
+  offerTally,
+  awaitingReading,
+  latestReading,
+  takingPart,
   hasFreeCapacity,
   valueForOthers,
   sortByValue,
@@ -140,5 +154,213 @@ describe('Maxwell agent adapter', () => {
 
   it('rejects unknown operations', () => {
     expect(toRequest({ apiPath: '/deleteEverything' }, {})).toBeNull();
+  });
+});
+
+describe('takingPart', () => {
+  const goal = { id: 'store', participants: ['may', 'lester'] };
+  const comments = [
+    { action_id: 'store', person: 'may', text: 'I can run the counter on Saturdays.' },
+    { action_id: 'seeds', person: 'may', text: 'About another desired state.' },
+    { action_id: 'store', person: 'stefan', text: 'From someone who has not joined.' },
+    { action_id: 'store', person: 'may', text: 'We have a shelf to lend.' },
+  ];
+
+  it('lists each participant with what they said on this desired state, in order', () => {
+    expect(takingPart(goal, comments, { may: 'May' })).toEqual([
+      { id: 'may', name: 'May', comments: ['I can run the counter on Saturdays.', 'We have a shelf to lend.'] },
+      { id: 'lester', name: null, comments: [] },
+    ]);
+  });
+
+  it('is empty when nobody has joined', () => {
+    expect(takingPart({ id: 'store', participants: null }, comments, {})).toEqual([]);
+  });
+});
+
+describe('challenges', () => {
+  const action = overrides => ({
+    id: 'a', organization_id: 'ps', description: null, expected_state: null, policy: null,
+    created_by: 'stefan', participants: [], status: 'external_proposal', created_at: '2026-10-11T00:00:00Z', ...overrides,
+  });
+
+  it('tells a challenge from a desired state and an option', () => {
+    const challenge = action({ description: 'Coconuts are being stolen' });
+    const goal = action({ expected_state: 'Less theft' });
+    const oldGoal = action({ description: 'Coconuts are being stolen', expected_state: 'Less theft' });
+    const option = action({ description: 'Theft at night', expected_state: 'Less theft', policy: 'Take turns watching' });
+    expect([challenge, goal, oldGoal, option].map(isChallenge)).toEqual([true, false, false, false]);
+    expect([challenge, goal, oldGoal, option].map(isGoal)).toEqual([false, true, true, false]);
+  });
+
+  it('shows votes, whether I voted, and the collaborations proposed for each, most votes first', () => {
+    const theft = action({ id: 'theft', description: 'Coconuts are being stolen', participants: ['may', 'lester'] });
+    const buyers = action({ id: 'buyers', description: 'Copra buyers are unreliable', created_at: '2026-10-12T00:00:00Z' });
+    const watch = action({ id: 'watch', title: 'Neighbors report strangers', description: 'Coconuts are being stolen', created_by: 'may', assigned_to: 'may', participants: ['lester'] });
+    const summaries = challengeSummaries({
+      challenges: [buyers, theft], goals: [watch], userId: 'may', names: { stefan: 'Stefan', may: 'May' },
+      collaborations: [{ goal_id: 'watch', challenge_id: 'theft' }, { goal_id: 'deleted', challenge_id: 'theft' }],
+    });
+
+    expect(summaries.map(c => c.id)).toEqual(['theft', 'buyers']);
+    expect(summaries[0]).toMatchObject({
+      text: 'Coconuts are being stolen', owner: 'stefan', owner_name: 'Stefan', votes: 2, voted_by_me: true,
+      voters: [{ id: 'may', name: 'May' }, { id: 'lester', name: null }],
+      collaborations: [{ id: 'watch', title: 'Neighbors report strangers', created_by_name: 'May', participants: ['lester'] }],
+    });
+    expect(summaries[1]).toMatchObject({ votes: 0, voted_by_me: false, collaborations: [] });
+  });
+
+  it('takes the assignee as the owner, and whoever added it when there is none', () => {
+    const [assigned, unassigned] = challengeSummaries({
+      challenges: [
+        action({ id: 'a', description: 'One', assigned_to: 'may', created_by: 'stefan', participants: ['x'] }),
+        action({ id: 'b', description: 'Two', assigned_to: null, created_by: 'stefan' }),
+      ],
+      goals: [], collaborations: [], userId: 'may', names: { may: 'May', stefan: 'Stefan' },
+    });
+    expect(assigned).toMatchObject({ owner: 'may', owner_name: 'May', votes: 1 });
+    expect(unassigned).toMatchObject({ owner: 'stefan', owner_name: 'Stefan' });
+  });
+});
+
+describe('addressedChallenges', () => {
+  const challenges = [{ id: 'sell', description: 'No place to sell our goods' }, { id: 'theft', description: 'Coconuts are being stolen' }];
+  const links = [
+    { goal_id: 'store', challenge_id: 'sell', person: 'stefan' },
+    { goal_id: 'store', challenge_id: 'closed', person: 'may' },
+    { goal_id: 'watch', challenge_id: 'theft', person: 'may' },
+  ];
+
+  it('lists the open challenges a desired state is linked to, with who linked each', () => {
+    expect(addressedChallenges('store', links, challenges))
+      .toEqual([{ id: 'sell', text: 'No place to sell our goods', linked_by: 'stefan' }]);
+    expect(addressedChallenges('ponds', links, challenges)).toEqual([]);
+  });
+});
+
+describe('proposed collaborations', () => {
+  const action = overrides => ({ id: 'a', title: '', description: null, expected_state: null, policy: null, ...overrides });
+
+  it('are told by their collaboration record, since their fields read as a situation', () => {
+    const proposal = action({ id: 'watch', title: 'Share a night watch', description: 'Coconuts are being stolen' });
+    const situation = action({ id: 'theft', title: 'Coconuts are being stolen', description: 'Coconuts are being stolen' });
+    const marked = new Set(['watch']);
+    expect([isProposal(proposal, marked), isSituation(proposal, marked)]).toEqual([true, false]);
+    expect([isProposal(situation, marked), isSituation(situation, marked)]).toEqual([false, true]);
+  });
+
+  it('still recognises one saved the old way, by its desired state', () => {
+    expect(isProposal(action({ title: 'Less theft', expected_state: 'Less theft' }), new Set())).toBe(true);
+  });
+
+  it('reads the text from the title, or from the desired state of an older one with a shortened title', () => {
+    const long = 'Compensate people for the time and expense when reporting theft since it benefits the community';
+    expect(proposalText(action({ title: long }))).toBe(long);
+    expect(proposalText(action({ title: `${long.slice(0, 77)}...`, expected_state: long }))).toBe(long);
+    expect(proposalText(action({ title: 'Less theft', expected_state: 'Less theft' }))).toBe('Less theft');
+    // A desired state written later on the action is not the proposal's text.
+    expect(proposalText(action({ title: long, expected_state: 'Reports are paid within a week' }))).toBe(long);
+  });
+});
+
+describe('offered rewards', () => {
+  const reward = { id: 'r1', action_id: 'photos', php: 5, cap_php_per_person: 500, closed_at: null };
+  const acceptances = [
+    { reward_id: 'r1', person: 'may', accepted_at: '2026-10-12T08:00:00Z' },
+    { reward_id: 'r1', person: 'lester', accepted_at: '2026-10-12T09:00:00Z' },
+    { reward_id: 'other', person: 'chem', accepted_at: '2026-10-12T09:00:00Z' },
+  ];
+  const obs = (person, at, overrides = {}) =>
+    ({ action_id: 'photos', person, created_at: `2026-10-12T${at}:00Z`, text: 'Where we get water', has_photo: true, ...overrides });
+
+  it('says what is paid, who sees it and how it may be used', () => {
+    const terms = rewardTerms({ php: 5, cap_php_per_person: 500, payer_name: 'Stargazer Farm' });
+    expect(terms).toContain('Stargazer Farm pays ₱5 for each photo you share here with a description, up to ₱500 per person.');
+    expect(terms).toContain('Only you and Stargazer Farm can see what you share.');
+    expect(terms).toContain('research and for activities that benefit the group, such as grant proposals');
+    expect(terms).toContain('Everyone can see how many each person has shared.');
+    expect(rewardTerms({ php: 20, cap_php_per_person: null, payer_name: 'X' })).not.toContain('up to');
+  });
+
+  it('counts each person\'s observations with a photo and their own words, made after they accepted', () => {
+    const tally = rewardTally(reward, acceptances, [
+      obs('may', '08:30'), obs('may', '10:00'),
+      obs('may', '07:00'), // before she accepted
+      obs('may', '11:00', { has_photo: false }), // the "Joined" note, or any text-only observation
+      obs('may', '11:30', { text: '  ' }), // a photo with nothing written
+      obs('may', '12:00', { action_id: 'elsewhere' }),
+      obs('lester', '09:30'),
+      obs('stefan', '09:30'), // never accepted
+    ], { may: 'Mae' });
+    expect(tally).toEqual([
+      { id: 'may', name: 'Mae', count: 2, php: 10 },
+      { id: 'lester', name: null, count: 1, php: 5 },
+    ]);
+  });
+
+  it('stops at the cap per person, and stops counting when the reward closes', () => {
+    const many = Array.from({ length: 120 }, () => obs('may', '10:00'));
+    expect(rewardTally(reward, acceptances, many, {})[0]).toMatchObject({ id: 'may', count: 120, php: 500 });
+
+    const closed = { ...reward, closed_at: '2026-10-12T09:45:00Z' };
+    expect(rewardTally(closed, acceptances, [obs('may', '08:30'), obs('may', '10:00')], {})[0]).toMatchObject({ count: 1, php: 5 });
+  });
+
+  it('lists people who accepted but have not shared anything yet', () => {
+    expect(rewardTally(reward, acceptances, [], {})).toEqual([
+      { id: 'lester', name: null, count: 0, php: 0 },
+      { id: 'may', name: null, count: 0, php: 0 },
+    ]);
+  });
+});
+
+describe('offerTally', () => {
+  const offer = { id: 'o1', action_id: 'a1', php: 5, cap_php_per_person: 12, closed_at: null };
+  const agreements = [{ person: 'may', agreed_at: '2026-10-12T00:00:00Z' }, { person: 'lester', agreed_at: '2026-10-12T00:00:00Z' }];
+  const read = (counts, php) => ({ shows: 'x', offers: [{ offer_id: 'o1', counts, php, feedback: 'f' }] });
+  const obs = (person, created_at, reading) => ({ action_id: 'a1', person, created_at, reading });
+
+  it('sums what the readings say counted; one not read yet earns nothing so far', () => {
+    const tally = offerTally(offer, agreements, [
+      obs('may', '2026-10-12T01:00:00Z', read(true, 5)),
+      obs('may', '2026-10-12T02:00:00Z', read(false, 0)),
+      obs('may', '2026-10-12T03:00:00Z', null),
+      obs('may', '2026-10-11T03:00:00Z', read(true, 5)), // before agreeing
+    ], { may: 'May' });
+    expect(tally).toEqual([{ id: 'may', name: 'May', count: 1, php: 5 }]);
+  });
+
+  it('stops at the cap and leaves out people with nothing counted', () => {
+    const many = [1, 2, 3, 4].map(h => obs('may', `2026-10-12T0${h}:00:00Z`, read(true, 5)));
+    expect(offerTally(offer, agreements, many, {})).toEqual([{ id: 'may', name: null, count: 4, php: 12 }]);
+  });
+
+  it('tells a person how many of theirs are waiting for a reading, and how many have waited too long', () => {
+    const observations = [
+      obs('may', '2026-10-12T05:55:00Z', null), obs('may', '2026-10-12T03:00:00Z', null),
+      obs('may', '2026-10-12T04:00:00Z', read(true, 5)), obs('lester', '2026-10-12T05:58:00Z', null),
+    ];
+    expect(awaitingReading(offer, agreements, observations, 'may', new Date('2026-10-12T06:00:00Z'))).toEqual({ waiting: 1, unread: 1 });
+    expect(awaitingReading(offer, agreements, observations, 'nobody', new Date('2026-10-12T06:00:00Z'))).toEqual({ waiting: 0, unread: 0 });
+  });
+
+  it('gives a person the reading of their latest observation for the offer', () => {
+    const observations = [obs('may', '2026-10-12T01:00:00Z', read(true, 5)), obs('may', '2026-10-12T02:00:00Z', read(false, 0)), obs('lester', '2026-10-12T03:00:00Z', read(true, 5))];
+    expect(latestReading(offer, observations, 'may')).toEqual({ shows: 'x', counts: false, php: 0, feedback: 'f' });
+    expect(latestReading(offer, [], 'may')).toBeNull();
+  });
+});
+
+describe('readReward', () => {
+  it('reads an offer with an evaluator and limits', () => {
+    const r = readReward({ evaluator: { kind: 'prompt', prompt: ' Practices ' }, max_php_per_observation: 20, max_php_per_person: 400, budget_php: 5000 });
+    expect([r.prompt, r.php, r.cap_php_per_person, r.budget_php]).toEqual(['Practices', 20, 400, 5000]);
+  });
+
+  it('reads one made before those existed, and one that pays for any photo with a description', () => {
+    expect(readReward({ condition: 'Practices', php: 5, cap_php_per_person: 500 }).prompt).toBe('Practices');
+    const fixed = readReward({ condition: null, php: 5, cap_php_per_person: 500 });
+    expect([fixed.prompt, fixed.php, fixed.cap_php_per_person, fixed.budget_php]).toEqual([null, 5, 500, null]);
   });
 });

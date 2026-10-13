@@ -14,7 +14,7 @@ import {
 import { X, GripVertical, Loader2, AlertCircle, Camera, ImagePlus, Sparkles } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { getImageUrl, getThumbnailUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getImageUrl, getThumbnailUrl, getOriginalUrl, showDisplayedIfOriginalMissing } from '@/lib/imageUtils';
 import { apiService } from '@/lib/apiService';
 
 export interface PhotoItem {
@@ -656,6 +656,7 @@ export function PhotoUploadPanel({
           {lightboxUrl && (
             <img
               src={lightboxUrl}
+              onError={showDisplayedIfOriginalMissing}
               alt="Full resolution"
               className="max-w-full max-h-full object-contain rounded"
             />

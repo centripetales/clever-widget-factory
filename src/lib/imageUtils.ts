@@ -89,6 +89,46 @@ export function getOriginalUrl(urlOrKey: string | null | undefined): string | nu
 }
 
 /**
+ * Opens an image in a new tab: the original when one was kept, otherwise the
+ * image the app displays. Many images have no original (older uploads were
+ * resized on the way in), and storage answers "Access Denied" for a missing
+ * file, so the original is tried first rather than assumed.
+ * Call it from a click handler: the tab is opened at once so it isn't blocked
+ * as a popup, then pointed at whichever image exists.
+ */
+export function openImage(urlOrKey: string | null | undefined): void {
+  const displayed = getImageUrl(urlOrKey);
+  if (!displayed) return;
+  const original = getOriginalUrl(urlOrKey);
+  if (!original || original === displayed) {
+    window.open(displayed, '_blank');
+    return;
+  }
+  const tab = window.open('', '_blank');
+  const show = (url: string) => {
+    if (tab) tab.location.href = url;
+    else window.open(url, '_blank');
+  };
+  const probe = new Image();
+  probe.onload = () => show(original);
+  probe.onerror = () => show(displayed);
+  probe.src = original;
+}
+
+/**
+ * onError for an <img> that shows an original in the page (a lightbox): when
+ * the original is missing, show the image the app displays instead. The same
+ * fallback as openImage, for images that open in place rather than in a tab.
+ */
+export function showDisplayedIfOriginalMissing(e: { currentTarget: HTMLImageElement }): void {
+  const img = e.currentTarget;
+  const displayed = img.src
+    .replace('/images/uploads/', '/images/')
+    .replace('/mission-attachments/uploads/', '/mission-attachments/');
+  if (displayed !== img.src) img.src = displayed;
+}
+
+/**
  * Converts an image URL/key to its thumbnail version
  * Thumbnails are stored in thumb/ subfolder as WebP
  * @param urlOrKey - Either a full URL or an S3 key

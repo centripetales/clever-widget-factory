@@ -3,6 +3,7 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { getAuthorizerContext, buildOrganizationFilter, hasPermission, canAccessOrganization } = require('/opt/nodejs/authorizerContext');
 const { composePartEmbeddingSource, composeToolEmbeddingSource, composeIssueEmbeddingSource, composePolicyEmbeddingSource } = require('/opt/nodejs/embedding-composition');
 const { getDbClient } = require('/opt/nodejs/db');
+const { handleShares } = require('./shares');
 const { escapeLiteral, formatSqlValue, buildUpdateClauses } = require('/opt/nodejs/sqlUtils');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { fetchAiConfig, resolveAiConfig, isValidInt, isValidFloat } = require('/opt/nodejs/aiConfigDefaults');
@@ -5682,93 +5683,21 @@ exports.handler = async (event) => {
 
     // ==================== SHARES ====================
 
-    // POST /shares — create a share (state + two state_links)
-    if (httpMethod === 'POST' && path === '/shares') {
-      const body = JSON.parse(event.body || '{}');
-      const { entity_type, entity_id, target_org_id, note, source_org_id, cognito_user_id, entity_name, target_org_name } = body;
-      if (!entity_type || !entity_id || !target_org_id || !source_org_id) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required sharing parameters' }) };
-      }
-      const stateId = randomUUID();
-      const stateText = (note && note.trim())
-        || `Shared ${entity_type}${entity_name ? ' "' + entity_name + '"' : ''} with ${target_org_name || 'partner organization'}`;
-      const client = await getDbClient();
-      try {
-        await client.query('BEGIN');
-        await client.query(
-          `INSERT INTO states (id, organization_id, state_text, captured_by, captured_at) VALUES ($1, $2, $3, $4, NOW())`,
-          [stateId, source_org_id, stateText, cognito_user_id || '00000000-0000-0000-0000-000000000000']
-        );
-        await client.query(
-          `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, $2, $3)`,
-          [stateId, entity_type, entity_id]
-        );
-        await client.query(
-          `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, 'organization', $2)`,
-          [stateId, target_org_id]
-        );
-        await client.query('COMMIT');
-        return { statusCode: 200, headers, body: JSON.stringify({ success: true, state_id: stateId }) };
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      } finally {
-        client.release();
-      }
-    }
-
-    // GET /shares/{entityType}/{entityId} — list orgs this entity is shared with
-    if (httpMethod === 'GET' && path.match(/^\/shares\/[^/]+\/[^/]+$/)) {
-      const parts = path.split('/');
-      const entityType = parts[2];
-      const entityId = parts[3];
-      const rows = await queryJSON(
-        `SELECT s.id as state_id, sl_org.entity_id::text as target_org_id, o.name as target_org_name,
-                s.state_text as note, s.captured_at as shared_at
-         FROM states s
-         JOIN state_links sl_entity ON sl_entity.state_id = s.id
-           AND sl_entity.entity_type = $1 AND sl_entity.entity_id = $2
-         JOIN state_links sl_org ON sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
-         JOIN organizations o ON o.id = sl_org.entity_id::uuid
-         WHERE s.organization_id::text != sl_org.entity_id::text
-         ORDER BY s.captured_at DESC`,
-        [entityType, entityId]
-      );
-      return { statusCode: 200, headers, body: JSON.stringify({ shares: rows }) };
-    }
-
-    // DELETE /shares/{stateId} — unshare
-    if (httpMethod === 'DELETE' && path.match(/^\/shares\/[^/]+$/)) {
-      const stateId = path.split('/')[2];
-      const client = await getDbClient();
-      try {
-        await client.query('DELETE FROM state_links WHERE state_id = $1', [stateId]);
-        await client.query('DELETE FROM states WHERE id = $1', [stateId]);
-        return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
-      } finally {
-        client.release();
-      }
-    }
-
-    // GET /shared-with-me?org_id=... — all entities shared with an org
-    if (httpMethod === 'GET' && path === '/shared-with-me') {
-      const orgId = event.queryStringParameters?.org_id || authContext?.organization_id;
-      if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'org_id required' }) };
-      const rows = await queryJSON(
-        `SELECT s.id as state_id, sl_entity.entity_type, sl_entity.entity_id::text,
-                s.state_text as note, s.organization_id::text as source_org_id,
-                o.name as source_org_name, s.captured_at as shared_at
-         FROM states s
-         JOIN state_links sl_org ON sl_org.state_id = s.id
-           AND sl_org.entity_type = 'organization'
-           AND sl_org.entity_id IN (SELECT $1::uuid UNION SELECT mo.organization_id FROM member_organizations mo WHERE mo.member_organization_id = $1::uuid)
-         JOIN state_links sl_entity ON sl_entity.state_id = s.id AND sl_entity.entity_type != 'organization'
-         JOIN organizations o ON o.id = s.organization_id
-         WHERE s.organization_id <> $1::uuid
-         ORDER BY s.captured_at DESC`,
-        [orgId]
-      );
-      return { statusCode: 200, headers, body: JSON.stringify({ shared: rows }) };
+    if (path === '/shares' || path.startsWith('/shares/') || path === '/shared-with-me') {
+      const result = await handleShares({
+        httpMethod,
+        path,
+        body: JSON.parse(event.body || '{}'),
+        query: event.queryStringParameters || {},
+        auth: {
+          userId: authContext.cognito_user_id,
+          organizationId,
+          accessibleOrgIds,
+          readAll: hasDataReadAll,
+        },
+        getDbClient,
+      });
+      if (result) return { statusCode: result.statusCode, headers, body: JSON.stringify(result.data) };
     }
 
     // ========== MAXWELL INTERACTIONS ==========

@@ -5,6 +5,7 @@ const https = require('https');
 
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { broadcastWs } = require('/opt/nodejs/broadcastWs');
+const { runOffersReading } = require('./offers');
 
 // ─── Environment validation (no implicit fallbacks per project rule) ──────────
 const requiredEnv = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'AWS_REGION'];
@@ -793,6 +794,18 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
       console.error('[RSP] Failed to broadcast invalidation on error:', bErr.message);
     }
     throw err; // re-throw so pending_perspectives gets FAILED status
+  }
+
+  // Offers of a Positive Sum network the observation was made in: one reading
+  // against all of them. Independent of the extraction above; a failure here
+  // is logged, and the observation earns nothing until a reading exists.
+  try {
+    const reading = await runOffersReading(client, {
+      state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
+    });
+    if (reading) console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
+  } catch (err) {
+    console.error('[RSP] offers reading failed for state', state.id, err);
   }
 
   // Mark pending_perspectives row as DONE

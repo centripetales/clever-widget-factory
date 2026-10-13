@@ -5,7 +5,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react';
-import { getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
+import { getImageUrl, getOriginalUrl, openImage } from '@/lib/imageUtils';
 
 interface PhotoGalleryPhoto {
   photo_url: string;
@@ -58,7 +58,7 @@ export function PhotoGalleryDialog({
               variant="ghost"
               size="sm"
               className="text-xs gap-1"
-              onClick={() => window.open(originalUrl, '_blank')}
+              onClick={() => openImage(photo.photo_url)}
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Full resolution

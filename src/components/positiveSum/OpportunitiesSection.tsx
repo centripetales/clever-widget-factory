@@ -8,6 +8,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useJoinOption, useOpportunities, usePass } from '@/hooks/positiveSum/usePositiveSum';
 import type { Opportunity } from '@/types/positiveSum';
 import { SuggestOptionDialog } from './SuggestOptionDialog';
+import { TakePart } from './TakePart';
+import { useAuth } from '@/hooks/useCognitoAuth';
 
 // Desired states that need options and options that need people, in the
 // given orgs. Opening Positive Sum is the ask: the first visit of the day
@@ -18,6 +20,7 @@ export function OpportunitiesSection({ orgIds }: { orgIds: string[] }) {
   const join = useJoinOption();
   const pass = usePass();
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     try {
@@ -67,16 +70,22 @@ export function OpportunitiesSection({ orgIds }: { orgIds: string[] }) {
                   {!isGoal && item.capacity && (
                     <span className="block">{taken} of {item.capacity} people</span>
                   )}
+                  {isGoal && taken > 0 && (
+                    <span className="block">{taken} contributing</span>
+                  )}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
                 {isGoal ? (
-                  <Button size="sm" onClick={() => setSuggesting({ item, change: false })}>
-                    Suggest an option
-                  </Button>
+                  <>
+                    <TakePart goalId={item.id} joined={!!user?.userId && item.implementors.includes(user.userId)} />
+                    <Button size="sm" variant="outline" onClick={() => setSuggesting({ item, change: false })}>
+                      Suggest an option
+                    </Button>
+                  </>
                 ) : (
                   <>
-                    <Button size="sm" disabled={join.isPending}
+                    <Button size="sm" variant="outline" disabled={join.isPending}
                       onClick={() => run('You joined', () => join.mutateAsync(item.id))}>
                       Join
                     </Button>

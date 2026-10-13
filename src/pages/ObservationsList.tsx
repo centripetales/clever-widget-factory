@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueries } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig, completedActionsQueryConfig } from '@/lib/assetQueryConfigs';
 import { offlineQueryConfig } from '@/lib/queryConfig';
@@ -202,6 +202,29 @@ export default function ObservationsList() {
     ...offlineQueryConfig,
   });
 
+  // The cached action lists are long-lived (offlineQueryConfig) and only cover
+  // unresolved/completed actions, so an action created or linked after they were
+  // loaded shows as "Unknown Action". Fetch any such action individually.
+  const knownActionIds = new Set(
+    [...(actionsList as any[]), ...(completedActionsList as any[]), ...(sharedActionsList as any[])].map((a: any) => a.id)
+  );
+  const missingActionIds = Array.from(new Set(
+    observations.flatMap((obs: any) => (obs.links || [])
+      .filter((link: any) => link.entity_type === 'action' && !knownActionIds.has(link.entity_id))
+      .map((link: any) => link.entity_id as string))
+  ));
+  const missingActions = useQueries({
+    queries: missingActionIds.map((id) => ({
+      queryKey: ['observation_linked_action', id],
+      queryFn: async () => {
+        const result = await apiService.get(`/actions?id=${id}`);
+        return result?.data?.[0] || null;
+      },
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+  const fetchedActions = missingActions.map((q) => q.data).filter(Boolean) as any[];
+
   // Resolve the name of a linked asset
   const resolveAsset = (entityId: string, entityType: 'tool' | 'part' | 'action' | 'financial_record' | string) => {
     if (entityType === 'tool') {
@@ -229,7 +252,8 @@ export default function ObservationsList() {
     } else if (entityType === 'action') {
       const action = (actionsList as any).find((a: any) => a.id === entityId)
         || (completedActionsList as any[]).find((a: any) => a.id === entityId)
-        || (sharedActionsList as any[]).find((a: any) => a.id === entityId);
+        || (sharedActionsList as any[]).find((a: any) => a.id === entityId)
+        || fetchedActions.find((a: any) => a.id === entityId);
       return {
         name: action ? (action.title || 'Action') : 'Unknown Action',
         serialNumber: undefined,
@@ -459,7 +483,7 @@ export default function ObservationsList() {
                               key={link.id || link.entity_id}
                               variant="secondary"
                               className="flex items-center gap-1.5 cursor-pointer hover:bg-secondary/80 py-0.5 px-2 text-xs"
-                              onClick={() => navigate(assetInfo.type === 'action' ? '/actions' : '/combined-assets')}
+                              onClick={() => navigate(assetInfo.type === 'action' ? `/actions/${link.entity_id}` : `/combined-assets/${link.entity_id}`)}
                             >
                               {assetInfo.type === 'tool' ? (
                                 <Wrench className="h-3 w-3 text-primary flex-shrink-0" />
@@ -661,16 +685,9 @@ export default function ObservationsList() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => {
-                          const assetLink = obs.links?.find((link: any) => link.entity_type === 'tool' || link.entity_type === 'part');
-                          if (assetLink) {
-                            navigate(`/combined-assets/${assetLink.entity_id}`);
-                          } else {
-                            navigate(`/observations/edit/${obs.id}`);
-                          }
-                        }}
+                        onClick={() => navigate(`/observations/edit/${obs.id}`)}
                         className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                        title={obs.links?.some((link: any) => link.entity_type === 'tool' || link.entity_type === 'part') ? 'Edit linked asset' : 'Edit observation'}
+                        title="Edit observation"
                       >
                         <Edit2 className="h-4 w-4" />
                       </Button>

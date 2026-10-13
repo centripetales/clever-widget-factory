@@ -23,7 +23,7 @@ export function useExperiences(params?: ExperienceListParams) {
     queryKey: experiencesQueryKey(params),
     queryFn: () => listExperiences(params),
     enabled: !!(params?.entity_type && params?.entity_id),
-    // The global default (staleTime: 24h, refetchOnMount: false — see
+    // The global default (staleTime: 24h — see
     // queryConfig.ts) is tuned for offline-first field use, but it means a
     // persisted, hours-stale cache from a previous session silently wins on
     // reload with no visible signal that it's stale. This is exactly the

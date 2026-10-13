@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
 import { actionRewardQueryKey } from '@/lib/queryKeys';
 import type { ActionRewards } from '@/types/rewards';
@@ -10,9 +10,14 @@ const GIVE_UP_MS = 3 * 60 * 1000;
 /**
  * The action's rewards, plus a rebuild that runs in the background: POST starts
  * it, then the query polls until a newer result (or a failure) is saved.
+ * `alreadyBuilding`: a build was started elsewhere (an action just made from a
+ * transaction), so poll for its result from the start.
  */
-export function useActionReward(actionId: string, enabled: boolean) {
-  const [building, setBuilding] = useState<{ since: number; previous: string | null } | null>(null);
+export function useActionReward(actionId: string, enabled: boolean, alreadyBuilding = false) {
+  const queryClient = useQueryClient();
+  const [building, setBuilding] = useState<{ since: number; previous: string | null } | null>(
+    () => (alreadyBuilding ? { since: Date.now(), previous: null } : null)
+  );
 
   const query = useQuery({
     queryKey: actionRewardQueryKey(actionId),
@@ -35,5 +40,13 @@ export function useActionReward(actionId: string, enabled: boolean) {
     onSuccess: () => setBuilding({ since: Date.now(), previous: latest }),
   });
 
-  return { ...query, rebuild, isBuilding: !!building || rebuild.isPending };
+  // The opportunity cost entered for each party's time; saved as entered, no rebuild.
+  const saveOpportunityCosts = useMutation({
+    mutationFn: (opportunity_costs: Record<string, number>) =>
+      apiService.post(`/actions/${actionId}/reward`, { opportunity_costs }),
+    onSuccess: (_result, opportunity_costs) =>
+      queryClient.setQueryData<ActionRewards | null>(actionRewardQueryKey(actionId), old => old && { ...old, opportunity_costs }),
+  });
+
+  return { ...query, rebuild, saveOpportunityCosts, isBuilding: !!building || rebuild.isPending };
 }

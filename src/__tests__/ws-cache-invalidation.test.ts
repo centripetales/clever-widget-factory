@@ -69,10 +69,16 @@ async function broadcastInvalidation(
       [entityType, entityId, mutationType, organizationId, excludeConnectionId || null]
     );
 
-    // 2. Get active connections for this organization
+    // 2. Get active connections for this organization: those registered under
+    // it, and those of its people (a connection is registered under the
+    // person's primary org).
     const { rows: connections } = await dbClient.query(
-      `SELECT connection_id FROM websocket_connections
-       WHERE organization_id = $1 AND disconnected_at IS NULL`,
+      `SELECT DISTINCT wc.connection_id FROM websocket_connections wc
+       WHERE wc.disconnected_at IS NULL
+         AND (wc.organization_id = $1
+              OR wc.user_id::text IN (
+                SELECT om.user_id::text FROM organization_members om
+                WHERE om.organization_id = $1 AND om.is_active = true))`,
       [organizationId]
     );
 
@@ -208,7 +214,7 @@ describe('broadcastInvalidation — mutation flow', () => {
 
     // Verify active connections query
     expect(dbClient.query).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT connection_id FROM websocket_connections'),
+      expect.stringMatching(/FROM websocket_connections[\s\S]*organization_members/),
       ['org-uuid-1']
     );
 

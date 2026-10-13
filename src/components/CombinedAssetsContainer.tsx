@@ -295,6 +295,8 @@ export const CombinedAssetsContainer = () => {
     return counts;
   }, [assets]);
 
+  const searchCacheClient = useQueryClient();
+
   // Filter assets based on current filters
   const filteredAssets = useMemo(() => {
     // Skip filtering during loading to prevent flicker
@@ -302,8 +304,16 @@ export const CombinedAssetsContainer = () => {
     
     // Use semantic results if active, but clear them if type/area filters are enabled
     // (semantic search and type filters are mutually exclusive)
+    // Search results are a snapshot from the search service; show each item as
+    // it is in the tools/parts cache now, so an edit shows without searching again.
+    const cachedTools = searchCacheClient.getQueryData<any[]>(toolsQueryKey()) || [];
+    const cachedParts = searchCacheClient.getQueryData<any[]>(partsQueryKey()) || [];
+    const currentResults = semanticResults.map((result: any) => {
+      const current = (result.type === 'asset' ? cachedTools : cachedParts).find(item => item.id === result.id);
+      return current ? { ...result, ...current, type: result.type, similarity_score: result.similarity_score } : result;
+    });
     const assetsToFilter = (semanticResults.length > 0 && !showOnlyAreas && !showOnlyAssets && !showOnlyStock) 
-      ? semanticResults 
+      ? currentResults 
       : assets;
     
     let filtered = assetsToFilter.filter(asset => {
@@ -313,6 +323,10 @@ export const CombinedAssetsContainer = () => {
         const isArea = asset.category === 'Infrastructure' || asset.category === 'Container' || asset.category === 'Field';
         if (!isArea) return false;
       }
+
+      // Removed tools show only when asked for. The regular list is already
+      // filtered in useCombinedAssets; semantic search results are not.
+      if (asset.status === 'removed' && !showRemovedItems) return false;
 
       // Type filters
       if (showOnlyAssets && asset.type !== 'asset') return false;
@@ -352,7 +366,7 @@ export const CombinedAssetsContainer = () => {
     }
 
     return filtered;
-  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
+  }, [assets, showOnlyAssets, showOnlyStock, showOnlyAreas, showRemovedItems, user?.id, loading, semanticResults, areaItemCounts, searchTerm, searchDescriptions]);
 
   // Most-recently-viewed shortcut. Looked up against the full tools/parts
   // query cache (same one AssetDetailsPage reads), not the `assets` array
