@@ -18,9 +18,14 @@ const {
   proposalText,
   JOINABLE_STATUSES,
   challengeOwner,
-  visibleSituations,
   challengeSummaries,
   addressedChallenges,
+  rewardTerms,
+  readReward,
+  rewardTally,
+  offerTally,
+  awaitingReading,
+  latestReading,
   takingPart,
   hasFreeCapacity,
   valueForOthers,
@@ -86,8 +91,17 @@ async function loadRecords(client, orgIds) {
   const collaborations = ofType(STATE_TYPES.COLLABORATION).map(r => ({
     state_id: r.id, person: r.captured_by, goal_id: r.data.goal_id, challenge_id: r.data.challenge_id,
   }));
-  const gaveInput = new Set(ofType(STATE_TYPES.CONVERSATION).map(r => r.captured_by));
-  return { contexts, approvals, passes, lists, collaborations, gaveInput };
+  // A reward's id is the id of the record that holds it.
+  const rewards = ofType(STATE_TYPES.REWARD).map(r => ({ ...readReward(r.data), id: r.id, owner: r.captured_by, stored: r.data }));
+  const acceptances = ofType(STATE_TYPES.REWARD_ACCEPTANCE).map(r => ({
+    reward_id: r.data.reward_id, person: r.captured_by, accepted_at: r.captured_at,
+  }));
+  // One per person: the first time they agreed.
+  const agreements = ofType(STATE_TYPES.SHARING_AGREEMENT)
+    .map(r => ({ person: r.captured_by, agreed_at: r.captured_at }))
+    .sort((a, b) => new Date(a.agreed_at) - new Date(b.agreed_at))
+    .filter((a, i, all) => all.findIndex(other => other.person === a.person) === i);
+  return { contexts, approvals, passes, lists, collaborations, rewards, acceptances, agreements };
 }
 
 async function insertRecord(client, { organizationId, userId, type, payload, links }) {
@@ -267,16 +281,129 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         await client.query('DELETE FROM states WHERE id = ANY($1::uuid[])', [ids]);
       };
 
-      // { conversation_saved: true } — the person saved a conversation. Recorded
-      // once; from then on they see other people's entries too.
-      if (body.conversation_saved) {
-        const { gaveInput } = await loadRecords(client, [organization_id]);
-        if (!gaveInput.has(String(userId))) {
-          await insertRecord(client, {
-            organizationId: organization_id, userId, type: STATE_TYPES.CONVERSATION, payload: { date: dayKey() }, links: [],
-          });
+      // { reward: { action_id, php, cap_php_per_person } } — the author of a
+      // proposed collaboration attaches a reward to it, paid by the
+      // organization they are working as. Its terms are fixed from then on:
+      // what people have earned is counted from them, so to change them the
+      // owner closes this reward and adds another.
+      if (body.reward) {
+        const [target] = await loadActions(client, [body.reward.action_id]);
+        if (!target || target.organization_id !== organization_id || !isProposal(target, proposalIds)) throw new HttpError(404, 'Proposed collaboration not found');
+        if (String(target.created_by) !== String(userId)) throw new HttpError(403, 'Only its author can add a reward');
+        const php = Number(body.reward.php);
+        const cap = body.reward.cap_php_per_person == null || body.reward.cap_php_per_person === '' ? null : Number(body.reward.cap_php_per_person);
+        if (!(php > 0) || (cap !== null && !(cap >= php))) throw new HttpError(400, 'Give an amount, and a cap no smaller than it');
+        const payerOrgId = authContext.organization_id || organization_id;
+        const payer = await client.query('SELECT name FROM organizations WHERE id = $1', [payerOrgId]);
+        // What the payer wants and how they value it, in their words. With it,
+        // an AI reads each observation against the offer and the amounts given
+        // are the most it pays: for one observation, per person, and in total.
+        // Without it, any photo with a description is paid the amount.
+        const prompt = typeof body.reward.ask === 'string' && body.reward.ask.trim() ? body.reward.ask.trim() : null;
+        const budget = body.reward.budget_php == null || body.reward.budget_php === '' ? null : Number(body.reward.budget_php);
+        if (budget !== null && !(budget >= php)) throw new HttpError(400, 'Give a budget no smaller than one payment');
+        const payerName = payer.rows[0]?.name || 'The payer';
+        const terms = rewardTerms({ php, cap_php_per_person: cap, payer_name: payerName, condition: prompt });
+        await insertRecord(client, {
+          organizationId: organization_id, userId, type: STATE_TYPES.REWARD,
+          payload: prompt
+            ? {
+              action_id: target.id, per: 'observation', payer_org_id: payerOrgId, payer_name: payerName,
+              evaluator: { kind: 'prompt', prompt },
+              max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
+              terms, closed_at: null,
+            }
+            : {
+              action_id: target.id, per: 'observation', php, cap_php_per_person: cap, payer_name: payerName,
+              payer_org_id: payerOrgId, requires_photo: true, requires_text: true, terms, closed_at: null,
+            },
+          links: [{ entity_type: 'action', entity_id: target.id }],
+        });
+        await notify(target);
+        return { statusCode: 201, data: summarize(target) };
+      }
+
+      // { reward_edit: { reward_id, php, cap_php_per_person, budget_php, ask } } —
+      // its owner changes an offer that is read by AI, while no observation has
+      // been read against it yet. After that people have been told amounts under
+      // its wording, so it is closed and a new one made instead.
+      if (body.reward_edit) {
+        const records = await loadRecords(client, [organization_id]);
+        const reward = records.rewards.find(r => r.id === body.reward_edit.reward_id);
+        if (!reward) throw new HttpError(404, 'Reward not found');
+        if (reward.owner !== String(userId)) throw new HttpError(403, 'Only its owner can change a reward');
+        if (reward.closed_at) throw new HttpError(409, 'This reward is closed');
+        if (!reward.prompt) throw new HttpError(409, 'This reward cannot be changed; close it and add another');
+        const { rows: read } = await client.query(
+          `SELECT 1 FROM state_perspectives WHERE perspective_type = 'OFFERS' AND content::text LIKE $1 LIMIT 1`,
+          [`%${reward.id}%`]
+        );
+        if (read.length) throw new HttpError(409, 'Observations have already been read against this; close it and make a new one');
+        const php = Number(body.reward_edit.php);
+        const number = value => (value == null || value === '' ? null : Number(value));
+        const cap = number(body.reward_edit.cap_php_per_person);
+        const budget = number(body.reward_edit.budget_php);
+        const prompt = typeof body.reward_edit.ask === 'string' ? body.reward_edit.ask.trim() : '';
+        if (!prompt) throw new HttpError(400, 'Say how an observation is valued');
+        if (!(php > 0) || (cap !== null && !(cap >= php)) || (budget !== null && !(budget >= php))) {
+          throw new HttpError(400, 'Give an amount, and limits no smaller than it');
         }
-        return { statusCode: 200, data: { has_given_input: true } };
+        const { type, ...data } = reward.stored;
+        await client.query('UPDATE states SET state_text = $2, updated_at = NOW() WHERE id = $1', [reward.id, stateText(STATE_TYPES.REWARD, {
+          ...data, evaluator: { kind: 'prompt', prompt }, condition: undefined,
+          max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
+        })]);
+        const [target] = await loadActions(client, [reward.action_id]);
+        if (target) await notify(target);
+        return { statusCode: 200, data: target ? summarize(target) : {} };
+      }
+
+      // { reward_accept: { reward_id } } — a person accepts a reward's terms
+      // and joins its action. Their observations there count from now on.
+      // { reward_close: { reward_id } } — its owner closes it: what was earned
+      // stays, new observations stop counting.
+      if (body.reward_accept || body.reward_close) {
+        const records = await loadRecords(client, [organization_id]);
+        const reward = records.rewards.find(r => r.id === (body.reward_accept || body.reward_close).reward_id);
+        if (!reward) throw new HttpError(404, 'Reward not found');
+        const [target] = await loadActions(client, [reward.action_id]);
+        if (!target) throw new HttpError(404, 'Reward not found');
+        if (body.reward_close) {
+          if (reward.owner !== String(userId)) throw new HttpError(403, 'Only its owner can close a reward');
+          if (!reward.closed_at) {
+            // The record as stored, with only its closing time changed.
+            const { type, ...data } = reward.stored;
+            await client.query('UPDATE states SET state_text = $2, updated_at = NOW() WHERE id = $1',
+              [reward.id, stateText(STATE_TYPES.REWARD, { ...data, closed_at: new Date().toISOString() })]);
+          }
+        } else {
+          if (reward.closed_at) throw new HttpError(409, 'This reward is closed');
+          if (reward.prompt) {
+            // One agreement covers every offer that is read: sharing through Positive Sum.
+            if (!records.agreements.some(a => a.person === String(userId))) {
+              await insertRecord(client, {
+                organizationId: organization_id, userId, type: STATE_TYPES.SHARING_AGREEMENT,
+                payload: { terms: reward.terms }, links: [],
+              });
+            }
+          } else if (!records.acceptances.some(a => a.reward_id === reward.id && a.person === String(userId))) {
+            await insertRecord(client, {
+              organizationId: organization_id, userId, type: STATE_TYPES.REWARD_ACCEPTANCE,
+              payload: { reward_id: reward.id, action_id: reward.action_id, terms: reward.terms },
+              links: [{ entity_type: 'action', entity_id: reward.action_id }],
+            });
+          }
+          if (!(target.participants || []).map(String).includes(String(userId)) && JOINABLE_STATUSES.includes(target.status)) {
+            await client.query(
+              `UPDATE actions SET participants = array_append(COALESCE(participants, ARRAY[]::uuid[]), $2::uuid),
+                      status = CASE WHEN status = $3 THEN 'not_started' ELSE status END, updated_at = NOW()
+                WHERE id = $1`,
+              [target.id, userId, OPEN_STATUS]
+            );
+          }
+        }
+        await notify(target);
+        return { statusCode: 200, data: summarize(target) };
       }
 
       // { delete: { id } } — the owner removes their situation, or the author
@@ -715,16 +842,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         `SELECT ${ACTION_COLUMNS} FROM actions WHERE organization_id = ANY($1::uuid[]) AND status = $2`,
         [orgIds, OPEN_STATUS]
       );
-      // Until a person has given their own input (saved a conversation), they
-      // see only their own entries, so what others said doesn't shape theirs.
-      // Someone who saved a conversation before that was recorded has a profile entry from it.
-      const hasGivenInput = records.gaveInput.has(String(userId)) || (await client.query(
-        `SELECT 1 FROM states WHERE organization_id = ANY($1::uuid[]) AND captured_by::text = $2
-            AND state_text LIKE '[profile_skill]%' LIMIT 1`,
-        [orgIds, String(userId)]
-      )).rows.length > 0;
-      const openChallenges = visibleSituations(
-        openRows.filter(a => !records.contexts[a.id] && isSituation(a, proposalIds)), userId, hasGivenInput);
+      const openChallenges = openRows.filter(a => !records.contexts[a.id] && isSituation(a, proposalIds));
       const proposed = await loadActions(client, records.collaborations.map(link => link.goal_id));
       const challenges = challengeSummaries({
         challenges: openChallenges, goals: proposed, collaborations: records.collaborations, userId,
@@ -736,9 +854,63 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       for (const goal of goals) {
         goal.addresses = addressedChallenges(goal.id, records.collaborations, openChallenges);
       }
+
+      // Rewards on these proposals, each with its public tally: how many
+      // qualifying observations each person who accepted it has made, and what
+      // that has earned. Counted here, not stored.
+      const rewardedIds = [...new Set(records.rewards.map(r => r.action_id))];
+      const { rows: onRewarded } = rewardedIds.length === 0 ? { rows: [] } : await client.query(
+        `SELECT sl.entity_id AS action_id, s.captured_by::text AS person, s.created_at, s.state_text AS text,
+                EXISTS (SELECT 1 FROM state_photos sp WHERE sp.state_id = s.id) AS has_photo,
+                (SELECT sp.content FROM state_perspectives sp
+                  WHERE sp.state_id = s.id AND sp.perspective_type = 'OFFERS' AND sp.status = 'SUCCESS'
+                  ORDER BY sp.created_at DESC LIMIT 1) AS reading
+           FROM state_links sl JOIN states s ON s.id = sl.state_id
+          WHERE sl.entity_type = 'action' AND sl.entity_id = ANY($1::uuid[])
+            AND COALESCE(s.state_text, '') NOT LIKE $2`,
+        [rewardedIds, `${STATE_PREFIX}%`]
+      );
+      const earnerNames = await loadNames(client, [...records.acceptances, ...records.agreements].map(a => a.person));
+      const agreed = records.agreements.some(a => a.person === String(userId));
+      const read = r => {
+        const tally = offerTally(r, records.agreements, onRewarded, earnerNames);
+        return {
+          ask: r.prompt, accepted_by_me: agreed, tally, my_latest: latestReading(r, onRewarded, userId),
+          my_reading: awaitingReading(r, records.agreements, onRewarded, userId),
+          budget_php: r.budget_php, spent_php: tally.reduce((sum, person) => sum + person.php, 0),
+          // Its owner can still change it while nothing has been read against it.
+          editable: !onRewarded.some(o => (o.reading?.offers || []).some(e => e.offer_id === r.id)),
+        };
+      };
+      const rewardsFor = actionId => records.rewards.filter(r => r.action_id === actionId).map(r => ({
+        id: r.id, php: r.php, cap_php_per_person: r.cap_php_per_person, payer_name: r.payer_name, terms: r.terms,
+        owner: r.owner, closed: !!r.closed_at, action_id: r.action_id,
+        // An offer with a prompt is read by AI and agreed to once for all such offers.
+        ...(r.prompt
+          ? read(r)
+          : {
+            accepted_by_me: records.acceptances.some(a => a.reward_id === r.id && a.person === String(userId)),
+            tally: rewardTally(r, records.acceptances, onRewarded, earnerNames),
+          }),
+      }));
+      for (const goal of goals) goal.rewards = rewardsFor(goal.id);
+      for (const challenge of challenges) {
+        for (const collaboration of challenge.collaborations) collaboration.rewards = rewardsFor(collaboration.id);
+      }
+      // Every open offer, whether or not its action sits under a situation, so
+      // one made directly under "Offers" reaches everyone.
+      const offers = proposed
+        .filter(a => orgIds.includes(a.organization_id) && JOINABLE_STATUSES.includes(a.status))
+        .filter((a, i, all) => all.findIndex(other => other.id === a.id) === i)
+        .map(a => ({
+          id: a.id, title: proposalText(a), created_by: a.created_by,
+          situation: addressedChallenges(a.id, records.collaborations, openChallenges)[0]?.text ?? null,
+          rewards: rewardsFor(a.id).filter(r => !r.closed),
+        }))
+        .filter(o => o.rewards.length > 0);
       // The people of these orgs and of the viewer's own orgs: who a challenge can be assigned to.
       const members = await loadMembers(client, [...new Set([...orgIds, ...memberOrgIds])]);
-      return { statusCode: 200, data: { goals, ready, challenges, members, has_given_input: hasGivenInput } };
+      return { statusCode: 200, data: { goals, ready, challenges, members, offers } };
     }
 
     throw new HttpError(404, 'Not found');

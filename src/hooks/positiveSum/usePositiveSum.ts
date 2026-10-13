@@ -10,6 +10,11 @@ import type {
   PositiveSumItem,
 } from '@/types/positiveSum';
 
+// Whether any offer is still reading one of the viewer's observations.
+export function awaitsReading(data?: MyPositiveSum): boolean {
+  return (data?.offers ?? []).some(offer => offer.rewards.some(reward => !!reward.my_reading?.waiting));
+}
+
 /**
  * My desired states (with suggested options) and what's ready for me,
  * in one org.
@@ -24,6 +29,8 @@ export function useMyPositiveSum(orgId: string | undefined) {
     // trusting the saved copy for a day (the app's default); the saved copy
     // still shows first.
     staleTime: 0,
+    // While one of the person's observations is being read, look again every few seconds.
+    refetchInterval: query => (awaitsReading(query.state.data) ? 5000 : false),
   });
 }
 
@@ -82,6 +89,33 @@ export const useEditChallenge = () =>
 // server tells a challenge from a desired state or an option.
 export const useVoteForChallenge = () =>
   usePositiveSumMutation((challengeId: string) => apiService.post(`/positive-sum/options/${challengeId}/join`, {}));
+
+// Rewards on a proposed collaboration: its author attaches one (paid by the
+// organization they are working as), a person accepts its terms, its owner
+// closes it. What people have earned comes back from the server.
+export const useAddReward = () =>
+  usePositiveSumMutation(({ organizationId, actionId, php, capPerPerson, ask, budget }: {
+    organizationId: string; actionId: string; php: number; capPerPerson: number | null;
+    ask?: string; budget?: number | null;
+  }) => apiService.post('/positive-sum/goals', {
+    organization_id: organizationId, reward: { action_id: actionId, php, cap_php_per_person: capPerPerson, ask, budget_php: budget },
+  }));
+
+export const useEditReward = () =>
+  usePositiveSumMutation(({ organizationId, rewardId, php, capPerPerson, ask, budget }: {
+    organizationId: string; rewardId: string; php: number; capPerPerson: number | null; ask: string; budget?: number | null;
+  }) => apiService.post('/positive-sum/goals', {
+    organization_id: organizationId,
+    reward_edit: { reward_id: rewardId, php, cap_php_per_person: capPerPerson, budget_php: budget, ask },
+  }));
+
+export const useAcceptReward = () =>
+  usePositiveSumMutation(({ organizationId, rewardId }: { organizationId: string; rewardId: string }) =>
+    apiService.post('/positive-sum/goals', { organization_id: organizationId, reward_accept: { reward_id: rewardId } }));
+
+export const useCloseReward = () =>
+  usePositiveSumMutation(({ organizationId, rewardId }: { organizationId: string; rewardId: string }) =>
+    apiService.post('/positive-sum/goals', { organization_id: organizationId, reward_close: { reward_id: rewardId } }));
 
 // Say which challenge an existing desired state addresses, or take that back.
 export const useLinkChallenge = () =>

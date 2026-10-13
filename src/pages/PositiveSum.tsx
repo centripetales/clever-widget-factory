@@ -1,13 +1,12 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMyPositiveSum } from '@/hooks/positiveSum/usePositiveSum';
 import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
-import { GoalForm } from '@/components/positiveSum/GoalForm';
-import { ConversationPanel } from '@/components/positiveSum/ConversationPanel';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { useOrganization } from '@/hooks/useOrganization';
 import { ChallengesSection } from '@/components/positiveSum/ChallengesSection';
+import { Offers } from '@/components/positiveSum/Offers';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
 
 export default function PositiveSum() {
@@ -15,6 +14,8 @@ export default function PositiveSum() {
   const { orgId } = useParams<{ orgId: string }>();
   // Positive Sum works within one org at a time: the one this page is for.
   const org = usePositiveSumOrgs().find(o => o.id === orgId);
+  // On a refresh the person's orgs arrive after the page: wait for them before saying it isn't theirs.
+  const { organizationsLoading } = useOrganization();
   const { data, isLoading } = useMyPositiveSum(org?.id);
 
   return (
@@ -32,7 +33,7 @@ export default function PositiveSum() {
         <h1 className="text-2xl font-bold">Positive Sum</h1>
       </div>
 
-      {!org && (
+      {!org && !organizationsLoading && (
         <Card>
           <CardContent className="pt-4 text-sm text-muted-foreground">
             Positive Sum isn't turned on for this organization, or you're not a member of it.
@@ -40,25 +41,7 @@ export default function PositiveSum() {
         </Card>
       )}
 
-      {org && (
-        <Card>
-          <CardContent className="pt-6 space-y-4">
-            <ConversationPanel org={org} />
-            <Collapsible>
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-1 px-0 text-muted-foreground">
-                  Or type it yourself <ChevronDown className="h-4 w-4" />
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
-                <GoalForm organizationId={org.id} />
-              </CollapsibleContent>
-            </Collapsible>
-          </CardContent>
-        </Card>
-      )}
-
-      {isLoading && (
+      {(isLoading || (!org && organizationsLoading)) && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading...
         </div>
@@ -66,8 +49,8 @@ export default function PositiveSum() {
 
       {data && (
         <>
-          <ChallengesSection organizationId={org!.id} challenges={data.challenges ?? []} goals={data.goals} members={data.members}
-            hasGivenInput={data.has_given_input !== false} />
+          <Offers organizationId={org!.id} offers={data.offers} challenges={data.challenges ?? []} goals={data.goals ?? []} />
+          <ChallengesSection organizationId={org!.id} challenges={data.challenges ?? []} goals={data.goals} members={data.members} />
         </>
       )}
     </div>

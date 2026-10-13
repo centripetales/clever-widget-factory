@@ -40,6 +40,7 @@ export interface TakingPart {
 export interface MyGoal extends PositiveSumItem {
   options: SuggestedOption[];
   participants?: string[]; // who joined
+  rewards?: OfferedReward[];
   taking_part?: TakingPart[];
   // The open challenges this is linked to as a collaboration, and who linked each.
   addresses?: { id: string; text: string; linked_by: string }[];
@@ -48,6 +49,34 @@ export interface MyGoal extends PositiveSumItem {
 export interface ReadyItem extends PositiveSumItem {
   role: 'recipient' | 'implementor';
   value?: number;
+}
+
+// A reward someone attached to an action. Its tally is public: what each person
+// has shared and earned. One with a prompt (`ask`: what the payer wants and how
+// they value it, in their words) is read by AI: each observation gets a reading
+// with an amount and what would be worth more, and `php` /
+// `cap_php_per_person` / `budget_php` are the most it pays for one observation,
+// per person and in total. One without pays `php` for any photo with a description.
+export interface OfferedReward {
+  id: string;
+  action_id?: string;
+  ask?: string;
+  budget_php?: number | null;
+  spent_php?: number;
+  // Whether its owner can still change it: nothing has been read against it yet.
+  editable?: boolean;
+  // The viewer's observations for it that have no reading yet: on their way, or stuck.
+  my_reading?: { waiting: number; unread: number };
+  // What the reading said about the viewer's latest observation for it.
+  my_latest?: { shows: string; counts: boolean; php: number; feedback: string } | null;
+  php: number;
+  cap_php_per_person: number | null;
+  payer_name: string;
+  terms: string; // what a person is told before accepting
+  owner: string;
+  closed: boolean;
+  accepted_by_me: boolean;
+  tally: { id: string; name: string | null; count: number; php: number }[];
 }
 
 // A collaboration someone proposed: an action whose title says what to do and
@@ -59,6 +88,7 @@ export interface ProposedCollaboration {
   created_by: string;
   created_by_name: string | null;
   participants: string[]; // who joined
+  rewards?: OfferedReward[];
 }
 
 // Something a person is running into, in their words. People vote for the
@@ -76,13 +106,22 @@ export interface Challenge {
   collaborations: ProposedCollaboration[];
 }
 
+// A proposed collaboration with at least one open reward on it.
+export interface Offer {
+  id: string;
+  title: string;
+  created_by?: string;
+  situation?: string | null; // what it is proposed for, when it sits under something
+  rewards: OfferedReward[];
+}
+
 export interface MyPositiveSum {
   goals: MyGoal[];
+  // Every open offer in the org. Missing in a copy saved before it existed.
+  offers?: Offer[];
   ready: ReadyItem[];
-  // Open entries under "Where we could improve": everyone's once the person has
-  // saved a conversation, only their own before that.
+  // Open entries under "Where we could improve".
   challenges?: Challenge[];
-  has_given_input?: boolean;
   // The people of this org and of the viewer's own orgs, for assigning a challenge.
   members?: { id: string; name: string | null }[];
 }

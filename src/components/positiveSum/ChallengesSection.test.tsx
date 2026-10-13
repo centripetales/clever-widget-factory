@@ -16,6 +16,10 @@ vi.mock('@/hooks/positiveSum/usePositiveSum', () => ({
   useEditChallenge: () => editChallenge,
   useTakePart: () => ({ mutate: vi.fn(), isPending: false }),
   useLinkChallenge: () => ({ mutate: vi.fn(), isPending: false }),
+  useAddReward: () => ({ mutate: vi.fn(), isPending: false }),
+  useEditReward: () => ({ mutate: vi.fn(), isPending: false }),
+  useAcceptReward: () => ({ mutate: vi.fn(), isPending: false }),
+  useCloseReward: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
@@ -39,17 +43,6 @@ describe('ChallengesSection', () => {
 
     expect(createChallenge.mutate).toHaveBeenCalledWith(
       { organizationId: 'ps', challenge: 'Copra buyers are unreliable' }, expect.anything());
-  });
-
-  it('tells a person who has not given their input yet why the list is short', () => {
-    const { rerender } = render(<ChallengesSection organizationId="ps" challenges={[]} hasGivenInput={false} />);
-    expect(screen.getByText(/once you've shared your own view in the conversation above/)).toBeInTheDocument();
-    expect(screen.queryByText('Nothing here yet.')).not.toBeInTheDocument();
-    // They can still add their own.
-    expect(screen.getByLabelText('Describe where we could improve')).toBeInTheDocument();
-
-    rerender(<ChallengesSection organizationId="ps" challenges={[]} />);
-    expect(screen.queryByText(/once you've shared your own view/)).not.toBeInTheDocument();
   });
 
   it('shows votes and lets a person vote once', () => {

@@ -33,6 +33,12 @@ async function stateQualifiesForPerspectives(client, stateId, knownLinks) {
   return linksRes.rows.length > 0;
 }
 
+// Positive Sum keeps its own records (offers, agreements, approvals) as states
+// whose text is JSON starting with this. They are written only by its own
+// service: an offer people agreed to must not be rewritten or removed through
+// the general observation routes.
+const isPositiveSumRecord = text => typeof text === 'string' && text.startsWith('{"type":"positive_sum.');
+
 // Entity types that can be share-granted to another org via POST /shares
 // (lambda/core/index.js). Independent of QUALIFYING_LINK_TYPES above — a plain
 // tool-linked observation with no action attached doesn't qualify for that gate,
@@ -874,7 +880,7 @@ async function updateState(event, id, authContext, headers) {
 
     // Check permissions before update
     const permissionCheckSql = `
-      SELECT captured_by, organization_id
+      SELECT captured_by, organization_id, state_text
       FROM states
       WHERE id = ${formatSqlValue(id)}::uuid
     `;
@@ -886,6 +892,11 @@ async function updateState(event, id, authContext, headers) {
     }
     
     const state = permissionResult.rows[0];
+
+    if (isPositiveSumRecord(state.state_text)) {
+      await client.query('ROLLBACK');
+      return errorResponse(403, 'This record cannot be edited here', headers);
+    }
     
     // Check if user is creator or has admin permission
     const isCreator = state.captured_by === userId;
@@ -1096,6 +1107,22 @@ async function deleteState(id, authContext, headers) {
   const client = await getDbClient();
   
   try {
+    // Same rule as editing: its creator, or someone who may write all of the org's data.
+    const existing = await client.query(
+      'SELECT captured_by, state_text FROM states WHERE id = $1::uuid AND organization_id = $2::uuid',
+      [id, organizationId]
+    );
+    if (existing.rows.length === 0) {
+      return errorResponse(404, 'State not found', headers);
+    }
+    if (isPositiveSumRecord(existing.rows[0].state_text)) {
+      return errorResponse(403, 'This record cannot be deleted here', headers);
+    }
+    const isCreator = String(existing.rows[0].captured_by) === String(authContext.user_id);
+    if (!isCreator && !authContext.permissions?.includes('data:write:all')) {
+      return errorResponse(403, 'You do not have permission to delete this state', headers);
+    }
+
     const sql = `
       DELETE FROM states
       WHERE id = ${formatSqlValue(id)}::uuid AND organization_id = ${formatSqlValue(organizationId)}::uuid

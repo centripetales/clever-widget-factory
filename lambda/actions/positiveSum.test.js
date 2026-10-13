@@ -9,9 +9,14 @@ const {
   isProposal,
   isSituation,
   proposalText,
-  visibleSituations,
   challengeSummaries,
   addressedChallenges,
+  rewardTerms,
+  readReward,
+  rewardTally,
+  offerTally,
+  awaitingReading,
+  latestReading,
   takingPart,
   hasFreeCapacity,
   valueForOthers,
@@ -259,19 +264,103 @@ describe('proposed collaborations', () => {
   });
 });
 
-describe('visibleSituations', () => {
-  const all = [
-    { id: 'theft', assigned_to: 'stefan', created_by: 'stefan' },
-    { id: 'buyers', assigned_to: null, created_by: 'may' },
-    { id: 'road', assigned_to: 'may', created_by: 'stefan' },
+describe('offered rewards', () => {
+  const reward = { id: 'r1', action_id: 'photos', php: 5, cap_php_per_person: 500, closed_at: null };
+  const acceptances = [
+    { reward_id: 'r1', person: 'may', accepted_at: '2026-10-12T08:00:00Z' },
+    { reward_id: 'r1', person: 'lester', accepted_at: '2026-10-12T09:00:00Z' },
+    { reward_id: 'other', person: 'chem', accepted_at: '2026-10-12T09:00:00Z' },
   ];
+  const obs = (person, at, overrides = {}) =>
+    ({ action_id: 'photos', person, created_at: `2026-10-12T${at}:00Z`, text: 'Where we get water', has_photo: true, ...overrides });
 
-  it('shows only a person\'s own entries until they have given their input', () => {
-    expect(visibleSituations(all, 'may', false).map(c => c.id)).toEqual(['buyers', 'road']);
-    expect(visibleSituations(all, 'lester', false)).toEqual([]);
+  it('says what is paid, who sees it and how it may be used', () => {
+    const terms = rewardTerms({ php: 5, cap_php_per_person: 500, payer_name: 'Stargazer Farm' });
+    expect(terms).toContain('Stargazer Farm pays ₱5 for each photo you share here with a description, up to ₱500 per person.');
+    expect(terms).toContain('Only you and Stargazer Farm can see what you share.');
+    expect(terms).toContain('research and for activities that benefit the group, such as grant proposals');
+    expect(terms).toContain('Everyone can see how many each person has shared.');
+    expect(rewardTerms({ php: 20, cap_php_per_person: null, payer_name: 'X' })).not.toContain('up to');
   });
 
-  it('shows everyone\'s once they have', () => {
-    expect(visibleSituations(all, 'lester', true)).toHaveLength(3);
+  it('counts each person\'s observations with a photo and their own words, made after they accepted', () => {
+    const tally = rewardTally(reward, acceptances, [
+      obs('may', '08:30'), obs('may', '10:00'),
+      obs('may', '07:00'), // before she accepted
+      obs('may', '11:00', { has_photo: false }), // the "Joined" note, or any text-only observation
+      obs('may', '11:30', { text: '  ' }), // a photo with nothing written
+      obs('may', '12:00', { action_id: 'elsewhere' }),
+      obs('lester', '09:30'),
+      obs('stefan', '09:30'), // never accepted
+    ], { may: 'Mae' });
+    expect(tally).toEqual([
+      { id: 'may', name: 'Mae', count: 2, php: 10 },
+      { id: 'lester', name: null, count: 1, php: 5 },
+    ]);
+  });
+
+  it('stops at the cap per person, and stops counting when the reward closes', () => {
+    const many = Array.from({ length: 120 }, () => obs('may', '10:00'));
+    expect(rewardTally(reward, acceptances, many, {})[0]).toMatchObject({ id: 'may', count: 120, php: 500 });
+
+    const closed = { ...reward, closed_at: '2026-10-12T09:45:00Z' };
+    expect(rewardTally(closed, acceptances, [obs('may', '08:30'), obs('may', '10:00')], {})[0]).toMatchObject({ count: 1, php: 5 });
+  });
+
+  it('lists people who accepted but have not shared anything yet', () => {
+    expect(rewardTally(reward, acceptances, [], {})).toEqual([
+      { id: 'lester', name: null, count: 0, php: 0 },
+      { id: 'may', name: null, count: 0, php: 0 },
+    ]);
+  });
+});
+
+describe('offerTally', () => {
+  const offer = { id: 'o1', action_id: 'a1', php: 5, cap_php_per_person: 12, closed_at: null };
+  const agreements = [{ person: 'may', agreed_at: '2026-10-12T00:00:00Z' }, { person: 'lester', agreed_at: '2026-10-12T00:00:00Z' }];
+  const read = (counts, php) => ({ shows: 'x', offers: [{ offer_id: 'o1', counts, php, feedback: 'f' }] });
+  const obs = (person, created_at, reading) => ({ action_id: 'a1', person, created_at, reading });
+
+  it('sums what the readings say counted; one not read yet earns nothing so far', () => {
+    const tally = offerTally(offer, agreements, [
+      obs('may', '2026-10-12T01:00:00Z', read(true, 5)),
+      obs('may', '2026-10-12T02:00:00Z', read(false, 0)),
+      obs('may', '2026-10-12T03:00:00Z', null),
+      obs('may', '2026-10-11T03:00:00Z', read(true, 5)), // before agreeing
+    ], { may: 'May' });
+    expect(tally).toEqual([{ id: 'may', name: 'May', count: 1, php: 5 }]);
+  });
+
+  it('stops at the cap and leaves out people with nothing counted', () => {
+    const many = [1, 2, 3, 4].map(h => obs('may', `2026-10-12T0${h}:00:00Z`, read(true, 5)));
+    expect(offerTally(offer, agreements, many, {})).toEqual([{ id: 'may', name: null, count: 4, php: 12 }]);
+  });
+
+  it('tells a person how many of theirs are waiting for a reading, and how many have waited too long', () => {
+    const observations = [
+      obs('may', '2026-10-12T05:55:00Z', null), obs('may', '2026-10-12T03:00:00Z', null),
+      obs('may', '2026-10-12T04:00:00Z', read(true, 5)), obs('lester', '2026-10-12T05:58:00Z', null),
+    ];
+    expect(awaitingReading(offer, agreements, observations, 'may', new Date('2026-10-12T06:00:00Z'))).toEqual({ waiting: 1, unread: 1 });
+    expect(awaitingReading(offer, agreements, observations, 'nobody', new Date('2026-10-12T06:00:00Z'))).toEqual({ waiting: 0, unread: 0 });
+  });
+
+  it('gives a person the reading of their latest observation for the offer', () => {
+    const observations = [obs('may', '2026-10-12T01:00:00Z', read(true, 5)), obs('may', '2026-10-12T02:00:00Z', read(false, 0)), obs('lester', '2026-10-12T03:00:00Z', read(true, 5))];
+    expect(latestReading(offer, observations, 'may')).toEqual({ shows: 'x', counts: false, php: 0, feedback: 'f' });
+    expect(latestReading(offer, [], 'may')).toBeNull();
+  });
+});
+
+describe('readReward', () => {
+  it('reads an offer with an evaluator and limits', () => {
+    const r = readReward({ evaluator: { kind: 'prompt', prompt: ' Practices ' }, max_php_per_observation: 20, max_php_per_person: 400, budget_php: 5000 });
+    expect([r.prompt, r.php, r.cap_php_per_person, r.budget_php]).toEqual(['Practices', 20, 400, 5000]);
+  });
+
+  it('reads one made before those existed, and one that pays for any photo with a description', () => {
+    expect(readReward({ condition: 'Practices', php: 5, cap_php_per_person: 500 }).prompt).toBe('Practices');
+    const fixed = readReward({ condition: null, php: 5, cap_php_per_person: 500 });
+    expect([fixed.prompt, fixed.php, fixed.cap_php_per_person, fixed.budget_php]).toEqual([null, 5, 500, null]);
   });
 });

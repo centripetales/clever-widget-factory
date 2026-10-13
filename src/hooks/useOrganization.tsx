@@ -35,6 +35,8 @@ interface OrganizationContextType {
   refreshOrganization: () => Promise<void>;
   /** All organizations the user can access */
   accessibleOrganizations: Organization[];
+  /** True until accessibleOrganizations has been fetched; it is empty before that */
+  organizationsLoading: boolean;
   /** Switch the active organization */
   switchOrganization: (orgId: string) => void;
   /** Whether the user has multiple orgs and can switch */
@@ -97,6 +99,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         setOrgsLoaded(true);
       } catch (error) {
         console.error('Failed to fetch accessible organizations:', error);
+        setOrgsLoaded(true);
       }
     };
 
@@ -220,6 +223,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
       loading: isLoading,
       refreshOrganization,
       accessibleOrganizations,
+      organizationsLoading: isLoading || (membershipCount > 0 && !orgsLoaded),
       switchOrganization,
       canSwitchOrganization,
     }}>

@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { TakePart } from './TakePart';
 import { AddressesChallenge } from './AddressesChallenge';
+import { AddReward, RewardOffer } from './RewardOffer';
 
 function NameChip({ name }: { name: string }) {
   return (
@@ -38,7 +39,8 @@ function current(collaboration: ProposedCollaboration): ProposedCollaboration {
   return { ...collaboration, title: saved.title ?? saved.desired_state ?? '', participants: saved.participants ?? [] };
 }
 
-function CollaborationRow({ collaboration: given, mine, linkTo, userId, onDelete, onEdit }: {
+function CollaborationRow({ collaboration: given, mine, linkTo, userId, organizationId, onDelete, onEdit }: {
+  organizationId: string;
   collaboration: ProposedCollaboration;
   mine?: MyGoal;
   onEdit: (id: string, text: string) => Promise<boolean>; // its author rewords it
@@ -128,6 +130,12 @@ function CollaborationRow({ collaboration: given, mine, linkTo, userId, onDelete
         {open && <TakePart goalId={collaboration.id} joined={!!userId && collaboration.participants.includes(userId)} />}
       </div>
 
+      {/* Rewards on it: everyone sees what is offered and the tally; its author can add one. */}
+      {(collaboration.rewards ?? mine?.rewards ?? []).map(reward => (
+        <RewardOffer key={reward.id} reward={reward} organizationId={organizationId} userId={userId} />
+      ))}
+      {mine && open && <AddReward organizationId={organizationId} actionId={collaboration.id} />}
+
       {!!mine?.taking_part?.length && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted-foreground">Joined</p>
@@ -153,10 +161,8 @@ function CollaborationRow({ collaboration: given, mine, linkTo, userId, onDelete
 // extras on a row, and the ones not linked to any challenge yet are listed last.
 // `members` are the people of the org and of the viewer's own orgs, for
 // assigning a challenge when editing it (its voters can be assigned too).
-export function ChallengesSection({ organizationId, challenges, goals = [], members = [], hasGivenInput = true }: {
+export function ChallengesSection({ organizationId, challenges, goals = [], members = [] }: {
   organizationId: string;
-  // Other people's entries are held back until the person has saved a conversation.
-  hasGivenInput?: boolean;
   challenges: Challenge[];
   goals?: MyGoal[];
   members?: { id: string; name: string | null }[];
@@ -241,12 +247,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
         </div>
       </div>
 
-      {!hasGivenInput && (
-        <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          What other people have said appears here once you've shared your own view in the conversation above.
-        </p>
-      )}
-      {hasGivenInput && challenges.length === 0 && <p className="text-sm text-muted-foreground">Nothing here yet.</p>}
+      {challenges.length === 0 && <p className="text-sm text-muted-foreground">Nothing here yet.</p>}
 
       {challenges.map(challenge => {
         const mine = challenge.owner === user?.userId;
@@ -348,6 +349,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                     collaboration={collaboration}
                     mine={goals.find(g => g.id === collaboration.id)}
                     userId={user?.userId}
+                    organizationId={organizationId}
                     onDelete={deleteItem}
                     onEdit={editCollaboration}
                   />
@@ -397,6 +399,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                 mine={goal}
                 linkTo={challenges}
                 userId={user?.userId}
+                organizationId={organizationId}
                 onDelete={deleteItem}
                 onEdit={editCollaboration}
               />

@@ -74,6 +74,9 @@ replaced by capabilities + open options), *board*/*post*.
 ## 2. Decided, to build next
 
 ### 2.1 Positive Sum page as a conversation (branch `positive-sum-conversation`)
+> Removed 2026-10-12 (see §2.7): the page no longer has a conversation prompt.
+> Kept for the record of what was built.
+
 - The page's main path is a **copyable prompt** for the person's own AI
   (Gemini, ChatGPT, Claude). The AI greets ("Hello, or should I say Maayong aga/hapon/gab-i?",
   by the hour), continues in the language they answer in, explains the
@@ -321,22 +324,175 @@ Open:
   they can be linked. The separate Opportunities, "Ready for you" and "my
   proposed collaborations" sections, and "Plan with Maxwell", are gone
   from the page (2026-10-11).
-- **The conversation gets to know the person; it does not add proposals**
-  (2026-10-12). It says every question is optional and that answers are
-  used to help set up win-win interactions, then asks about a typical day,
-  what people come to them for (both saved to their profile, in their
-  words), and where they think we could improve (saved as their own
-  entries). It asks for their own view: nothing other people said is read
-  out, and no examples are suggested.
-- **Other people's entries appear only after a person has given their
-  input**, meaning they have saved a conversation. Before that the list
-  shows only their own, enforced on the server, so what others said does
-  not shape theirs. The same thing may then be entered by several people
-  in different words; that is accepted in exchange for unprompted input.
+- **The conversation prompt is removed** (2026-10-12), along with the
+  typed form beside it and the rule that held back other people's entries
+  until a person had saved a conversation. What people do tells more than
+  what they say: the page offers money for observations (§2.8) instead of
+  asking people to talk. Everyone sees every entry.
 - No new routes: challenges are created through `POST /positive-sum/goals`
   (`{ challenge }`, or `{ challenge_id }` for a collaboration), voting and
   taking part go through `POST /positive-sum/options/{id}/join`, and the
   list comes back from `GET /positive-sum/mine`.
+
+### 2.8 Offered rewards on a shared action (decided 2026-10-12; steps 1–3 built)
+RL framing: the network is one shared environment. Someone changes it by
+attaching a **reward** to an action; the action stays shared, and what is
+individual is the reward each person earns by taking it. An offered reward
+is set in advance by its owner. What actually moved (the Rewards section,
+expenses) is separate; a payout is an expense. A price on a good is the same
+structure: a standing reward on a capability.
+
+First use: under "Evidence of existing state and capabilities is lacking",
+₱5 for each observation with a photo and a description. It is payment now
+for expected future impact; Stargazer Farm seeds it. No rules on what
+people share.
+
+- **Reward:** attached to a proposed collaboration by its author; paid by
+  the organization they are working as (Stargazer Farm); earned by a
+  **person**. Conditions the owner sets: the amount, requires a photo,
+  requires a description, observations private, and a **cap per person**
+  (₱500 for the first one). It can be closed, after which new observations
+  stop counting. **Terms are fixed once set**: to change them the owner
+  closes the reward and adds another.
+- **Earned is derived, not stored.** A qualifying observation is the reward
+  event; what a person has earned is counted from their observations under
+  the reward's terms. Payouts are real expenses; owed is the difference.
+  No second ledger, so the figures cannot drift from the evidence, and
+  another party can **layer** its own reward on the same action without
+  touching the first. A ledger becomes worth having for network credit.
+- **Agreement is per reward**, since each reward's owner sees what it pays
+  for: a person joins the action once and accepts each reward separately.
+- **Content conditions** (e.g. ₱20 for showing how cogon is dealt with):
+  the person links an observation to the action, a perspective reads it
+  against the owner's condition and says what it saw, and the owner can
+  overrule it. One action is one thing to do; rewards on it are the
+  parties paying for that thing.
+- **Joining is the agreement.** Join shows who sees what is shared and how
+  it may be used, and records that the person agreed and when. Wording is
+  general on purpose: research and activities that benefit the group, such
+  as grant proposals, including with partners outside the Philippines.
+  Only observations added after joining count.
+- **Private observations on a shared action:** shown only to the person
+  who made them and to the paying organization (Stargazer Farm, which
+  makes the payouts). Other organizations never see another org's
+  observations; this condition adds the same between colleagues.
+- **Tallies are public:** everyone sees each person's count and amount.
+- **Payment is digital, for traceability.** Each person sets how they are
+  paid on their profile (method and account, e.g. a GCash number), seen
+  only by whoever pays. A payout records its reference number; the expense
+  in Finances carries the same one. Earned amounts wait until the person
+  has set a payment method.
+- **Findings are shared back** with everyone, without names: counts first,
+  AI analysis once there is data to write a prompt against.
+- Not in this: the US LLC as funder or owner (too much paperwork for the
+  size of the experiment; revisit if the data proves valuable), network
+  credit, limits on content, automatic payouts.
+- Known limit: photo files open for anyone who has their web address.
+  "Private" means not shown to others in the app.
+
+Build order: (1) the reward on an action and its display; (2) joining
+with the agreement; (3) the tally, public; (4) payment method, payouts and
+closing; (5) private listing of observations, Stargazer's view of all of
+them, and findings.
+
+### 2.9 Offers, and the reading that pays them (decided 2026-10-12; built, not yet deployed or tried on real observations)
+RL framing: an **offer** is a standing **policy** of the payer ("when an
+observation shows X, I pay Y"). Seen from the person acting, another
+agent's paying policy is part of the environment, i.e. their reward
+function. No separate environment concept is needed: the Positive Sum
+network and its shared record are the environment. Policies layer
+(organic farming; plant at the start of dry season; an offer) and project
+onto an action at the time it is done; offers layer the same way, several
+on one action, each with its own payer, condition and cap.
+
+- **The page leads with Offers** (2026-10-12): making an offer is the more
+  realistic path when working with farmers than asking where things could
+  improve. The section lists every open offer in the organization and has
+  "Make an offer": what you want, the price for one observation, the most
+  one person can earn, and how an observation is valued. What you want is
+  saved as a proposed collaboration (an action) with the reward on it, not
+  placed under anything in "Where we could improve".
+- **An offer carries its ask**: what the payer is looking for, in plain
+  words with examples, and what counts as a repeat. The ask can be reworded
+  as the payer learns; price and cap stay fixed once someone has agreed.
+- **Two offers to start with** (2026-10-12), each simple; several simple
+  offers are preferred over one with many conditions: (1) ₱5 for an
+  observation, counted by rule, no reading; (2) farming practices, where
+  the AI decides what an observation is worth by how much it adds to what
+  that person already shared, up to ₱400 per person. A third, separate
+  offer pays for what is new to the whole network: the most valuable
+  kind, since that is how the network comes to know more than any one
+  member (a "super agent"). Which of the two an offer pays for is said in
+  its prompt. The reading works from the person's words only (2026-10-12):
+  photos are not sent to the model, as with the other perspectives,
+  because image analysis was costly and brought bad data into the record.
+  So a different place counts only when the words say so. Offers about
+  applying a practice or crop prices come later, as their own offers.
+- **An offer is a prompt plus hard limits** (2026-10-12). Its record holds
+  an `evaluator` (`{ kind: 'prompt', prompt }`: what the payer wants and
+  how they value it, in their own words, shown in full to everyone) and
+  the limits the code enforces: `max_php_per_observation`,
+  `max_php_per_person` and `budget_php` (the most the offer pays in total).
+  All the logic is in the prompt, including what "new" is measured against
+  (the reading is always given this person's earlier notes and other
+  people's). The limits are data, not prose, so what a payer can lose never
+  rests on a model reading a sentence correctly. Value is a matter of
+  degree, not a yes-or-no rule.
+- **The evaluator can change kind later.** Rewards are expected to need
+  code and several queries eventually, which is what a skill is (a
+  description, instructions, and tools it can call); a reward function is a
+  function. The path: prompt only (built) → prompt with fixed queries the
+  code runs for it (counts, lookups) → tools it chooses → code. Only the
+  prompt kind exists; nothing else about an offer depends on the kind.
+- **One reading per observation**: an `OFFERS` perspective written by the
+  worker that already writes claim / significance / entropy. For each offer
+  it records `php` and `feedback`. The model fills `shows`, an amount and
+  `feedback`; the code rounds the amount to the peso and holds it to the
+  three limits, going by earlier readings. The tally is the sum over these
+  readings.
+- **A reward with no prompt** pays its amount for any photo with a
+  description, by rule and without a reading (the first ₱5 offer).
+- **Default to trust**: an observation counts unless it clearly shows
+  nothing the offer asks for, or repeats what the person already shared.
+  Nothing is credited until its reading arrives: the person sees that it is being read, never an amount that later shrinks. The reading describes the
+  observation, never the person. The payer can overturn a reading.
+- **The contributor sees the reading**: it is the basis for what they are
+  paid and points them to what would earn more.
+- **Linking is done for them**: where a reading counts, the worker links
+  the observation to that offer's action. Nobody picks where it goes.
+- **Which observations are read**: one made through Positive Sum is shared
+  by default and is read against all open offers. Nothing else a person
+  records is scanned. "Share with Positive Sum" for an observation made
+  elsewhere is put off: people are expected to go through Positive Sum.
+- **How it is built**: an offer is a reward with a prompt (set under "Make
+  an offer" or "Add a reward"). "Share an observation" on the offer opens the
+  usual add-observation page linked to the offer's action; being linked to
+  an action that carries an open reward is what "made through Positive
+  Sum" means. `lambda/rsp-worker/offers.js` then reads it against every
+  open offer with a prompt in that network and writes the `OFFERS`
+  perspective. It works from the person's words only (2026-10-12): photos
+  are not sent, as with the other perspectives, because image analysis was
+  costly and brought bad data into the record. Positive Sum shows the
+  person the reading of their latest observation on each offer.
+- **One agreement**: sharing through Positive Sum is the agreement to every
+  offer that is read. A person agrees once ("Earn this" on any such offer),
+  recorded as `positive_sum.sharing_agreement`; the tally counts their
+  observations from then on.
+- **Example offers**: document organic and non-organic practices (₱5, new
+  for the person); a practice new to the community (compared with
+  everyone's); applying an organic practice (shown being done; doing it
+  again on another day counts); crop prices (crop, price and unit; a repeat
+  is the same crop, place and day). Prices come out structured and can be
+  shown back as a price list.
+- **Offers already agreed to** under the photo-with-description rule keep
+  that rule.
+- **Open**: whether the payer can overturn a reading both ways or only in the
+  contributor's favour; converting offers to `policy` records (an action
+  links to one policy today, layering needs many); a way for the payer to
+  overturn a reading, the price list from price offers, and a repeat rule
+  held as data (today it is whatever the ask says in words) are not built.
+- **Unverified**: consistent practice labels from a small model; reading a
+  price off a photo; replies in Hiligaynon; cost per reading.
 
 ## 3. Direction (decided in principle, details open)
 
@@ -376,7 +532,40 @@ recency; an LLM reasons over a handful of results only at the moment of use
 (composing a policy, suggesting an option). Existing per-action capability
 assessments and learning objectives are unchanged.
 
-### 3.6 Deferred
+### 3.6 Credit for trailblazing and for replicating (idea, 2026-10-12; nothing built)
+When something one person introduced is taken up by someone else, both are
+credited: the first for blazing the trail, the second for replicating it.
+The credit is a collectible character (in the manner of an anime hero with
+a weapon and a three-second clip), held by their **organization**, not the
+person. Not an NFT: it lives in the app. It marks an event; it is not a
+score or a ranking. The trigger would come from the offers reading (§2.9),
+which already notices when an observation matches what someone else shared;
+it would also need to know who was first and that the new observation shows
+the thing being done, not only seen.
+
+Replication is put off (2026-10-12): it is about applying a new
+**capability**, and capabilities are not listed yet. What exists are past
+actions that stand for them (Stargazer Farm: make VCO, plant bananas,
+jackhammer rock). The trailblazing half, an image for what is new to the
+network, can go ahead without it.
+
+What gets replicated is a **policy** (2026-10-12): a specific practice
+such as an organic farming practice. One organization states it and does
+it; another takes that same policy onto an action of its own. That gives
+replication something to match on that already exists in the app (`policy`
+records, linked from actions), instead of comparing observations. It needs
+policies to be visible across organizations in the network, and an action
+to be able to carry more than one (see the open item in §2.9).
+
+Revised the same day: this is not a shared list of policies; it is part of
+the offer flow, and an offer's conditions are fully visible (§2.9). An
+offer can give an image to collect as well as money. The image is held by
+the **person**. It shows the **expected value** generated, the figure the
+Rewards section already works out ("Value created"). No new concept or
+score is introduced for it. For grant funding the same shape applies: a visible prompt that
+makes payouts from estimated impact and adoption.
+
+### 3.7 Deferred
 Crediting help in the value measure beyond approvals (e.g. observations on
 shared tools, amounts saved); anonymized matchmaking; experiences as a source
 of policies; lazy-loading and an extension registry; a ChatGPT/Claude
