@@ -16,7 +16,7 @@ const {
   rewardTally,
   offerTally,
   awaitingReading,
-  latestReading,
+  sharedObservations,
   takingPart,
   hasFreeCapacity,
   valueForOthers,
@@ -345,10 +345,24 @@ describe('offerTally', () => {
     expect(awaitingReading(offer, agreements, observations, 'nobody', new Date('2026-10-12T06:00:00Z'))).toEqual({ waiting: 0, unread: 0 });
   });
 
-  it('gives a person the reading of their latest observation for the offer', () => {
-    const observations = [obs('may', '2026-10-12T01:00:00Z', read(true, 5)), obs('may', '2026-10-12T02:00:00Z', read(false, 0)), obs('lester', '2026-10-12T03:00:00Z', read(true, 5))];
-    expect(latestReading(offer, observations, 'may')).toEqual({ shows: 'x', counts: false, php: 0, feedback: 'f' });
-    expect(latestReading(offer, [], 'may')).toBeNull();
+  it('counts an observation changed after its reading as waiting again, and leaves out a comment left when joining', () => {
+    const now = new Date('2026-10-12T06:00:00Z');
+    const changed = { ...obs('may', '2026-10-12T01:00:00Z', read(true, 5)), read_at: '2026-10-12T01:01:00Z', updated_at: '2026-10-12T05:58:00Z' };
+    const joined = { ...obs('may', '2026-10-12T05:59:00Z', null), queued: false };
+    expect(awaitingReading(offer, agreements, [changed, joined], 'may', now)).toEqual({ waiting: 1, unread: 0 });
+  });
+
+  it('gives a person their own rows for an offer, and its owner everyone\'s', () => {
+    const now = new Date('2026-10-12T06:00:00Z');
+    const mine = { ...obs('may', '2026-10-12T01:00:00Z', { shows: 'x', offers: [{ offer_id: 'o1', counts: true, php: 5, was_php: 3, feedback: 'f' }] }), id: 's1', text: 'Compost pit', photos: [{ url: 'p.jpg', description: 'The pit' }] };
+    const theirs = { ...obs('lester', '2026-10-12T05:58:00Z', null), id: 's2', text: 'Mulch' };
+    const owned = { ...offer, owner: 'stefan' };
+    expect(sharedObservations(owned, [mine, theirs], 'may', { may: 'May' }, now)).toEqual([{
+      id: 's1', person: 'may', name: 'May', mine: true, text: 'Compost pit', photos: [{ url: 'p.jpg', description: 'The pit' }],
+      created_at: '2026-10-12T01:00:00Z', reading: 'read', php: 5, was_php: 3, feedback: 'f',
+    }]);
+    const all = sharedObservations(owned, [mine, theirs], 'stefan', {}, now);
+    expect(all.map(o => [o.id, o.mine, o.reading, o.php])).toEqual([['s2', false, 'waiting', null], ['s1', false, 'read', 5]]);
   });
 });
 

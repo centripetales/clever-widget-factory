@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiService, getApiData } from '@/lib/apiService';
 import { offlineMutationConfig } from '@/lib/queryConfig';
+import { stateService } from '@/services/stateService';
 import { positiveSumMineQueryKey, positiveSumOpportunitiesQueryKey } from '@/lib/queryKeys';
 import type {
   MyPositiveSum,
@@ -94,19 +95,36 @@ export const useVoteForChallenge = () =>
 // organization they are working as), a person accepts its terms, its owner
 // closes it. What people have earned comes back from the server.
 export const useAddReward = () =>
-  usePositiveSumMutation(({ organizationId, actionId, php, capPerPerson, ask, budget }: {
+  usePositiveSumMutation(({ organizationId, actionId, php, capPerPerson, ask, budget, image }: {
     organizationId: string; actionId: string; php: number; capPerPerson: number | null;
-    ask?: string; budget?: number | null;
+    ask?: string; budget?: number | null; image?: string | null;
   }) => apiService.post('/positive-sum/goals', {
-    organization_id: organizationId, reward: { action_id: actionId, php, cap_php_per_person: capPerPerson, ask, budget_php: budget },
+    organization_id: organizationId, reward: { action_id: actionId, php, cap_php_per_person: capPerPerson, ask, budget_php: budget, image },
   }));
 
+// A person changes what they wrote in an observation they shared for an offer:
+// its description, or what they wrote on its photos (all of them are sent, in
+// order, since the ones left out would be removed). Saving it sends it to be
+// read again; the page then shows it as being read.
+export function useEditSharedObservation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, text, photos }: { id: string; text?: string; photos?: { url: string; description: string }[] }) =>
+      stateService.updateState(id, {
+        ...(text !== undefined ? { state_text: text } : {}),
+        ...(photos ? { photos: photos.map((p, i) => ({ photo_url: p.url, photo_description: p.description, photo_order: i })) } : {}),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: positiveSumMineQueryKey() }),
+  });
+}
+
 export const useEditReward = () =>
-  usePositiveSumMutation(({ organizationId, rewardId, php, capPerPerson, ask, budget }: {
+  usePositiveSumMutation(({ organizationId, rewardId, php, capPerPerson, ask, budget, image }: {
     organizationId: string; rewardId: string; php: number; capPerPerson: number | null; ask: string; budget?: number | null;
+    image?: string | null;
   }) => apiService.post('/positive-sum/goals', {
     organization_id: organizationId,
-    reward_edit: { reward_id: rewardId, php, cap_php_per_person: capPerPerson, budget_php: budget, ask },
+    reward_edit: { reward_id: rewardId, php, cap_php_per_person: capPerPerson, budget_php: budget, ask, image },
   }));
 
 export const useAcceptReward = () =>

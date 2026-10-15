@@ -35,13 +35,14 @@ vi.mock('@/hooks/useActionReward', () => ({
 }));
 vi.mock('@/hooks/useOrganization', () => ({ useOrganization: () => ({ organization: { id: 'stargazer' } }) }));
 const deleteState = vi.fn().mockResolvedValue({});
+const updateState = vi.fn().mockResolvedValue({});
 const observations = [
   { id: 'description', observation_text: 'We purchased 10 suckers.', captured_by_name: 'Stefan', captured_at: '2026-10-10T00:00:00Z' },
   { id: 'adjustment', observation_text: 'Adjustment to "Paid for suckers": the amount is ₱250.', captured_by_name: 'Stefan', captured_at: '2026-10-10T00:00:00Z' },
   { id: 'next-best', observation_text: 'Next best option for Stargazer Farm: Asking around.', captured_by_name: 'Stefan', captured_at: '2026-10-10T00:00:00Z' },
 ];
 vi.mock('@/hooks/useStates', () => ({
-  useStateMutations: () => ({ createState, deleteState }),
+  useStateMutations: () => ({ createState, updateState, deleteState }),
   useStates: (orgId: string) => ({ data: orgId ? observations : [] }),
 }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
@@ -140,6 +141,27 @@ describe('RewardsSection', () => {
 
     await waitFor(() => expect(rebuild.mutate).toHaveBeenCalled());
     expect(deleteState).toHaveBeenCalledWith('next-best');
+  });
+
+  it('lets what was added on a transaction be edited, then rebuilds', async () => {
+    render(
+      <RewardsSection
+        actionId="action-1"
+        alsoLinkTo={{ entity_type: 'financial_record', entity_id: 'record-1' }}
+        descriptionStateId="description"
+        justCreated
+      />
+    );
+
+    fireEvent.click(screen.getAllByLabelText('Edit this observation')[0]);
+    fireEvent.change(screen.getByLabelText('Observation'), { target: { value: 'Next best option for Stargazer Farm: Getting a quote. 2 hours.' } });
+    fireEvent.click(screen.getByText('Save and rebuild'));
+
+    await waitFor(() => expect(rebuild.mutate).toHaveBeenCalled());
+    expect(updateState).toHaveBeenCalledWith({
+      id: 'next-best',
+      data: { state_text: 'Next best option for Stargazer Farm: Getting a quote. 2 hours.' },
+    });
   });
 
   it('links an added observation to the action and the transaction, then rebuilds', async () => {

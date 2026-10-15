@@ -18,6 +18,7 @@ vi.mock('@/hooks/positiveSum/usePositiveSum', () => ({
   useLinkChallenge: () => ({ mutate: vi.fn(), isPending: false }),
   useAddReward: () => ({ mutate: vi.fn(), isPending: false }),
   useEditReward: () => ({ mutate: vi.fn(), isPending: false }),
+  useEditSharedObservation: () => ({ mutate: vi.fn(), isPending: false }),
   useAcceptReward: () => ({ mutate: vi.fn(), isPending: false }),
   useCloseReward: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -25,6 +26,7 @@ const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('@/hooks/useCognitoAuth', () => ({ useAuth: () => ({ user: { userId: 'stefan' } }) }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('@/hooks/useImageUpload', () => ({ useImageUpload: () => ({ uploadSingleImage: vi.fn(), isUploading: false }) }));
 
 const challenge = (overrides: Partial<Challenge>): Challenge => ({
   id: 'theft', organization_id: 'ps', text: 'Coconuts are being stolen', owner: 'may', owner_name: 'May',
@@ -75,17 +77,20 @@ describe('ChallengesSection', () => {
       { organization_id: 'ps', desired_state: 'Share a night watch', challenge_id: 'theft' }, expect.anything());
   });
 
-  it('lets only the author delete a challenge, and only before anyone has responded', () => {
+  it('lets only its owner delete an entry, while nobody else has raised a hand for it, after confirming', () => {
     render(<ChallengesSection organizationId="ps" challenges={[
       challenge({ id: 'mine', text: 'My new challenge', owner: 'stefan', votes: 0 }),
-      challenge({ id: 'voted', text: 'My voted challenge', owner: 'stefan', votes: 1 }),
+      challenge({ id: 'own-hand', text: 'Only my hand is up', owner: 'stefan', votes: 1, voters: [{ id: 'stefan', name: 'Stefan' }] }),
+      challenge({ id: 'voted', text: 'My voted challenge', owner: 'stefan', votes: 2, voters: [{ id: 'stefan', name: 'Stefan' }, { id: 'may', name: 'May' }] }),
       challenge({ id: 'theirs', votes: 0 }),
     ]} />);
 
     const buttons = screen.getAllByLabelText('Delete this');
-    expect(buttons).toHaveLength(1);
-    fireEvent.click(buttons[0]);
-    expect(remove.mutate).toHaveBeenCalledWith('mine', expect.anything());
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
+    expect(remove.mutate).not.toHaveBeenCalled(); // asks first
+    fireEvent.click(screen.getByText('Delete'));
+    expect(remove.mutate).toHaveBeenCalledWith('own-hand', expect.anything());
   });
 
   it('offers the org\'s people as assignee while editing, and shows the assignee beside the title otherwise', () => {

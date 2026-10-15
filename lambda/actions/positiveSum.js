@@ -25,7 +25,7 @@ const {
   rewardTally,
   offerTally,
   awaitingReading,
-  latestReading,
+  sharedObservations,
   takingPart,
   hasFreeCapacity,
   valueForOthers,
@@ -227,6 +227,10 @@ function summarize(a, extra = {}) {
   };
 }
 
+// The picture a person collects when they complete an offer: an uploaded
+// image's https address, or none.
+const pictureUrl = value => (typeof value === 'string' && /^https:\/\/\S+$/.test(value.trim()) ? value.trim() : null);
+
 async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding, notify }) {
   const { httpMethod, path } = event;
   const userId = authContext.cognito_user_id;
@@ -281,7 +285,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         await client.query('DELETE FROM states WHERE id = ANY($1::uuid[])', [ids]);
       };
 
-      // { reward: { action_id, php, cap_php_per_person } } — the author of a
+      // { reward: { action_id, php, cap_php_per_person, ask, budget_php, image } } — the author of a
       // proposed collaboration attaches a reward to it, paid by the
       // organization they are working as. Its terms are fixed from then on:
       // what people have earned is counted from them, so to change them the
@@ -303,6 +307,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         const budget = body.reward.budget_php == null || body.reward.budget_php === '' ? null : Number(body.reward.budget_php);
         if (budget !== null && !(budget >= php)) throw new HttpError(400, 'Give a budget no smaller than one payment');
         const payerName = payer.rows[0]?.name || 'The payer';
+        const image = pictureUrl(body.reward.image);
         const terms = rewardTerms({ php, cap_php_per_person: cap, payer_name: payerName, condition: prompt });
         await insertRecord(client, {
           organizationId: organization_id, userId, type: STATE_TYPES.REWARD,
@@ -311,11 +316,11 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
               action_id: target.id, per: 'observation', payer_org_id: payerOrgId, payer_name: payerName,
               evaluator: { kind: 'prompt', prompt },
               max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
-              terms, closed_at: null,
+              terms, closed_at: null, image,
             }
             : {
               action_id: target.id, per: 'observation', php, cap_php_per_person: cap, payer_name: payerName,
-              payer_org_id: payerOrgId, requires_photo: true, requires_text: true, terms, closed_at: null,
+              payer_org_id: payerOrgId, requires_photo: true, requires_text: true, terms, closed_at: null, image,
             },
           links: [{ entity_type: 'action', entity_id: target.id }],
         });
@@ -323,10 +328,9 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         return { statusCode: 201, data: summarize(target) };
       }
 
-      // { reward_edit: { reward_id, php, cap_php_per_person, budget_php, ask } } —
-      // its owner changes an offer that is read by AI, while no observation has
-      // been read against it yet. After that people have been told amounts under
-      // its wording, so it is closed and a new one made instead.
+      // { reward_edit: { reward_id, php, cap_php_per_person, budget_php, ask, image } } —
+      // its owner changes an offer that is read by AI, at any time while it is
+      // open. What was already credited stays; readings from then on use the change.
       if (body.reward_edit) {
         const records = await loadRecords(client, [organization_id]);
         const reward = records.rewards.find(r => r.id === body.reward_edit.reward_id);
@@ -334,11 +338,6 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         if (reward.owner !== String(userId)) throw new HttpError(403, 'Only its owner can change a reward');
         if (reward.closed_at) throw new HttpError(409, 'This reward is closed');
         if (!reward.prompt) throw new HttpError(409, 'This reward cannot be changed; close it and add another');
-        const { rows: read } = await client.query(
-          `SELECT 1 FROM state_perspectives WHERE perspective_type = 'OFFERS' AND content::text LIKE $1 LIMIT 1`,
-          [`%${reward.id}%`]
-        );
-        if (read.length) throw new HttpError(409, 'Observations have already been read against this; close it and make a new one');
         const php = Number(body.reward_edit.php);
         const number = value => (value == null || value === '' ? null : Number(value));
         const cap = number(body.reward_edit.cap_php_per_person);
@@ -352,6 +351,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         await client.query('UPDATE states SET state_text = $2, updated_at = NOW() WHERE id = $1', [reward.id, stateText(STATE_TYPES.REWARD, {
           ...data, evaluator: { kind: 'prompt', prompt }, condition: undefined,
           max_php_per_observation: php, max_php_per_person: cap, budget_php: budget,
+          image: pictureUrl(body.reward_edit.image),
         })]);
         const [target] = await loadActions(client, [reward.action_id]);
         if (target) await notify(target);
@@ -860,12 +860,19 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       // that has earned. Counted here, not stored.
       const rewardedIds = [...new Set(records.rewards.map(r => r.action_id))];
       const { rows: onRewarded } = rewardedIds.length === 0 ? { rows: [] } : await client.query(
-        `SELECT sl.entity_id AS action_id, s.captured_by::text AS person, s.created_at, s.state_text AS text,
+        `SELECT sl.entity_id AS action_id, s.id, s.captured_by::text AS person, s.created_at, s.updated_at, s.state_text AS text,
                 EXISTS (SELECT 1 FROM state_photos sp WHERE sp.state_id = s.id) AS has_photo,
-                (SELECT sp.content FROM state_perspectives sp
-                  WHERE sp.state_id = s.id AND sp.perspective_type = 'OFFERS' AND sp.status = 'SUCCESS'
-                  ORDER BY sp.created_at DESC LIMIT 1) AS reading
+                (SELECT json_agg(json_build_object('url', sp.photo_url, 'description', COALESCE(sp.photo_description, ''))
+                                 ORDER BY sp.photo_order)
+                   FROM state_photos sp WHERE sp.state_id = s.id) AS photos,
+                EXISTS (SELECT 1 FROM pending_perspectives pp WHERE pp.state_id = s.id) AS queued,
+                r.content AS reading, r.created_at AS read_at
            FROM state_links sl JOIN states s ON s.id = sl.state_id
+           LEFT JOIN LATERAL (
+             SELECT sp.content, sp.created_at FROM state_perspectives sp
+              WHERE sp.state_id = s.id AND sp.perspective_type = 'OFFERS' AND sp.status = 'SUCCESS'
+              ORDER BY sp.created_at DESC LIMIT 1
+           ) r ON true
           WHERE sl.entity_type = 'action' AND sl.entity_id = ANY($1::uuid[])
             AND COALESCE(s.state_text, '') NOT LIKE $2`,
         [rewardedIds, `${STATE_PREFIX}%`]
@@ -875,16 +882,15 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       const read = r => {
         const tally = offerTally(r, records.agreements, onRewarded, earnerNames);
         return {
-          ask: r.prompt, accepted_by_me: agreed, tally, my_latest: latestReading(r, onRewarded, userId),
+          ask: r.prompt, accepted_by_me: agreed, tally,
+          observations: sharedObservations(r, onRewarded, userId, earnerNames),
           my_reading: awaitingReading(r, records.agreements, onRewarded, userId),
           budget_php: r.budget_php, spent_php: tally.reduce((sum, person) => sum + person.php, 0),
-          // Its owner can still change it while nothing has been read against it.
-          editable: !onRewarded.some(o => (o.reading?.offers || []).some(e => e.offer_id === r.id)),
         };
       };
       const rewardsFor = actionId => records.rewards.filter(r => r.action_id === actionId).map(r => ({
         id: r.id, php: r.php, cap_php_per_person: r.cap_php_per_person, payer_name: r.payer_name, terms: r.terms,
-        owner: r.owner, closed: !!r.closed_at, action_id: r.action_id,
+        owner: r.owner, closed: !!r.closed_at, action_id: r.action_id, image: r.image || null,
         // An offer with a prompt is read by AI and agreed to once for all such offers.
         ...(r.prompt
           ? read(r)
@@ -898,10 +904,11 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         for (const collaboration of challenge.collaborations) collaboration.rewards = rewardsFor(collaboration.id);
       }
       // Every open offer, whether or not its action sits under a situation, so
-      // one made directly under "Offers" reaches everyone.
+      // one made directly under "Offers" reaches everyone. Newest first.
       const offers = proposed
         .filter(a => orgIds.includes(a.organization_id) && JOINABLE_STATUSES.includes(a.status))
         .filter((a, i, all) => all.findIndex(other => other.id === a.id) === i)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
         .map(a => ({
           id: a.id, title: proposalText(a), created_by: a.created_by,
           situation: addressedChallenges(a.id, records.collaborations, openChallenges)[0]?.text ?? null,

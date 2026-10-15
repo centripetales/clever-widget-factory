@@ -69,8 +69,12 @@ export function useCacheInvalidation() {
           queryClient.invalidateQueries({ queryKey: actionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: completedActionsQueryKey() });
           queryClient.invalidateQueries({ queryKey: allActionsQueryKey() });
-          // Desired states and options are action rows too.
-          queryClient.invalidateQueries({ queryKey: positiveSumMineQueryKey() });
+          // Desired states and options are action rows too. The page loads as
+          // a whole, so only for an action it shows, or a new one (a new offer).
+          if (payload.mutationType === 'created' || !entityId || queryClient.getQueriesData({ queryKey: positiveSumMineQueryKey() })
+            .some(([, data]) => JSON.stringify(data ?? '').includes(entityId))) {
+            queryClient.invalidateQueries({ queryKey: positiveSumMineQueryKey() });
+          }
           queryClient.invalidateQueries({ queryKey: positiveSumOpportunitiesQueryKey() });
           if (entityId) {
             queryClient.invalidateQueries({ queryKey: actionQueryKey(entityId) });

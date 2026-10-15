@@ -51,6 +51,22 @@ export interface ReadyItem extends PositiveSumItem {
   value?: number;
 }
 
+// One observation shared for an offer, with what the offer credited it.
+export interface SharedObservation {
+  id: string;
+  person: string;
+  name: string | null;
+  mine: boolean;
+  text: string; // what the person wrote
+  photos: { url: string; description: string }[]; // each with what they wrote on it
+  created_at: string;
+  // 'waiting': being read (new, or changed since its reading); 'unread': waited too long.
+  reading: 'read' | 'waiting' | 'unread';
+  php: number | null; // null until it has been read once
+  was_php: number | null; // what it was credited before an edit raised it
+  feedback: string;
+}
+
 // A reward someone attached to an action. Its tally is public: what each person
 // has shared and earned. One with a prompt (`ask`: what the payer wants and how
 // they value it, in their words) is read by AI: each observation gets a reading
@@ -60,15 +76,15 @@ export interface ReadyItem extends PositiveSumItem {
 export interface OfferedReward {
   id: string;
   action_id?: string;
+  // The picture a person collects when they reach its cap: gray until then.
+  image?: string | null;
   ask?: string;
   budget_php?: number | null;
   spent_php?: number;
-  // Whether its owner can still change it: nothing has been read against it yet.
-  editable?: boolean;
   // The viewer's observations for it that have no reading yet: on their way, or stuck.
   my_reading?: { waiting: number; unread: number };
-  // What the reading said about the viewer's latest observation for it.
-  my_latest?: { shows: string; counts: boolean; php: number; feedback: string } | null;
+  // The observations shared for it: the viewer's own, or everyone's for its owner. Newest first.
+  observations?: SharedObservation[];
   php: number;
   cap_php_per_person: number | null;
   payer_name: string;

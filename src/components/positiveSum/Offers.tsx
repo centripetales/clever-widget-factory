@@ -19,7 +19,7 @@ export function openOffers(challenges: Challenge[], goals: MyGoal[]): Offer[] {
 }
 
 // What organizations offer to pay for, and where a person makes an offer of
-// their own. The page leads with this.
+// their own, below them. The page leads with this.
 export function Offers({ organizationId, offers, challenges, goals = [] }: {
   organizationId: string;
   offers?: Offer[];
@@ -34,7 +34,6 @@ export function Offers({ organizationId, offers, challenges, goals = [] }: {
     <section className="space-y-3">
       <h2 className="text-lg font-semibold">Offers</h2>
       <p className="text-sm text-muted-foreground">What organizations here are willing to pay for.</p>
-      <AddReward organizationId={organizationId} />
       {opportunities.length === 0 && <p className="text-sm text-muted-foreground">No offers yet.</p>}
       {opportunities.map(opportunity => (
         <Card key={opportunity.id}>
@@ -55,6 +54,7 @@ export function Offers({ organizationId, offers, challenges, goals = [] }: {
           </CardContent>
         </Card>
       ))}
+      <AddReward organizationId={organizationId} />
     </section>
   );
 }

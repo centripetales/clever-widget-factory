@@ -58,3 +58,12 @@ test('it stops at what is left for the person and at what is left of the budget'
 test('an offer the model skipped pays its most', () => {
   assert.equal(settle({ shows: 'x', offers: [] }, [offer({ max_php_per_person: null })], [], 'may').offers[0].php, 20);
 });
+
+test('read again after an edit, an amount can rise but never falls, and a closed offer keeps what it paid', () => {
+  const previous = { offers: [{ offer_id: 'o1', php: 10, counts: true }, { offer_id: 'closed', action_id: 'a9', php: 5, counts: true }] };
+  const raised = settle(answer(20), [offer()], [], 'may', previous);
+  assert.deepEqual([raised.offers[0].php, raised.offers[0].was_php], [20, 10]);
+  assert.deepEqual(raised.offers[1], { offer_id: 'closed', action_id: 'a9', php: 5, counts: true });
+  const lower = settle(answer(4), [offer()], [], 'may', previous);
+  assert.deepEqual([lower.offers[0].php, 'was_php' in lower.offers[0]], [10, false]);
+});
