@@ -450,6 +450,27 @@ on one action, each with its own payer, condition and cap.
   `feedback`; the code rounds the amount to the peso and holds it to the
   three limits, going by earlier readings. The tally is the sum over these
   readings.
+- **What was shared shows under the offer** (2026-10-13): a row for each
+  observation with the person's words, what the offer credited and the
+  feedback. A person sees their own; the offer's owner, who pays, sees
+  everyone's; others see only the counts. Its author can add detail in
+  place: saving sends it to be read again, the row shows it is being read,
+  and the amount can rise but never falls (it shows "₱3 → ₱5" when it
+  rose). A re-read compares only with observations made before it, and
+  what an observation earned from an offer that has since closed is kept.
+- **Changing and showing offers** (2026-10-15): the owner can change an
+  offer read by AI at any time while it is open (no lock once others'
+  observations are read); what was credited stays and later readings use the
+  change. Offers are listed newest first. When the worker starts or finishes
+  an OFFERS reading it broadcasts an `action` invalidation for the offer's
+  action; a page reloads Positive Sum only for an action it shows, or a new
+  one. On an offer: one filled action ("Share an observation" / "Earn this"),
+  the owner's Edit and Close in a menu (Close confirms); once a person has
+  joined, the header shortens to what one share is worth and who pays (full
+  terms in the ⓘ, whose ask is shown as Markdown). The person's progress sits
+  top right: "You: n shared · ₱x of ₱cap", a bar, and the offer's optional
+  picture, gray until they reach the per-person cap, then in color. A credited
+  amount of one's own is stamped in with a coin from the feedback.
 - **A reward with no prompt** pays its amount for any photo with a
   description, by rule and without a reading (the first ₱5 offer).
 - **Default to trust**: an observation counts unless it clearly shows
@@ -486,6 +507,14 @@ on one action, each with its own payer, condition and cap.
   shown back as a price list.
 - **Offers already agreed to** under the photo-with-description rule keep
   that rule.
+- **An offer for how people operate has no other option** (2026-10-15): for
+  the payer, it is the expected-advantage case "no other option"
+  (capability expanding, advantage not evaluated), not a next best with a
+  price. The data is what a person does when they have flexibility, and the
+  only other way to collect it, sending someone to shadow them, would
+  change how they operate. Paying also nudges what people share, but less,
+  and in the direction the offer chose. When network credit is built, such
+  offers count as capability expanding.
 - **Open**: whether the payer can overturn a reading both ways or only in the
   contributor's favour; converting offers to `policy` records (an action
   links to one policy today, layering needs many); a way for the payer to

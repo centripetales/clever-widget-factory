@@ -5,7 +5,7 @@ const https = require('https');
 
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { broadcastWs } = require('/opt/nodejs/broadcastWs');
-const { runOffersReading } = require('./offers');
+const { runOffersReading, offerActionIds } = require('./offers');
 
 // ─── Environment validation (no implicit fallbacks per project rule) ──────────
 const requiredEnv = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'AWS_REGION'];
@@ -429,6 +429,17 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
   console.log(`[RSP] azolla_coverage: wrote Coverage % = ${maxCoverage.toFixed(2)} for state ${state.id}`);
 }
 
+// Tells the pages showing these offers' actions to load again. Best effort.
+async function broadcastOfferActions(actionIds, organizationId) {
+  for (const entityId of actionIds) {
+    try {
+      await broadcastInvalidation({ entityType: 'action', entityId, mutationType: 'updated', organizationId });
+    } catch (err) {
+      console.error('[RSP] offers: broadcast failed for action', entityId, err.message);
+    }
+  }
+}
+
 // ─── Core processing logic for a single pending_perspectives record ───────────
 async function processPendingRecord(client, record) {
   // Mark as processing
@@ -487,6 +498,13 @@ async function processPendingRecord(client, record) {
   // action is share-granted into. Neither gates the other; only fail the whole job
   // if nothing at all applies (nothing should have been queued in that case).
   const linksRes = await client.query('SELECT * FROM state_links WHERE state_id = $1', [state.id]);
+  // Pages showing an offer on this observation's action refresh, so it shows as being read.
+  const offerActions = await offerActionIds(client, linksRes.rows).catch(err => {
+    console.error('[RSP] offers: could not find offers for state', state.id, err.message);
+    return [];
+  });
+  await broadcastOfferActions(offerActions, state.organization_id);
+
   const qualifyingTypes = ['observation', 'action']; // must match QUALIFYING_LINK_TYPES in lambda/states/index.js
   const runsEpistemicPerspectives = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
   const runsAzollaCoverage = await stateLinkedToProcessorEnabledOrg(client, state.id, linksRes.rows, 'azolla_coverage');
@@ -740,7 +758,9 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     // Idempotency: delete any existing perspectives for this state before re-inserting.
     // No child tables — content lives directly in state_perspectives.content (see
     // migration 021); this is now a single DELETE, not four.
-    await client.query(`DELETE FROM state_perspectives WHERE state_id = $1`, [state.id]);
+    // The OFFERS reading is kept: it is replaced further down, where the earlier
+    // amounts are still needed.
+    await client.query(`DELETE FROM state_perspectives WHERE state_id = $1 AND perspective_type <> 'OFFERS'`, [state.id]);
 
     // Insert CLAIM / SIGNIFICANCE / ENTROPY
     const claimRes = await client.query(
@@ -803,7 +823,12 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     const reading = await runOffersReading(client, {
       state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
     });
-    if (reading) console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
+    if (reading) {
+      console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
+      // Their pages refresh with what it earned, including offers it was newly linked to.
+      const counted = reading.offers.filter(o => o.counts).map(o => String(o.action_id));
+      await broadcastOfferActions([...new Set([...offerActions, ...counted])], state.organization_id);
+    }
   } catch (err) {
     console.error('[RSP] offers reading failed for state', state.id, err);
   }

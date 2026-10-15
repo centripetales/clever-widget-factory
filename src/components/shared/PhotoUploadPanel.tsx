@@ -652,13 +652,13 @@ export function PhotoUploadPanel({
       )}
 
       <Dialog open={!!lightboxUrl} onOpenChange={(open) => !open && setLightboxUrl(null)}>
-        <DialogContent className="max-w-[90vw] w-fit h-[90vh] p-2 border-none bg-transparent shadow-none flex items-center justify-center">
+        <DialogContent className="max-w-[90vw] w-fit max-h-[90vh] p-2 border-none bg-transparent shadow-none flex items-center justify-center">
           {lightboxUrl && (
             <img
               src={lightboxUrl}
               onError={showDisplayedIfOriginalMissing}
               alt="Full resolution"
-              className="max-w-full max-h-full object-contain rounded"
+              className="max-w-full max-h-[calc(90vh-1rem)] object-contain rounded"
             />
           )}
         </DialogContent>

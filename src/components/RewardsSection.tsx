@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react';
+import { ChevronDown, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -99,10 +99,11 @@ function OpportunityCost({ party, chip, value, amount, onChange, onDone }: {
 }
 
 // A documented next-best option, shown under its party's advantage.
-function NextBestOptionDetail({ option, value, added, onDelete }: {
+function NextBestOptionDetail({ option, value, added, onEdit, onDelete }: {
   option: NextBestOption;
   value: Balance | null;
   added: Observation[];
+  onEdit: (id: string, text: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<void>;
 }) {
   return (
@@ -124,7 +125,7 @@ function NextBestOptionDetail({ option, value, added, onDelete }: {
       {option.replaces.length > 0 && (
         <p className="text-xs text-muted-foreground break-words">Instead of: {option.replaces.join(', ')}</p>
       )}
-      <AddedSources sourceIds={option.source_state_ids} added={added} onDelete={onDelete} />
+      <AddedSources sourceIds={option.source_state_ids} added={added} onEdit={onEdit} onDelete={onDelete} />
     </div>
   );
 }
@@ -181,12 +182,13 @@ function HourValue({ value, label, netLabel }: { value: Balance; label: string; 
 // One party's documented next-best options, and the fields for adding one.
 // What is entered is saved as the person's observation, so it stays their
 // claim and they are credited with documenting it.
-function AdvantageRowView({ row, claims, orgNames, added, onSave, onDelete }: {
+function AdvantageRowView({ row, claims, orgNames, added, onSave, onEdit, onDelete }: {
   row: AdvantageRow;
   claims: RewardClaim[];
   orgNames: Record<string, string>;
   added: Observation[];
   onSave: (text: string) => Promise<boolean>;
+  onEdit: (id: string, text: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
@@ -226,6 +228,7 @@ function AdvantageRowView({ row, claims, orgNames, added, onSave, onDelete }: {
           option={o}
           value={row.options.length > 1 ? advantage(o, claims) : null}
           added={added}
+          onEdit={onEdit}
           onDelete={onDelete}
         />
       ))}
@@ -270,9 +273,36 @@ function AdvantageRowView({ row, claims, orgNames, added, onSave, onDelete }: {
 }
 
 // Something a person added here — an adjustment, a next-best option, another
-// observation — with a button to remove it. Removing deletes that observation;
-// the rewards are then rebuilt without it.
-function AddedObservation({ observation: o, onDelete }: { observation: Observation; onDelete: (id: string) => Promise<void> }) {
+// observation — with buttons to edit or remove it. Either changes that
+// observation; the rewards are then rebuilt from what is left.
+function AddedObservation({ observation: o, onEdit, onDelete }: {
+  observation: Observation;
+  onEdit: (id: string, text: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [text, setText] = useState<string | null>(null); // null: not editing
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    if (await onEdit(o.id, text!.trim())) setText(null);
+    setSaving(false);
+  };
+
+  if (text !== null) {
+    return (
+      <div className="space-y-2 rounded-md border bg-background p-2 text-sm">
+        <Textarea rows={3} value={text} onChange={e => setText(e.target.value)} aria-label="Observation" />
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setText(null)}>Cancel</Button>
+          <Button size="sm" disabled={saving || !text.trim() || text.trim() === o.observation_text?.trim()} onClick={save}>
+            {saving ? 'Saving...' : 'Save and rebuild'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-start justify-between gap-2 rounded-md border bg-background p-2 text-sm">
       <div className="min-w-0">
@@ -282,6 +312,9 @@ function AddedObservation({ observation: o, onDelete }: { observation: Observati
           <span>{new Date(o.captured_at).toLocaleDateString()}</span>
         </p>
       </div>
+      <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" aria-label="Edit this observation" onClick={() => setText(o.observation_text ?? '')}>
+        <Pencil className="h-4 w-4" />
+      </Button>
       <AlertDialog>
         <AlertDialogTrigger asChild>
           <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" aria-label="Delete this observation">
@@ -306,16 +339,17 @@ function AddedObservation({ observation: o, onDelete }: { observation: Observati
 }
 
 // The added observations a claim or next best was built from, shown with it.
-function AddedSources({ sourceIds, added, onDelete }: {
+function AddedSources({ sourceIds, added, onEdit, onDelete }: {
   sourceIds: string[];
   added: Observation[];
+  onEdit: (id: string, text: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const sources = added.filter(o => sourceIds.includes(o.id));
   if (!sources.length) return null;
   return (
     <div className="space-y-1 pt-1">
-      {sources.map(o => <AddedObservation key={o.id} observation={o} onDelete={onDelete} />)}
+      {sources.map(o => <AddedObservation key={o.id} observation={o} onEdit={onEdit} onDelete={onDelete} />)}
     </div>
   );
 }
@@ -368,7 +402,7 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
   const { toast } = useToast();
   const { organization } = useOrganization();
   const actionFilter = { entity_type: 'action', entity_id: actionId };
-  const { createState, deleteState } = useStateMutations(organization?.id ?? '', actionFilter);
+  const { createState, updateState, deleteState } = useStateMutations(organization?.id ?? '', actionFilter);
   // Only an action made from a transaction lists them here; other actions show their observations in the dialog.
   const { data: observations = [] } = useStates(alsoLinkTo && open ? organization?.id ?? '' : '', actionFilter);
   const added = observations.filter(o => o.id !== descriptionStateId && o.observation_text?.trim());
@@ -399,6 +433,17 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
   // Shown with the claim or next best it led to; anything else is listed at the end.
   const shownIds = new Set([...(claims ?? []), ...(data && claims ? nextBestOptions(data) : [])].flatMap(x => x.source_state_ids));
   const unplaced = added.filter(o => !shownIds.has(o.id));
+
+  const editObservation = async (id: string, text: string) => {
+    try {
+      await updateState({ id, data: { state_text: text } });
+      startRebuild();
+      return true;
+    } catch (error) {
+      toast({ title: 'Could not save the observation', description: errorMessage(error), variant: 'destructive' });
+      return false;
+    }
+  };
 
   const removeObservation = async (id: string) => {
     try {
@@ -491,6 +536,7 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
             sign={signFor(c, organization?.id)}
             added={added}
             onAdjust={saveAdjustment}
+            onEdit={editObservation}
             onDelete={removeObservation}
           />
         ))}
@@ -511,6 +557,7 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
                 claims={claims ?? []}
                 orgNames={orgNames}
                 added={added}
+                onEdit={editObservation}
                 onDelete={removeObservation}
                 onSave={text => saveObservation(text, 'Could not save the next best')}
               />
@@ -621,7 +668,7 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
         {unplaced.length > 0 && (
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Also added here</p>
-            {unplaced.map(o => <AddedObservation key={o.id} observation={o} onDelete={removeObservation} />)}
+            {unplaced.map(o => <AddedObservation key={o.id} observation={o} onEdit={editObservation} onDelete={removeObservation} />)}
           </div>
         )}
 
@@ -639,12 +686,13 @@ export function RewardsSection({ actionId, alsoLinkTo, descriptionStateId, justC
   );
 }
 
-function ClaimCard({ claim, orgNames, sign, added, onAdjust, onDelete }: {
+function ClaimCard({ claim, orgNames, sign, added, onAdjust, onEdit, onDelete }: {
   claim: RewardClaim;
   orgNames: Record<string, string>;
   sign: '+' | '−' | '';
   added: Observation[];
   onAdjust: (claim: RewardClaim, php: string, hours: string, note: string) => Promise<boolean>;
+  onEdit: (id: string, text: string) => Promise<boolean>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const [adjusting, setAdjusting] = useState(false);
@@ -685,7 +733,7 @@ function ClaimCard({ claim, orgNames, sign, added, onAdjust, onDelete }: {
         {claim.cost_basis_method && <Badge variant="outline">{COST_BASIS_LABELS[claim.cost_basis_method]}</Badge>}
       </div>
       <p className="text-sm text-muted-foreground break-words">{claim.claim}</p>
-      <AddedSources sourceIds={claim.source_state_ids} added={added} onDelete={onDelete} />
+      <AddedSources sourceIds={claim.source_state_ids} added={added} onEdit={onEdit} onDelete={onDelete} />
 
       {adjusting ? (
         <div className="space-y-2 pt-1">

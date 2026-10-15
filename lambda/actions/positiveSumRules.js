@@ -166,6 +166,9 @@ function rewardTerms({ php, cap_php_per_person: cap, payer_name: payer, conditio
   ].join(' ');
 }
 
+// An observation has words when its description or any of its photos says something.
+const hasWords = o => !!(o.text || '').trim() || (o.photos || []).some(photo => (photo.description || '').trim());
+
 // What each person who accepted a reward has earned on its action. Nothing is
 // stored: it is counted from their observations there that have a photo and
 // their own words, made after they accepted and before the reward closed,
@@ -176,7 +179,7 @@ function rewardTally(reward, acceptances, observations, names) {
     .filter(a => a.reward_id === reward.id)
     .map(a => {
       const count = observations.filter(o =>
-        o.action_id === reward.action_id && String(o.person) === a.person && o.has_photo && (o.text || '').trim() &&
+        o.action_id === reward.action_id && String(o.person) === a.person && o.has_photo && hasWords(o) &&
         new Date(o.created_at) >= new Date(a.accepted_at) && (!closed || new Date(o.created_at) <= closed)
       ).length;
       const php = count * reward.php;
@@ -218,24 +221,51 @@ function offerTally(reward, agreements, observations, names) {
     .sort((a, b) => b.count - a.count || (a.name || '').localeCompare(b.name || '') || a.id.localeCompare(b.id));
 }
 
-// How many of a person's observations for an offer are still waiting for their
-// reading. `waiting`: made in the last ten minutes, so it is on its way.
-// `unread`: older than that, so something went wrong and it needs another look.
-function awaitingReading(reward, agreements, observations, userId, now = new Date()) {
-  const agreement = agreements.find(a => a.person === String(userId));
-  const pending = agreement ? eligibleObservations(reward, agreement, observations).filter(o => !o.reading) : [];
-  const recent = pending.filter(o => now - new Date(o.created_at) < 10 * 60 * 1000).length;
-  return { waiting: recent, unread: pending.length - recent };
+// Whether an observation's reading is of its words as they are now: it has
+// one, written after the observation was last changed.
+const isRead = o => !!o.reading && !(o.updated_at && o.read_at && new Date(o.updated_at) > new Date(o.read_at));
+
+// Where an observation is with its reading. `waiting`: made or changed in the
+// last ten minutes, so the reading is on its way. `unread`: longer ago than
+// that, so something went wrong and it needs another look.
+function readingState(o, now = new Date()) {
+  if (isRead(o)) return 'read';
+  const since = Math.max(new Date(o.created_at), new Date(o.updated_at || o.created_at));
+  return now - since < 10 * 60 * 1000 ? 'waiting' : 'unread';
 }
 
-// What the reading said to a person about their latest observation for an offer.
-function latestReading(reward, observations, userId) {
-  const read = observations
-    .filter(o => String(o.person) === String(userId) && o.reading)
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    .map(o => ({ shows: o.reading.shows || '', entry: (o.reading.offers || []).find(e => e.offer_id === reward.id) }))
-    .find(r => r.entry);
-  return read ? { shows: read.shows, counts: !!read.entry.counts, php: Number(read.entry.php) || 0, feedback: read.entry.feedback || '' } : null;
+// Observations that go to the reader: sent for reading when saved (a comment
+// left when joining is not), or already read.
+const isShared = o => !!o.reading || o.queued !== false;
+
+// How many of a person's observations for an offer are still waiting for their reading.
+function awaitingReading(reward, agreements, observations, userId, now = new Date()) {
+  const agreement = agreements.find(a => a.person === String(userId));
+  const states = agreement ? eligibleObservations(reward, agreement, observations).filter(isShared).map(o => readingState(o, now)) : [];
+  return { waiting: states.filter(s => s === 'waiting').length, unread: states.filter(s => s === 'unread').length };
+}
+
+// The observations shared for an offer, newest first, as rows a person can
+// read and add to: their own words, what the offer credited and why. A person
+// sees their own; the offer's owner, who pays, sees everyone's. One being read
+// again after a change keeps showing what its last reading said.
+function sharedObservations(reward, observations, userId, names, now = new Date()) {
+  const viewer = String(userId);
+  return observations
+    .filter(o => o.action_id === reward.action_id && isShared(o))
+    .filter(o => String(o.person) === viewer || reward.owner === viewer)
+    .map(o => ({ o, entry: (o.reading?.offers || []).find(e => e.offer_id === reward.id) }))
+    .filter(({ o, entry }) => entry || !isRead(o))
+    .sort((a, b) => new Date(b.o.created_at) - new Date(a.o.created_at))
+    .slice(0, 50)
+    .map(({ o, entry }) => ({
+      id: o.id, person: String(o.person), name: names[o.person] || null, mine: String(o.person) === viewer,
+      text: o.text || '', photos: o.photos || [], created_at: o.created_at,
+      reading: readingState(o, now),
+      php: entry ? Number(entry.php) || 0 : null,
+      was_php: entry && entry.was_php != null ? Number(entry.was_php) : null,
+      feedback: entry?.feedback || '',
+    }));
 }
 
 // Who is taking part in a desired state, each with what they said about their
@@ -338,7 +368,7 @@ module.exports = {
   rewardTally,
   offerTally,
   awaitingReading,
-  latestReading,
+  sharedObservations,
   takingPart,
   hasFreeCapacity,
   valueForOthers,

@@ -13,7 +13,7 @@
 // goes. See docs/design/POSITIVE_SUM.md §2.9. All SQL is parameterized.
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
-const PROMPT_VERSION = 'offers-v8';
+const PROMPT_VERSION = 'offers-v9';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 const MAX_EARLIER = 60;
 
@@ -23,7 +23,7 @@ You work from words only. The photos are not shown to you, so anything the perso
 
 You are given: the offers, each with what its payer wrote about what they want and how they value it, and the most it pays for one observation; the description of the observation, in the person's words; short notes on what this person already shared; and short notes on what other people on the network already shared.
 
-For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula or a scale, apply it. Where they do not say how the value falls off, use this:
+For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. An offer never pays more than its most for one observation: when what the payer wrote comes to more, give the most, and state that amount as what is credited. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula or a scale, apply it. Where they do not say how the value falls off, use this:
 - the most, when it shows what the offer asks for and nothing like it is in this person's notes.
 - less the more it overlaps with those notes, by how much it still adds.
 - 0 when it shows nothing the offer asks for, or adds nothing to those notes.
@@ -106,15 +106,26 @@ async function loadOffers(client, links) {
   return rows.map(parseOffer).filter(isReadable);
 }
 
-// Earlier readings for these offers: who shared, what was shown and what each one earned.
-async function loadEarlier(client, offers, stateId) {
+// The actions this observation is linked to that carry an open offer read by
+// AI: the offers whose lists show it.
+async function offerActionIds(client, links) {
+  const linked = new Set(links.filter(l => l.entity_type === 'action').map(l => String(l.entity_id)));
+  const offers = await loadOffers(client, links);
+  return [...new Set(offers.map(o => String(o.action_id)).filter(id => linked.has(id)))];
+}
+
+// Readings of the observations made before this one, for these offers: who
+// shared, what was shown and what each one earned. Only earlier ones, so an
+// observation read again after an edit is not compared with what came after it.
+async function loadEarlier(client, offers, state) {
   const { rows } = await client.query(
     `SELECT s.captured_by::text AS person, sp.content
        FROM state_perspectives sp JOIN states s ON s.id = sp.state_id
       WHERE sp.perspective_type = 'OFFERS' AND sp.status = 'SUCCESS' AND sp.state_id <> $1
+        AND s.created_at < (SELECT created_at FROM states WHERE id = $1)
         AND s.id IN (SELECT state_id FROM state_links WHERE entity_type = 'action' AND entity_id = ANY($2::uuid[]))
       ORDER BY s.created_at DESC`,
-    [stateId, offers.map(o => o.action_id)]
+    [state.id, offers.map(o => o.action_id)]
   );
   return rows.map(r => ({ ...(typeof r.content === 'string' ? JSON.parse(r.content) : r.content), person: r.person }));
 }
@@ -141,7 +152,12 @@ function buildPrompt({ offers, text, earlier, person }) {
 // pays its most (default to trust). The amount is rounded to the peso and held
 // to the offer's limits: the most for one observation, what is left for this
 // person, and what is left of the offer's budget, going by earlier readings.
-function settle(input, offers, earlier, person) {
+// `previous` is this observation's own reading from before an edit: an amount
+// never goes down because a person added to what they wrote (`was_php` keeps
+// what it was when it rose), and what it earned from an offer that has since
+// closed stays as it was.
+function settle(input, offers, earlier, person, previous = null) {
+  const before = Array.isArray(previous?.offers) ? previous.offers : [];
   const answers = Array.isArray(input?.offers) ? input.offers : [];
   const paid = (offer, mine) => earlier
     .filter(e => !mine || e.person === person)
@@ -159,15 +175,18 @@ function settle(input, offers, earlier, person) {
         offer.max_php_per_person ? offer.max_php_per_person - paid(offer, true) : Infinity,
         offer.budget_php ? offer.budget_php - paid(offer, false) : Infinity,
       ];
-      const php = Math.max(0, Math.min(Math.round(asked), ...limits));
+      const read = Math.max(0, Math.min(Math.round(asked), ...limits));
+      const was = before.find(o => o.offer_id === offer.id);
+      const php = was ? Math.max(read, Number(was.php) || 0) : read;
       return {
         offer_id: offer.id,
         action_id: offer.action_id,
         counts: php > 0,
         php,
+        ...(was && php > (Number(was.php) || 0) ? { was_php: Number(was.php) || 0 } : {}),
         feedback: typeof answer?.feedback === 'string' ? answer.feedback.trim() : '',
       };
-    }),
+    }).concat(before.filter(o => !offers.some(offer => offer.id === o.offer_id))),
   };
 }
 
@@ -191,9 +210,15 @@ async function runOffersReading(client, { state, links, text, invokeBedrock }) {
   if (offers.length === 0) return null;
 
   const person = String(state.captured_by);
-  const earlier = await loadEarlier(client, offers, state.id);
+  const earlier = await loadEarlier(client, offers, state);
   const input = await invokeBedrock(MODEL_ID, SYSTEM_PROMPT, buildPrompt({ offers, text, earlier, person }), INFERENCE, [], TOOL_CONFIG);
-  const reading = settle(input, offers, earlier, person);
+  const { rows: [existing] } = await client.query(
+    `SELECT content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'OFFERS' AND status = 'SUCCESS'
+      ORDER BY created_at DESC LIMIT 1`,
+    [state.id]
+  );
+  const previous = existing ? (typeof existing.content === 'string' ? JSON.parse(existing.content) : existing.content) : null;
+  const reading = settle(input, offers, earlier, person, previous);
   const configId = await generationConfigId(client);
 
   await client.query('BEGIN');
@@ -217,4 +242,4 @@ async function runOffersReading(client, { state, links, text, invokeBedrock }) {
   return reading;
 }
 
-module.exports = { runOffersReading, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };
+module.exports = { runOffersReading, offerActionIds, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };

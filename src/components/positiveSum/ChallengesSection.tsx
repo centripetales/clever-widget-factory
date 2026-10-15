@@ -218,6 +218,11 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
     });
 
   const deleteItem = (id: string) => remove.mutate(id, { onError: failed('Could not delete it') });
+  // Its owner can delete an entry while nobody else has raised a hand for it
+  // and nothing is proposed under it. Their own raised hand doesn't hold it.
+  const deletable = (challenge: Challenge) =>
+    challenge.collaborations.length === 0 &&
+    (challenge.voters ? challenge.voters.every(voter => voter.id === user?.userId) : challenge.votes === 0);
   // My proposals that aren't under any challenge above would otherwise have nowhere to show.
   const unlinked = goals.filter(g => !g.addresses?.length);
 
@@ -227,25 +232,6 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
       <p className="text-sm text-muted-foreground">
         Describe how things are. It doesn't need a solution: those come afterwards, as proposed collaborations.
       </p>
-
-      <div className="space-y-2">
-        <Textarea
-          rows={2}
-          placeholder="How things are"
-          value={text}
-          onChange={e => setText(e.target.value)}
-          aria-label="Describe where we could improve"
-        />
-        <div className="flex justify-end">
-          {/* The page's one filled button, in the Positive Sum orange rather than the app's near-black. */}
-          <Button
-            size="sm" className="bg-orange-500 text-white hover:bg-orange-600"
-            disabled={!text.trim() || createChallenge.isPending} onClick={add}
-          >
-            {createChallenge.isPending ? 'Adding...' : 'Add'}
-          </Button>
-        </div>
-      </div>
 
       {challenges.length === 0 && <p className="text-sm text-muted-foreground">Nothing here yet.</p>}
 
@@ -311,7 +297,7 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                         <p className="text-lg font-semibold leading-snug break-words">{challenge.text}</p>
                         {challenge.owner_name && <NameChip name={challenge.owner_name} />}
                       </div>
-                      {/* Only its owner. Deleting only while nobody has voted or proposed anything for it. */}
+                      {/* Only its owner. Deleting only while nobody else has voted or proposed anything for it. */}
                       {mine && (
                         <div className="flex shrink-0">
                           <Button
@@ -320,13 +306,27 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          {challenge.votes === 0 && challenge.collaborations.length === 0 && (
-                            <Button
-                              variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Delete this"
-                              onClick={() => deleteItem(challenge.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                          {deletable(challenge) && (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                {/* Kept quiet: it is rarely wanted and cannot be undone. */}
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground/50 hover:text-destructive" aria-label="Delete this">
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete this?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    "{challenge.text}" is removed for good, for you and for anyone who could see it.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => deleteItem(challenge.id)}>Delete</AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                           )}
                         </div>
                       )}
@@ -384,6 +384,25 @@ export function ChallengesSection({ organizationId, challenges, goals = [], memb
           </Card>
         );
       })}
+
+      <div className="space-y-2">
+        <Textarea
+          rows={2}
+          placeholder="How things are"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          aria-label="Describe where we could improve"
+        />
+        <div className="flex justify-end">
+          {/* The page's one filled button, in the Positive Sum orange rather than the app's near-black. */}
+          <Button
+            size="sm" className="bg-orange-500 text-white hover:bg-orange-600"
+            disabled={!text.trim() || createChallenge.isPending} onClick={add}
+          >
+            {createChallenge.isPending ? 'Adding...' : 'Add'}
+          </Button>
+        </div>
+      </div>
 
       {unlinked.length > 0 && (
         <Card>
