@@ -5696,6 +5696,15 @@ exports.handler = async (event) => {
           readAll: hasDataReadAll,
         },
         getDbClient,
+        queueReadings: async (stateIds, orgId) => {
+          if (!process.env.PERSPECTIVES_QUEUE_URL) return console.error('PERSPECTIVES_QUEUE_URL is not set; shared observations are not read');
+          for (const stateId of stateIds) {
+            await sqs.send(new SendMessageCommand({
+              QueueUrl: process.env.PERSPECTIVES_QUEUE_URL,
+              MessageBody: JSON.stringify({ stateId, organizationId: orgId, perspective: 'OFFERS' })
+            }));
+          }
+        },
       });
       if (result) return { statusCode: result.statusCode, headers, body: JSON.stringify(result.data) };
     }

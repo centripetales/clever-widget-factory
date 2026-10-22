@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildPrompt, settle, isReadable, parseOffer } = require('./offers');
+const { buildPrompt, settle, isReadable, parseOffer, loadOffers } = require('./offers');
 
 const offer = (over = {}) => ({
   id: 'o1', action_id: 'a1', payer_name: 'Stargazer Farm', closed_at: null,
@@ -66,4 +66,23 @@ test('read again after an edit, an amount can rise but never falls, and a closed
   assert.deepEqual(raised.offers[1], { offer_id: 'closed', action_id: 'a9', php: 5, counts: true });
   const lower = settle(answer(4), [offer()], [], 'may', previous);
   assert.deepEqual([lower.offers[0].php, 'was_php' in lower.offers[0]], [10, false]);
+});
+
+test('an offer where the observation was shared counts only when its person joined that offer', async () => {
+  const reward = (id, action_id) => ({ id, state_text: JSON.stringify({ type: 'positive_sum.reward', action_id, closed_at: null, evaluator: { kind: 'prompt', prompt: 'Practices' }, max_php_per_observation: 20 }) });
+  const calls = [];
+  const client = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (/\$6/.test(sql)) return { rows: [reward('joined', 'a-joined'), reward('other', 'a-other')] };
+      if (/FROM actions/.test(sql)) return { rows: [{ id: 'a-joined' }] };
+      return { rows: [] };
+    },
+  };
+  const state = { id: 's1', organization_id: 'org-a', captured_by: 'lester', captured_at: '2026-10-01T00:00:00Z' };
+  const offers = await loadOffers(client, [{ entity_type: 'action', entity_id: 'harvest' }], state);
+  assert.deepEqual(offers.map(o => o.id), ['joined']);
+  const shared = calls.find(c => /\$6/.test(c.sql));
+  assert.deepEqual(shared.params.slice(0, 3), ['s1', 'org-a', 'lester']);
+  assert.equal(shared.params[5], state.captured_at);
 });

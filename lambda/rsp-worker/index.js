@@ -441,7 +441,9 @@ async function broadcastOfferActions(actionIds, organizationId) {
 }
 
 // ─── Core processing logic for a single pending_perspectives record ───────────
-async function processPendingRecord(client, record) {
+// `offersOnly`: only the offers reading, for an observation whose other
+// perspectives already exist (one shared after it was made).
+async function processPendingRecord(client, record, offersOnly = false) {
   // Mark as processing
   await client.query(`
     UPDATE pending_perspectives 
@@ -499,11 +501,36 @@ async function processPendingRecord(client, record) {
   // if nothing at all applies (nothing should have been queued in that case).
   const linksRes = await client.query('SELECT * FROM state_links WHERE state_id = $1', [state.id]);
   // Pages showing an offer on this observation's action refresh, so it shows as being read.
-  const offerActions = await offerActionIds(client, linksRes.rows).catch(err => {
+  const offerActions = await offerActionIds(client, linksRes.rows, state).catch(err => {
     console.error('[RSP] offers: could not find offers for state', state.id, err.message);
     return [];
   });
   await broadcastOfferActions(offerActions, state.organization_id);
+
+  const readOffers = async () => {
+    try {
+      const reading = await runOffersReading(client, {
+        state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
+      });
+      if (reading) {
+        console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
+        // Their pages refresh with what it earned, including offers it was newly linked to.
+        const counted = reading.offers.filter(o => o.counts).map(o => String(o.action_id));
+        await broadcastOfferActions([...new Set([...offerActions, ...counted])], state.organization_id);
+      }
+    } catch (err) {
+      console.error('[RSP] offers reading failed for state', state.id, err);
+    }
+  };
+
+  if (offersOnly) {
+    await readOffers();
+    await client.query(
+      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
+      [record.id]
+    );
+    return;
+  }
 
   const qualifyingTypes = ['observation', 'action']; // must match QUALIFYING_LINK_TYPES in lambda/states/index.js
   const runsEpistemicPerspectives = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
@@ -819,19 +846,7 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
   // Offers of a Positive Sum network the observation was made in: one reading
   // against all of them. Independent of the extraction above; a failure here
   // is logged, and the observation earns nothing until a reading exists.
-  try {
-    const reading = await runOffersReading(client, {
-      state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
-    });
-    if (reading) {
-      console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
-      // Their pages refresh with what it earned, including offers it was newly linked to.
-      const counted = reading.offers.filter(o => o.counts).map(o => String(o.action_id));
-      await broadcastOfferActions([...new Set([...offerActions, ...counted])], state.organization_id);
-    }
-  } catch (err) {
-    console.error('[RSP] offers reading failed for state', state.id, err);
-  }
+  await readOffers();
 
   // Mark pending_perspectives row as DONE
   await client.query(
@@ -860,9 +875,11 @@ exports.handler = async (event) => {
     if (Array.isArray(event.Records) && event.Records.length > 0) {
       console.log(`[RSP] SQS trigger: processing ${event.Records.length} record(s)`);
       for (const sqsRecord of event.Records) {
-        const { stateId } = JSON.parse(sqsRecord.body);
-        // Find or create the pending_perspectives row for this state
-        let pendingRow = (await client.query(
+        const { stateId, perspective } = JSON.parse(sqsRecord.body);
+        const offersOnly = perspective === 'OFFERS';
+        // Find or create the pending_perspectives row for this state. An
+        // offers-only job gets its own, so it never takes a full one's.
+        let pendingRow = offersOnly ? null : (await client.query(
           `SELECT id, state_id FROM pending_perspectives WHERE state_id = $1 AND status IN ('PENDING','PROCESSING') ORDER BY created_at DESC LIMIT 1`,
           [stateId]
         )).rows[0];
@@ -874,7 +891,7 @@ exports.handler = async (event) => {
           )).rows[0];
         }
         try {
-          await processPendingRecord(client, pendingRow);
+          await processPendingRecord(client, pendingRow, offersOnly);
         } catch (err) {
           console.error(`[RSP] Failed processing state ${stateId}:`, err.message);
           await client.query(

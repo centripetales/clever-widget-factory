@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiService } from '@/lib/apiService';
 import { shareStatusQueryKey } from '@/lib/queryKeys';
 
-export type ShareEntityType = 'action' | 'part' | 'tool';
+export type ShareEntityType = 'action' | 'part' | 'tool' | 'state';
 
 // One org an entity is shared with; the share is a state, hence state_id.
 export interface EntityShare {

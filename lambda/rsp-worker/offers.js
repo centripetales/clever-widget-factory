@@ -12,6 +12,7 @@
 // offer, it is linked to that offer's action too, so nobody picks where it
 // goes. See docs/design/POSITIVE_SUM.md §2.9. All SQL is parameterized.
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
+const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
 const PROMPT_VERSION = 'offers-v9';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
@@ -91,10 +92,13 @@ const isReadable = offer => !!offer && !offer.closed_at && !!offer.prompt;
 
 // The open offers of the networks this observation was made in: the
 // organizations of the actions it is linked to that carry an open reward.
-async function loadOffers(client, links) {
+// Also those of the networks it was shared with (the observation itself, or
+// what it is linked to, shared by its org): there only the offers its person
+// joined, and only when they agreed to share through Positive Sum before
+// making it. Unshared, it is no longer read there; what it earned stays.
+async function loadOffers(client, links, state) {
   const actionIds = links.filter(l => l.entity_type === 'action').map(l => l.entity_id);
-  if (actionIds.length === 0) return [];
-  const { rows } = await client.query(
+  const { rows } = actionIds.length === 0 ? { rows: [] } : await client.query(
     `SELECT s.id, s.state_text FROM states s
       WHERE s.state_text LIKE $2
         AND s.organization_id IN (
@@ -103,14 +107,45 @@ async function loadOffers(client, links) {
            WHERE rl.entity_id = ANY($1::uuid[]) AND r.state_text LIKE $2 AND r.state_text LIKE '%"closed_at":null%')`,
     [actionIds, `${REWARD_PREFIX}%`]
   );
-  return rows.map(parseOffer).filter(isReadable);
+  const offers = rows.map(parseOffer).filter(isReadable);
+
+  const person = String(state.captured_by);
+  const { rows: sharedRows } = await client.query(
+    `SELECT s.id, s.state_text FROM states s
+      WHERE s.state_text LIKE $4
+        AND s.organization_id IN (
+          SELECT n.org_id FROM states sh
+            JOIN state_links sl_o ON sl_o.state_id = sh.id AND sl_o.entity_type = 'organization'
+            JOIN state_links sl_e ON sl_e.state_id = sh.id AND sl_e.entity_type <> 'organization'
+            CROSS JOIN LATERAL (
+              SELECT sl_o.entity_id AS org_id
+              UNION SELECT mo.member_organization_id FROM member_organizations mo WHERE mo.organization_id = sl_o.entity_id
+            ) n
+           WHERE sh.organization_id = $2
+             AND ((sl_e.entity_type = 'state' AND sl_e.entity_id = $1)
+               OR EXISTS (SELECT 1 FROM state_links own
+                           WHERE own.state_id = $1 AND own.entity_type = sl_e.entity_type AND own.entity_id = sl_e.entity_id)))
+        AND EXISTS (
+          SELECT 1 FROM states ag
+           WHERE ag.organization_id = s.organization_id AND ag.captured_by::text = $3
+             AND ag.state_text LIKE $5 AND ag.captured_at <= $6)`,
+    [state.id, state.organization_id, person, `${REWARD_PREFIX}%`, `${AGREEMENT_PREFIX}%`, state.captured_at]
+  );
+  const shared = sharedRows.map(parseOffer).filter(o => isReadable(o) && !offers.some(other => other.id === o.id));
+  if (shared.length === 0) return offers;
+  const { rows: joined } = await client.query(
+    `SELECT id::text FROM actions WHERE id = ANY($1::uuid[]) AND $2 = ANY(participants::text[])`,
+    [[...new Set(shared.map(o => o.action_id))], person]
+  );
+  const joinedIds = new Set(joined.map(r => r.id));
+  return offers.concat(shared.filter(o => joinedIds.has(String(o.action_id))));
 }
 
 // The actions this observation is linked to that carry an open offer read by
 // AI: the offers whose lists show it.
-async function offerActionIds(client, links) {
+async function offerActionIds(client, links, state) {
   const linked = new Set(links.filter(l => l.entity_type === 'action').map(l => String(l.entity_id)));
-  const offers = await loadOffers(client, links);
+  const offers = await loadOffers(client, links, state);
   return [...new Set(offers.map(o => String(o.action_id)).filter(id => linked.has(id)))];
 }
 
@@ -206,7 +241,7 @@ async function generationConfigId(client) {
 // Returns it, or null when no offer applies. `text` is the observation's
 // words with its photo descriptions.
 async function runOffersReading(client, { state, links, text, invokeBedrock }) {
-  const offers = await loadOffers(client, links);
+  const offers = await loadOffers(client, links, state);
   if (offers.length === 0) return null;
 
   const person = String(state.captured_by);
@@ -242,4 +277,4 @@ async function runOffersReading(client, { state, links, text, invokeBedrock }) {
   return reading;
 }
 
-module.exports = { runOffersReading, offerActionIds, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };
+module.exports = { runOffersReading, offerActionIds, loadOffers, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };

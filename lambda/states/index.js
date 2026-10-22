@@ -293,6 +293,20 @@ async function listStates(event, authContext, headers) {
               )
           )
         )`);
+        // Observations shared on their own with this org, or an org it is a member of
+        clauses.push(`(
+          s.organization_id IN (${partnerList})
+          AND EXISTS (
+            SELECT 1 FROM state_links sl_e
+            JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
+            WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
+              AND sl_o.entity_id IN (
+                SELECT '${organizationId}'::uuid
+                UNION SELECT mo.organization_id FROM member_organizations mo
+                 WHERE mo.member_organization_id = '${organizationId}'::uuid
+              )
+          )
+        )`);
       }
       whereClause = clauses.length > 0 ? `(${clauses.join(' OR ')})` : '1=0';
     } else {
@@ -318,9 +332,11 @@ async function listStates(event, authContext, headers) {
         s.created_at,
         s.updated_at,
         om.full_name as captured_by_name,
-        COALESCE(
-          (SELECT srp.aggregate_risk = 0.0 FROM state_risk_profiles srp WHERE srp.state_id = s.id),
-          false
+        EXISTS (
+          SELECT 1 FROM state_links sl_e
+          JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
+          WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
+            AND sl_o.entity_id != s.organization_id
         ) as shared_with_partners,
         COALESCE(
           (SELECT json_agg(
@@ -457,9 +473,11 @@ async function getState(id, authContext, headers) {
         s.created_at,
         s.updated_at,
         om.full_name as captured_by_name,
-        COALESCE(
-          (SELECT srp.aggregate_risk = 0.0 FROM state_risk_profiles srp WHERE srp.state_id = s.id),
-          false
+        EXISTS (
+          SELECT 1 FROM state_links sl_e
+          JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
+          WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
+            AND sl_o.entity_id != s.organization_id
         ) as shared_with_partners,
         COALESCE(
           (SELECT json_agg(

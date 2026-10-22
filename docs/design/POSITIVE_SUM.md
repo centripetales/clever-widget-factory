@@ -485,6 +485,18 @@ on one action, each with its own payer, condition and cap.
   by default and is read against all open offers. Nothing else a person
   records is scanned. "Share with Positive Sum" for an observation made
   elsewhere is put off: people are expected to go through Positive Sum.
+- **What an org shares is read too** (2026-10-22): when an org shares an
+  action (or an observation, tool or part) with Positive Sum, its
+  observations there are read against the offers in Positive Sum and its
+  member organizations, but only the offers the observer joined, and only
+  observations made on or after that person's own sharing agreement.
+  Someone else's observation on the shared action counts only once they
+  have agreed too. Sharing queues the observations already made, back to
+  each person's agreement; these get the offers reading only
+  (`perspective: 'OFFERS'` on the queue message), not claim / significance
+  / entropy again. Unsharing stops new readings; what was earned stays.
+  Example: Lester shares his Seryalis harvest action, and his harvest
+  observations are read against the farming-practices offer he joined.
 - **How it is built**: an offer is a reward with a prompt (set under "Make
   an offer" or "Add a reward"). "Share an observation" on the offer opens the
   usual add-observation page linked to the offer's action; being linked to
