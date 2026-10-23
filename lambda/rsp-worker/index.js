@@ -52,7 +52,10 @@ function downloadPhoto(url) {
 }
 
 // Bedrock invocation helper supporting regional IDs and multimodal payloads
-async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig = {}, images = [], toolConfig = null) {
+// `meta`, when given, receives the Bedrock request id: the key of this call's
+// full prompt and response in the invocation logs (S3 bucket
+// cwf-bedrock-invocation-logs-131745734428).
+async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig = {}, images = [], toolConfig = null, meta = null) {
   let body;
   const isAnthropic = modelId.includes('anthropic');
 
@@ -151,6 +154,7 @@ async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig 
   });
 
   const response = await bedrockRuntime.send(command);
+  if (meta) meta.requestId = response.$metadata?.requestId;
   const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
   if (isAnthropic) {
@@ -253,7 +257,7 @@ async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks, pro
 // half of scripts/azolla-wire-coverage-metric.js — same prompt/schema/model, same
 // derived-state + state_perspectives shape, so historical and live data land in
 // identical tables with no read-side changes.
-const AZOLLA_COVERAGE_MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const AZOLLA_COVERAGE_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 const AZOLLA_COVERAGE_PROMPT_VERSION = 'azolla-duckweed-v1';
 
 const AZOLLA_COVERAGE_SYSTEM_PROMPT = `You are a data extraction system supporting azolla/duckweed cultivation. Your only job is to report what is directly visible in the photo, as structured data. Do not assess health, growth quality, or compare against an ideal state. If something can't be determined from the image, say so explicitly in uncertainty_flags rather than guessing.
@@ -371,13 +375,15 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
 
     try {
       const imgData = await downloadPhoto(photo.photo_url);
+      const meta = {};
       const result = await invokeBedrock(
         AZOLLA_COVERAGE_MODEL_ID,
         AZOLLA_COVERAGE_SYSTEM_PROMPT,
         'Analyze this photo and record the structured observation.',
         { max_tokens: 1000, temperature: 0 },
         [imgData],
-        AZOLLA_COVERAGE_TOOL_CONFIG
+        AZOLLA_COVERAGE_TOOL_CONFIG,
+        meta
       );
 
       await client.query('BEGIN');
@@ -399,7 +405,7 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
       await client.query(
         `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
          VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS', $3)`,
-        [derivedStateId, configId, JSON.stringify(result)]
+        [derivedStateId, configId, JSON.stringify({ ...result, request_id: meta.requestId })]
       );
       await client.query('COMMIT');
 
@@ -438,6 +444,49 @@ async function broadcastOfferActions(actionIds, organizationId) {
       console.error('[RSP] offers: broadcast failed for action', entityId, err.message);
     }
   }
+}
+
+// ─── CLAIM / SIGNIFICANCE / ENTROPY settings ──────────────────────────────────
+// Found by model and version, so the extraction never picks up another task's
+// row. The system prompt is the one it ran with on Sonnet 4 (config v4.0).
+const EXTRACTION_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
+const EXTRACTION_VERSION = 'epistemic-v4.0';
+const EXTRACTION_SYSTEM_PROMPT = `You are the internal operations intelligence assistant for Stargazer Farm.
+
+Your purpose is to support operational clarity, structured experimentation tracking, and long-term farm resilience.
+
+Prioritize:
+- Practicality over theory
+- Reproducibility over novelty
+- Low-cost scalable solutions
+- Soil health and biological sustainability
+
+When analyzing observations:
+- Distinguish observations from interpretations
+- Stay within what is directly stated or visible
+
+Communication style:
+- Clear and direct
+- Dense with useful information
+- Avoid unnecessary disclaimers
+
+Never:
+- Invent measurements or results
+- Present assumptions as facts`;
+const EXTRACTION_INFERENCE = { max_tokens: 2000, temperature: 0.1 };
+
+async function getOrCreateExtractionConfig(client) {
+  const existing = await client.query(
+    `SELECT * FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1`,
+    [EXTRACTION_MODEL_ID, EXTRACTION_VERSION]
+  );
+  if (existing.rows.length > 0) return existing.rows[0];
+  const inserted = await client.query(
+    `INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [EXTRACTION_MODEL_ID, EXTRACTION_VERSION, EXTRACTION_SYSTEM_PROMPT, JSON.stringify(EXTRACTION_INFERENCE)]
+  );
+  return inserted.rows[0];
 }
 
 // ─── Core processing logic for a single pending_perspectives record ───────────
@@ -590,10 +639,7 @@ async function processPendingRecord(client, record, offersOnly = false) {
     }
   }
 
-  // Resolve default LLM config — use Sonnet 4 (same model used by capability + states lambdas)
-  const configRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.anthropic.claude-sonnet-4-20250514-v1:0' LIMIT 1`);
-  const llmConfig = configRes.rows.length > 0 ? configRes.rows[0] : (await client.query('SELECT * FROM llm_generation_configs ORDER BY created_at DESC LIMIT 1')).rows[0];
-  if (!llmConfig) throw new Error('No LLM generation config found in llm_generation_configs');
+  const llmConfig = await getOrCreateExtractionConfig(client);
 
   // Broadcast perspectives:processing with estimated completion time
   const hasImages = (state.photos || []).some(p => p.photo_url);
@@ -778,7 +824,8 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
   try {
     // perspectives should not need to look at images directly; they rely on text + AI descriptions
-    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig);
+    const meta = {};
+    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig, meta);
 
     await client.query('BEGIN');
 
@@ -792,15 +839,15 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     // Insert CLAIM / SIGNIFICANCE / ENTROPY
     const claimRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'CLAIM', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.claim })]
+      [state.id, configId, JSON.stringify({ content: toolInput.claim, request_id: meta.requestId })]
     );
     const sigRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.significance })]
+      [state.id, configId, JSON.stringify({ content: toolInput.significance, request_id: meta.requestId })]
     );
     const entRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'ENTROPY', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.entropy })]
+      [state.id, configId, JSON.stringify({ content: toolInput.entropy, request_id: meta.requestId })]
     );
 
     await client.query('COMMIT');

@@ -13,7 +13,7 @@
 // goes. See docs/design/POSITIVE_SUM.md §2.9. All SQL is parameterized.
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
-const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 const PROMPT_VERSION = 'offers-v9';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 const MAX_EARLIER = 60;
@@ -246,7 +246,8 @@ async function runOffersReading(client, { state, links, text, invokeBedrock }) {
 
   const person = String(state.captured_by);
   const earlier = await loadEarlier(client, offers, state);
-  const input = await invokeBedrock(MODEL_ID, SYSTEM_PROMPT, buildPrompt({ offers, text, earlier, person }), INFERENCE, [], TOOL_CONFIG);
+  const meta = {};
+  const input = await invokeBedrock(MODEL_ID, SYSTEM_PROMPT, buildPrompt({ offers, text, earlier, person }), INFERENCE, [], TOOL_CONFIG, meta);
   const { rows: [existing] } = await client.query(
     `SELECT content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'OFFERS' AND status = 'SUCCESS'
       ORDER BY created_at DESC LIMIT 1`,
@@ -262,7 +263,7 @@ async function runOffersReading(client, { state, links, text, invokeBedrock }) {
     await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
        VALUES ($1, 'OFFERS', $2, 'SUCCESS', $3)`,
-      [state.id, configId, JSON.stringify(reading)]
+      [state.id, configId, JSON.stringify({ ...reading, request_id: meta.requestId })]
     );
     const linked = new Set(links.filter(l => l.entity_type === 'action').map(l => String(l.entity_id)));
     for (const actionId of new Set(reading.offers.filter(o => o.counts).map(o => String(o.action_id)))) {

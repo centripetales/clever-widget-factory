@@ -18,7 +18,7 @@ const pool = new Pool({
 });
 
 const REGION = process.env.AWS_REGION || 'us-west-2';
-const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
 const bedrock = new BedrockRuntimeClient({ region: REGION });

@@ -869,7 +869,7 @@ async function updateState(event, id, authContext, headers) {
         UPDATE state_photos 
         SET requested_model = $1 
         WHERE id = $2
-      `, [requested_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0', photo_id]);
+      `, [requested_model || 'us.anthropic.claude-sonnet-4-6', photo_id]);
       
       await client.query('COMMIT');
 
