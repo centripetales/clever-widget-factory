@@ -37,10 +37,15 @@ test('the prompt gives each offer in its payer\'s words with its most, and the n
   assert.match(buildPrompt({ offers: [offer()], text: 'x', nearest: [] }), /nearest first:\n- nothing yet/);
 });
 
-test('the notes a reading compared with are kept as the observations they stand for; labels it was not given are dropped', () => {
+test('the notes a reading compared with are kept as the observations they stand for, with what it adds; labels it was not given are dropped', () => {
   const nearest = [{ label: 'n1', state_id: 's-early' }, { label: 'n2', state_id: 's-other' }];
-  const input = { shows: 'x', offers: [{ offer_id: 'o1', php: 3, feedback: 'f', compared_with: ['n2', 'n9', 'n2'] }] };
-  assert.deepEqual(settle(input, [offer()], [], 'may', null, nearest).offers[0].compared_with, ['s-other']);
+  const input = { shows: 'x', offers: [{ offer_id: 'o1', php: 3, feedback: 'f', compared_with: [
+    { note: 'n2', adds: ' a load of 4 per trip ', repeats: false }, { note: 'n9', adds: '', repeats: true }, { note: 'n2', adds: 'again', repeats: true },
+    { note: 'n1', adds: '', repeats: true },
+  ] }] };
+  assert.deepEqual(settle(input, [offer()], [], 'may', null, nearest).offers[0].compared_with, [
+    { state_id: 's-other', adds: 'a load of 4 per trip', repeats: false }, { state_id: 's-early', adds: '', repeats: true },
+  ]);
   const none = { shows: 'x', offers: [{ offer_id: 'o1', php: 5, feedback: 'f', compared_with: [] }] };
   assert.equal('compared_with' in settle(none, [offer()], [], 'may', null, nearest).offers[0], false);
 });
@@ -124,4 +129,11 @@ test('an offer where the observation was shared counts only when its person join
   const shared = calls.find(c => /\$6/.test(c.sql));
   assert.deepEqual(shared.params.slice(0, 3), ['s1', 'org-a', 'lester']);
   assert.equal(shared.params[5], state.captured_at);
+});
+
+test('an answer list sent as JSON text is read as the list', () => {
+  const input = { shows: 'x', offers: JSON.stringify([{ offer_id: 'o1', php: 2, feedback: 'f', compared_with: JSON.stringify([{ note: 'n1', adds: '', repeats: true }]) }]) };
+  const settled = settle(input, [offer()], [], 'may', null, [{ label: 'n1', state_id: 's1' }]).offers[0];
+  assert.equal(settled.php, 2);
+  assert.deepEqual(settled.compared_with, [{ state_id: 's1', adds: '', repeats: true }]);
 });

@@ -14,7 +14,7 @@
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const PROMPT_VERSION = 'offers-v12';
+const PROMPT_VERSION = 'offers-v13';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 // How many earlier notes the reading is given: the nearest by meaning.
 const NEAREST = 5;
@@ -25,7 +25,7 @@ You work from words only. The photos are not shown to you, so anything the perso
 
 You are given: the offers, each with what its payer wrote about what they want and how they value it, and the most it pays for one observation; the description of the observation, in the person's words; and the earlier notes most like it, nearest first, each with a label (n1, n2…), who shared it (you, your organization, or another organization) and when.
 
-For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. An offer never pays more than its most for one observation: when what the payer wrote comes to more, give the most, and state that amount as what is credited. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula or a scale, apply it. Where they do not say how the value falls off, use this:
+For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. An offer never pays more than its most for one observation: when what the payer wrote comes to more, give the most, and state that amount as what is credited. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula or a scale, apply it: the amount is what it gives, rounded as it says, with no deductions or bonuses of your own. Where they do not say how the value falls off, use this:
 - the most, when it shows what the offer asks for and nothing like it is in this person's notes.
 - less the more it overlaps with those notes, by how much it still adds.
 - 0 when it shows nothing the offer asks for, or adds nothing to those notes.
@@ -36,7 +36,9 @@ Default to trust. When unsure, lean higher.
 
 Never comment on the person, their effort, or their honesty. Describe only what the words say. Write in the language the person wrote in. Keep every field to one or two short sentences.
 
-In each offer's entry, list in compared_with the labels of the earlier notes you counted or compared it with; none when none applied. The labels are for compared_with only: in the feedback, refer to an earlier note by what it says and when, never by its label.
+Before valuing, compare the observation closely with each earlier note about the same thing. Similar words can carry different information: for each such note, say what this observation says that the note does not, such as an outcome, result, quantity, step, method, reason or explanation. A note is repeated only when the observation adds nothing to it. Where an offer counts earlier notes like this one, count only the repeated ones, unless the offer says otherwise. Do not lower an amount and then ask what is different when the person already said it.
+
+In each offer's entry, list in compared_with every earlier note you compared it with: its label, what this observation adds to it (empty when nothing), and whether it repeats it. None when no earlier note is about the same thing. The labels are for compared_with only: in the feedback, refer to an earlier note by what it says and when, never by its label.
 
 Call record_reading once, with one entry for every offer.`;
 
@@ -56,11 +58,23 @@ const TOOL_CONFIG = {
                 type: 'object',
                 properties: {
                   offer_id: { type: 'string' },
+                  compared_with: {
+                    type: 'array',
+                    description: 'The earlier notes about the same thing that this observation was compared with.',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        note: { type: 'string', description: 'Its label: n1, n2…' },
+                        adds: { type: 'string', description: 'What this observation says that the note does not; empty when nothing.' },
+                        repeats: { type: 'boolean', description: 'True only when this observation adds nothing to the note.' },
+                      },
+                      required: ['note', 'adds', 'repeats'],
+                    },
                   php: { type: 'number', minimum: 0, description: 'What this offer pays for the observation, in pesos, by what its payer wrote.' },
                   feedback: { type: 'string', description: 'To the person: how the amount follows from what the payer wrote, and what would be worth more.' },
-                  compared_with: { type: 'array', items: { type: 'string' }, description: 'Labels (n1, n2…) of the earlier notes this offer counted or compared the observation with.' },
+                  },
                 },
-                required: ['offer_id', 'php', 'feedback'],
+                required: ['offer_id', 'compared_with', 'php', 'feedback'],
               },
             },
           },
@@ -234,11 +248,12 @@ function buildPrompt({ offers, text, nearest }) {
 // never goes down because a person added to what they wrote (`was_php` keeps
 // what it was when it rose), and what it earned from an offer that has since
 // closed stays as it was. `nearest` maps the labels the reading named in
-// compared_with to the observations they stand for; a label it was not given
+// compared_with to the observations they stand for, each kept with what this
+// observation adds to it and whether it repeats it; a label it was not given
 // is dropped.
 function settle(input, offers, earlier, person, previous = null, nearest = []) {
   const before = Array.isArray(previous?.offers) ? previous.offers : [];
-  const answers = Array.isArray(input?.offers) ? input.offers : [];
+  const answers = asList(input?.offers);
   const paid = (offer, mine) => earlier
     .filter(e => !mine || e.person === person)
     .flatMap(e => e.offers || [])
@@ -258,8 +273,13 @@ function settle(input, offers, earlier, person, previous = null, nearest = []) {
       const read = Math.max(0, Math.min(Math.round(asked), ...limits));
       const was = before.find(o => o.offer_id === offer.id);
       const php = was ? Math.max(read, Number(was.php) || 0) : read;
-      const named = Array.isArray(answer?.compared_with) ? answer.compared_with : [];
-      const compared = [...new Set(named.map(l => nearest.find(n => n.label === l)?.state_id).filter(Boolean))];
+      const named = asList(answer?.compared_with);
+      const compared = [];
+      for (const c of named) {
+        const n = nearest.find(x => x.label === c?.note);
+        if (!n || compared.some(x => x.state_id === n.state_id)) continue;
+        compared.push({ state_id: n.state_id, adds: typeof c.adds === 'string' ? c.adds.trim() : '', repeats: c.repeats === true });
+      }
       return {
         offer_id: offer.id,
         action_id: offer.action_id,
@@ -271,6 +291,19 @@ function settle(input, offers, earlier, person, previous = null, nearest = []) {
       };
     }).concat(before.filter(o => !offers.some(offer => offer.id === o.offer_id))),
   };
+}
+
+// A list the model was asked for. It sometimes sends one as JSON text; an
+// unreadable answer counts as none.
+function asList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 async function generationConfigId(client) {
