@@ -497,6 +497,20 @@ on one action, each with its own payer, condition and cap.
   / entropy again. Unsharing stops new readings; what was earned stays.
   Example: Lester shares his Seryalis harvest action, and his harvest
   observations are read against the farming-practices offer he joined.
+- **What a reading compares with, and what it shows** (decided 2026-10-23;
+  not built). Comparing is for new information or deeper thinking, so the
+  person can reach the observation it was compared with. Code gives the
+  reading facts: each earlier note with a label (`[n1]`), who made it, how
+  close they are (you / your organization / another organization) and its
+  date. The reading records `compared_with` (the notes it found relevant)
+  and `revealed` (the ones to show, each with a reason) in its JSON; shown
+  under the feedback, linking to the observation. What counts, how much
+  (closeness is a weight in the offer's equation, not a cutoff) and what is
+  revealed is in the offer's wording, changed freely. What was shared
+  through Positive Sum can be seen by others. First use: the
+  farming-practices offer weights earlier notes 1 (own), 0.5 (own
+  organization), 0 (other organizations). Revealing in proportion to what a
+  person shares is put off until it is thought through.
 - **How it is built**: an offer is a reward with a prompt (set under "Make
   an offer" or "Add a reward"). "Share an observation" on the offer opens the
   usual add-observation page linked to the offer's action; being linked to
