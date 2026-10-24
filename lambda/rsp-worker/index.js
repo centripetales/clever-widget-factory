@@ -359,7 +359,7 @@ async function getOrCreateCoverageMetric(client, toolId, orgId) {
 // Runs the vision-LLM coverage estimate for every not-yet-analyzed photo on this
 // state, then writes the resulting average as this state's "Coverage %" metric
 // snapshot on its linked tool. Errors are logged, not thrown — a failure here
-// shouldn't fail an otherwise-successful CLAIM/SIGNIFICANCE/ENTROPY extraction
+// shouldn't fail an otherwise-successful CLAIM/SIGNIFICANCE extraction
 // (or vice versa; these are independent processors on the same state).
 async function runAzollaCoverageProcessor(client, state, linkRows) {
   const toolLink = linkRows.find(l => l.entity_type === 'tool');
@@ -458,11 +458,11 @@ async function broadcastOfferActions(actionIds, organizationId) {
   }
 }
 
-// ─── CLAIM / SIGNIFICANCE / ENTROPY settings ──────────────────────────────────
+// ─── CLAIM / SIGNIFICANCE settings ───────────────────────────────────────────
 // Found by model and version, so the extraction never picks up another task's
 // row. The system prompt is the one it ran with on Sonnet 4 (config v4.0).
 const EXTRACTION_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const EXTRACTION_VERSION = 'epistemic-v4.0';
+const EXTRACTION_VERSION = 'epistemic-v4.1';
 const EXTRACTION_SYSTEM_PROMPT = `You are the internal operations intelligence assistant for Stargazer Farm.
 
 Your purpose is to support operational clarity, structured experimentation tracking, and long-term farm resilience.
@@ -556,7 +556,7 @@ async function processPendingRecord(client, record, offersOnly = false) {
   const state = stateResult.rows[0];
 
   // Verify eligibility. Two independent processors can apply to the same state —
-  // the original text-only epistemic extraction (CLAIM/SIGNIFICANCE/ENTROPY), and
+  // the original text-only epistemic extraction (CLAIM/SIGNIFICANCE), and
   // any org-scoped processor (e.g. azolla_coverage) the state's linked tool/part/
   // action is share-granted into. Neither gates the other; only fail the whole job
   // if nothing at all applies (nothing should have been queued in that case).
@@ -816,7 +816,7 @@ Analyze the following observation:
 Observation: ${getCombinedStateText(state) || 'None'}
 Action Context: ${actionContext}
 
-Extract three distinct epistemic dimensions. CRITICAL RULES:
+Extract two distinct epistemic dimensions. CRITICAL RULES:
 - Be concise and information-dense. Every sentence must carry unique information.
 - Do NOT repeat information across dimensions.
 - Do NOT speculate. If data was not collected, note the absence cleanly — do not infer what the data would have shown.
@@ -827,8 +827,6 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 1. CLAIM: The raw, objective, observable assertion strictly as stated or visible. No interpretation.
 
 2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the stated method/policy for this action, or (b) widely accepted best practice for this type of task — whichever applies. When the policy does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both policy and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
-
-3. ENTROPY: The net change in system knowledge. Did this observation resolve an open question (reduce) or expose a new unknown (increase)? Name the specific question or unknown. Be precise.
 `;
 
 
@@ -836,16 +834,15 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     tools: [{
       toolSpec: {
         name: 'record_epistemic_extraction',
-        description: 'Record the three epistemic dimensions of the observation',
+        description: 'Record the two epistemic dimensions of the observation',
         inputSchema: {
           json: {
             type: 'object',
             properties: {
               claim: { type: 'string', description: 'Raw, objective, directly observable facts as stated. No interpretation or inference.' },
-              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' },
-              entropy: { type: 'string', description: 'Net change in system knowledge: which specific question was resolved (reduction) or which new unknown was exposed (increase). Be precise.' }
+              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' }
             },
-            required: ['claim', 'significance', 'entropy']
+            required: ['claim', 'significance']
           }
         }
       }
@@ -867,7 +864,8 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     // amounts are still needed.
     await client.query(`DELETE FROM state_perspectives WHERE state_id = $1 AND perspective_type <> 'OFFERS'`, [state.id]);
 
-    // Insert CLAIM / SIGNIFICANCE / ENTROPY
+    // Insert CLAIM / SIGNIFICANCE. ENTROPY is no longer written (2026-10-24): it
+    // named what the person had not recorded instead of what they observed.
     const claimRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'CLAIM', $2, 'SUCCESS', $3) RETURNING id`,
       [state.id, configId, JSON.stringify({ content: toolInput.claim, request_id: meta.requestId })]
@@ -876,19 +874,14 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS', $3) RETURNING id`,
       [state.id, configId, JSON.stringify({ content: toolInput.significance, request_id: meta.requestId })]
     );
-    const entRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'ENTROPY', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.entropy, request_id: meta.requestId })]
-    );
 
     await client.query('COMMIT');
-    console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
+    console.log('[RSP] Successfully extracted and saved 2 perspective dimensions for state', state.id);
 
     // Queue embeddings
     for (const q of [
       { id: claimRes.rows[0].id, type: 'claim_perspective', text: toolInput.claim },
-      { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance },
-      { id: entRes.rows[0].id, type: 'entropy_perspective', text: toolInput.entropy }
+      { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance }
     ]) {
       try {
         await sqs.send(new SendMessageCommand({
