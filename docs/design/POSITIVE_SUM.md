@@ -498,11 +498,13 @@ on one action, each with its own payer, condition and cap.
   Example: Lester shares his Seryalis harvest action, and his harvest
   observations are read against the farming-practices offer he joined.
 - **What a reading compares with, and what it shows** (decided 2026-10-23;
-  not built). Comparing is for new information or deeper thinking, so the
-  person can reach the observation it was compared with. Code gives the
-  reading facts: each earlier note with a label (`[n1]`), who made it, how
-  close they are (you / your organization / another organization) and its
-  date. The reading records `compared_with` (the notes it found relevant)
+  comparison built 2026-10-24, `revealed` and the links not yet). Comparing
+  is for new information or deeper thinking, so the person can reach the
+  observation it was compared with. Code gives the reading facts: the 5
+  earlier notes on the offer nearest in meaning (by the CLAIM embedding,
+  which matched best in testing; observations with no words have none),
+  each with a label (`[n1]`), who made it, how close they are (you / your
+  organization / another organization) and its date. The reading records `compared_with` (the notes it found relevant)
   and `revealed` (the ones to show, each with a reason) in its JSON; shown
   under the feedback, linking to the observation. What counts, how much
   (closeness is a weight in the offer's equation, not a cutoff) and what is

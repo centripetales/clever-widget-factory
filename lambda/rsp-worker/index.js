@@ -174,6 +174,18 @@ async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig 
   }
 }
 
+// Titan embedding of a text: the model the embeddings queue stores (titan-v1),
+// so it can be compared with stored embeddings.
+async function embedText(text) {
+  const response = await bedrockRuntime.send(new InvokeModelCommand({
+    modelId: 'amazon.titan-embed-text-v1',
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: JSON.stringify({ inputText: text })
+  }));
+  return JSON.parse(new TextDecoder().decode(response.body)).embedding;
+}
+
 // Helper to extract JSON block safely from LLM text response
 function parseLLMJson(text) {
   try {
@@ -559,7 +571,7 @@ async function processPendingRecord(client, record, offersOnly = false) {
   const readOffers = async () => {
     try {
       const reading = await runOffersReading(client, {
-        state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
+        state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock, embedText,
       });
       if (reading) {
         console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
