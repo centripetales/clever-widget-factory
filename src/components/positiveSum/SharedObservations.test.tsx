@@ -37,6 +37,16 @@ describe('SharedObservations', () => {
     expect(flyCoin).toHaveBeenCalledTimes(2);
   });
 
+  it('sends the coin once when the page opens just after a quick reading of the person\'s own observation', () => {
+    localStorage.clear();
+    const recent = observation({ id: 'quick', created_at: new Date(Date.now() - 30_000).toISOString(), reading: 'read', php: 5 });
+    const { unmount } = render(<SharedObservations observations={[recent]} payerName="Stargazer Farm" />);
+    expect(flyCoin).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<SharedObservations observations={[recent]} payerName="Stargazer Farm" />); // a later visit
+    expect(flyCoin).toHaveBeenCalledTimes(1);
+  });
+
   it('sends no coin for someone else\'s credit or for nothing credited', () => {
     const { rerender } = render(<SharedObservations observations={[observation({ reading: 'waiting', php: null })]} payerName="Stargazer Farm" />);
     rerender(<SharedObservations observations={[observation({ reading: 'read', php: 0 })]} payerName="Stargazer Farm" />);
