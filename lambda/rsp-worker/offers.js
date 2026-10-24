@@ -14,7 +14,7 @@
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const PROMPT_VERSION = 'offers-v9';
+const PROMPT_VERSION = 'offers-v10';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 const MAX_EARLIER = 60;
 
@@ -46,7 +46,7 @@ const TOOL_CONFIG = {
         json: {
           type: 'object',
           properties: {
-            shows: { type: 'string', description: 'What the description says, with the practice and the place when given, as a short note later observations can be compared against.' },
+            shows: { type: 'string', description: 'A short note of what the person shared, in their own terms and with the context they chose to give, for later observations to be compared against. Do not add what they did not say.' },
             offers: {
               type: 'array',
               items: {
