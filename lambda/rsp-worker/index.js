@@ -853,8 +853,9 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     await client.query('COMMIT');
     console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
 
-    // Queue embeddings
-    for (const q of [
+    // Queue embeddings — not for an observation with no words: its perspectives
+    // only say it is empty, and would match every other empty one.
+    if (getCombinedStateText(state).trim()) for (const q of [
       { id: claimRes.rows[0].id, type: 'claim_perspective', text: toolInput.claim },
       { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance },
       { id: entRes.rows[0].id, type: 'entropy_perspective', text: toolInput.entropy }

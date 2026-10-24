@@ -128,6 +128,13 @@ async function resolveAndQueueEmbedding(stateId, organizationId) {
     }
 
     const row = result.rows[0];
+    // No words and no measurements: nothing to embed (the linked names alone
+    // would make every empty observation on an action look alike).
+    const hasMetrics = Array.isArray(row.metrics) && row.metrics.length > 0;
+    if (!(row.state_text || '').trim() && row.photo_descriptions.length === 0 && !hasMetrics) {
+      console.log('No text for state', stateId, '— skipping embedding');
+      return;
+    }
     const embeddingSource = composeStateEmbeddingSource({
       entity_names: row.entity_names,
       state_text: row.state_text,
