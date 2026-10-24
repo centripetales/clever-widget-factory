@@ -53,9 +53,9 @@ describe('SharedObservations', () => {
     ];
     render(<SharedObservations observations={list} payerName="Stargazer Farm" />);
     expect(screen.queryByText('Trays watered')).not.toBeInTheDocument(); // fourth: hidden at first
-    const link = screen.getByRole('button', { name: /Builds on .* Lester: Seed trays on the coconut platform/ });
+    const link = screen.getByRole('button', { name: /10\/2026 · Lester: Seed trays on the coconut platform/ });
     expect(link).toHaveAttribute('title', 'Adds: sprouting overnight');
-    expect(screen.getByText(/Same as .* Lester:/).closest('button')).toBeNull(); // not in the list: no link
+    expect(screen.getByText('Not in this list').closest('button')).toBeNull(); // not in the list: no link
     fireEvent.click(link);
     expect(screen.getByText('Trays watered')).toBeInTheDocument();
   });

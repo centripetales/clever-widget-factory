@@ -88,8 +88,8 @@ function Words({ text, mine, label, onEdit }: { text: string; mine: boolean; lab
 // One shared observation: the person's words, what the offer credited and why.
 // Its author can edit what they wrote by selecting it, or reply to the
 // feedback; either way it is read again, and the amount can rise but never falls.
-// Each earlier observation the reading compared it with: whether this one builds
-// on it or is the same, and a link to it when it is in the list.
+// Each earlier observation the reading compared it with (what this one adds on
+// hover), and a link to it when it is in the list.
 function Compared({ observation, listed, onShow }: { observation: SharedObservation; listed: Set<string>; onShow: (id: string) => void }) {
   if (!observation.compared_with?.length) return null;
   return (
@@ -97,7 +97,7 @@ function Compared({ observation, listed, onShow }: { observation: SharedObservat
       {observation.compared_with.map(earlier => {
         const label = (
           <>
-            {earlier.repeats ? 'Same as' : 'Builds on'} {new Date(earlier.created_at).toLocaleDateString()} · {earlier.name || 'Someone'}:{' '}
+            {new Date(earlier.created_at).toLocaleDateString()} · {earlier.name || 'Someone'}:{' '}
             <span className="italic">{short(earlier.text)}</span>
           </>
         );

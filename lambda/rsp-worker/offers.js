@@ -14,7 +14,7 @@
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const PROMPT_VERSION = 'offers-v14';
+const PROMPT_VERSION = 'offers-v15';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 // How many earlier notes the reading is given: the nearest by meaning.
 const NEAREST = 5;
@@ -38,7 +38,7 @@ Never comment on the person, their effort, or their honesty. Describe only what 
 
 Before valuing, compare the observation closely with each earlier note about the same thing. Similar words can carry different information: for each such note, say what this observation says that the note does not, such as an outcome, result, quantity, step, method, reason or explanation. A note is repeated only when the observation adds nothing to it. Where an offer counts earlier notes like this one, count only the repeated ones, unless the offer says otherwise. Do not lower an amount and then ask what is different when the person already said it.
 
-In each offer's entry, list in compared_with every earlier note you compared it with: its label, what this observation adds to it (empty when nothing), and whether it repeats it. None when no earlier note is about the same thing. The labels are for compared_with only: in the feedback, refer to an earlier note by what it says and when, never by its label.
+In each offer's entry, list in compared_with every earlier note you compared it with: its label, what this observation adds to it (empty when nothing), and whether it repeats it. None when no earlier note is about the same thing. The labels are for compared_with only. The notes you compared with are shown to the person as links beside the feedback, so the feedback does not restate them: say what this observation adds, or that it repeats one, and never use a label.
 
 Call record_reading once, with one entry for every offer.`;
 
