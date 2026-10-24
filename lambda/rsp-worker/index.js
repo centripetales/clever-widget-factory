@@ -596,6 +596,25 @@ async function processPendingRecord(client, record, offersOnly = false) {
     }
   }
 
+  // An observation with no words: its perspectives would only say it is empty
+  // and describe the action instead. Only the offers reading runs; it credits
+  // nothing and asks the person to describe it.
+  if (runsEpistemicPerspectives && !getCombinedStateText(state).trim()) {
+    await readOffers();
+    await client.query(
+      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
+      [record.id]
+    );
+    await broadcastInvalidation({
+      entityType: 'state',
+      entityId: state.id,
+      mutationType: 'updated',
+      organizationId: state.organization_id
+    });
+    console.log('[RSP] No text for state', state.id, '— offers reading only');
+    return;
+  }
+
   if (!runsEpistemicPerspectives) {
     // Mark pending_perspectives row as DONE — an azolla-only state (no action/observation
     // link) has nothing further to do here.
@@ -853,9 +872,8 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     await client.query('COMMIT');
     console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
 
-    // Queue embeddings — not for an observation with no words: its perspectives
-    // only say it is empty, and would match every other empty one.
-    if (getCombinedStateText(state).trim()) for (const q of [
+    // Queue embeddings
+    for (const q of [
       { id: claimRes.rows[0].id, type: 'claim_perspective', text: toolInput.claim },
       { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance },
       { id: entRes.rows[0].id, type: 'entropy_perspective', text: toolInput.entropy }
