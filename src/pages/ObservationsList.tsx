@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useQuery, useQueries } from '@tanstack/react-query';
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { useStates, useStateMutations } from '@/hooks/useStates';
 import { toolsQueryConfig, partsQueryConfig, actionsQueryConfig, completedActionsQueryConfig } from '@/lib/assetQueryConfigs';
 import { offlineQueryConfig } from '@/lib/queryConfig';
@@ -38,9 +38,11 @@ import { getThumbnailUrl } from '@/lib/imageUtils';
 import { SharedOrgSelector } from '@/components/SharedOrgSelector';
 import { useSharedOrgs } from '@/hooks/useSharedOrgs';
 import { PrismIcon } from '@/components/icons/PrismIcon';
+import { ShareConfigurationDialog } from '@/components/ShareConfigurationDialog';
 export default function ObservationsList() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { organization, accessibleOrganizations } = useOrganization();
   const orgId = organization?.id ?? '';
   const { selectedOrgs } = useSharedOrgs();
@@ -55,7 +57,7 @@ export default function ObservationsList() {
     : undefined;
 
   const { data: observations = [], isLoading: loadingObs, isError } = useStates(orgId, viewShared ? { view_shared: viewShared } : undefined);
-  const { deleteState, isDeleting, updateState, isUpdating } = useStateMutations(orgId);
+  const { deleteState, isDeleting } = useStateMutations(orgId);
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -83,9 +85,8 @@ export default function ObservationsList() {
     }, 2000);
   }, []);
 
-  // Copy link and toggle sharing states/callbacks
+  // Copy link state/callback
   const [linkCopiedMap, setLinkCopiedMap] = useState<Record<string, boolean>>({});
-  const [togglingSharedMap, setTogglingSharedMap] = useState<Record<string, boolean>>({});
 
   const handleCopyLink = useCallback(async (stateId: string) => {
     const url = generateObservationUrl(stateId);
@@ -108,34 +109,8 @@ export default function ObservationsList() {
     }
   }, [toast]);
 
-  const handleToggleShared = useCallback(async (observation: any) => {
-    if (togglingSharedMap[observation.id]) return;
-    setTogglingSharedMap(prev => ({ ...prev, [observation.id]: true }));
-    const nextShared = !observation.shared_with_partners;
-    try {
-      await updateState({
-        id: observation.id,
-        data: {
-          shared_with_partners: nextShared
-        }
-      });
-      toast({
-        title: nextShared ? "Sharing activated" : "Sharing restricted",
-        description: nextShared
-          ? "Observation details are now safely shared with trusted partners."
-          : "Sharing revoked. Observation details are now private.",
-      });
-    } catch (error) {
-      console.error('Error toggling observation sharing state:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update observation sharing policy.",
-        variant: "destructive"
-      });
-    } finally {
-      setTogglingSharedMap(prev => ({ ...prev, [observation.id]: false }));
-    }
-  }, [updateState, togglingSharedMap, toast]);
+  // The observation whose share dialog is open.
+  const [sharing, setSharing] = useState<{ id: string; text: string } | null>(null);
 
   // Live countdown for perspectives:processing WS events
   const [perspectivesTick, setPerspectivesTick] = useState(0);
@@ -439,7 +414,6 @@ export default function ObservationsList() {
       ) : (
         <div className="space-y-4">
           {filteredObservations.map((obs) => {
-            const isLinkedToAction = obs.links?.some((link: any) => link.entity_type === 'action');
             return (
               <Card 
                 key={obs.id} 
@@ -460,7 +434,7 @@ export default function ObservationsList() {
                       <span className="text-xs text-muted-foreground">
                         {new Date(obs.captured_at).toLocaleString()}
                       </span>
-                      {obs.shared_with_partners && !isLinkedToAction && (
+                      {obs.shared_with_partners && (
                         <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50 py-0 px-1.5 text-[10px]">
                           Shared
                         </Badge>
@@ -633,23 +607,18 @@ export default function ObservationsList() {
                       )}
                     </Button>
 
-                    {!isLinkedToAction && !obs.is_shared_inbound && (
+                    {!obs.is_shared_inbound && (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleToggleShared(obs)}
-                        disabled={togglingSharedMap[obs.id]}
+                        onClick={() => setSharing({ id: obs.id, text: obs.observation_text || '' })}
                         className={`h-8 w-8 p-0 transition-colors duration-200 ${obs.shared_with_partners
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
                             : 'hover:text-emerald-600 hover:bg-emerald-50'
                           }`}
-                        title={obs.shared_with_partners ? "Stop sharing with trusted partners" : "Share with trusted partners"}
+                        title="Share with other organizations"
                       >
-                        {togglingSharedMap[obs.id] ? (
-                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                        ) : (
-                          <Handshake className="h-4 w-4" />
-                        )}
+                        <Handshake className="h-4 w-4" />
                       </Button>
                     )}
 
@@ -763,6 +732,16 @@ export default function ObservationsList() {
             );
           })}
         </div>
+      )}
+      {sharing && (
+        <ShareConfigurationDialog
+          open={!!sharing}
+          onOpenChange={open => { if (!open) setSharing(null); }}
+          entityId={sharing.id}
+          entityType="state"
+          entityName={sharing.text.slice(0, 60)}
+          onSaved={() => queryClient.invalidateQueries({ queryKey: ['states'] })}
+        />
       )}
     </div>
   );

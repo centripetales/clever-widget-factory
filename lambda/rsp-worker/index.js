@@ -52,7 +52,10 @@ function downloadPhoto(url) {
 }
 
 // Bedrock invocation helper supporting regional IDs and multimodal payloads
-async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig = {}, images = [], toolConfig = null) {
+// `meta`, when given, receives the Bedrock request id: the key of this call's
+// full prompt and response in the invocation logs (S3 bucket
+// cwf-bedrock-invocation-logs-131745734428).
+async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig = {}, images = [], toolConfig = null, meta = null) {
   let body;
   const isAnthropic = modelId.includes('anthropic');
 
@@ -151,6 +154,7 @@ async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig 
   });
 
   const response = await bedrockRuntime.send(command);
+  if (meta) meta.requestId = response.$metadata?.requestId;
   const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
   if (isAnthropic) {
@@ -168,6 +172,18 @@ async function invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig 
     if (toolUse) return toolUse.toolUse.input;
     return responseBody.output.message.content[0].text;
   }
+}
+
+// Titan embedding of a text: the model the embeddings queue stores (titan-v1),
+// so it can be compared with stored embeddings.
+async function embedText(text) {
+  const response = await bedrockRuntime.send(new InvokeModelCommand({
+    modelId: 'amazon.titan-embed-text-v1',
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: JSON.stringify({ inputText: text })
+  }));
+  return JSON.parse(new TextDecoder().decode(response.body)).embedding;
 }
 
 // Helper to extract JSON block safely from LLM text response
@@ -253,7 +269,7 @@ async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks, pro
 // half of scripts/azolla-wire-coverage-metric.js — same prompt/schema/model, same
 // derived-state + state_perspectives shape, so historical and live data land in
 // identical tables with no read-side changes.
-const AZOLLA_COVERAGE_MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+const AZOLLA_COVERAGE_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 const AZOLLA_COVERAGE_PROMPT_VERSION = 'azolla-duckweed-v1';
 
 const AZOLLA_COVERAGE_SYSTEM_PROMPT = `You are a data extraction system supporting azolla/duckweed cultivation. Your only job is to report what is directly visible in the photo, as structured data. Do not assess health, growth quality, or compare against an ideal state. If something can't be determined from the image, say so explicitly in uncertainty_flags rather than guessing.
@@ -343,7 +359,7 @@ async function getOrCreateCoverageMetric(client, toolId, orgId) {
 // Runs the vision-LLM coverage estimate for every not-yet-analyzed photo on this
 // state, then writes the resulting average as this state's "Coverage %" metric
 // snapshot on its linked tool. Errors are logged, not thrown — a failure here
-// shouldn't fail an otherwise-successful CLAIM/SIGNIFICANCE/ENTROPY extraction
+// shouldn't fail an otherwise-successful CLAIM/SIGNIFICANCE extraction
 // (or vice versa; these are independent processors on the same state).
 async function runAzollaCoverageProcessor(client, state, linkRows) {
   const toolLink = linkRows.find(l => l.entity_type === 'tool');
@@ -371,13 +387,15 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
 
     try {
       const imgData = await downloadPhoto(photo.photo_url);
+      const meta = {};
       const result = await invokeBedrock(
         AZOLLA_COVERAGE_MODEL_ID,
         AZOLLA_COVERAGE_SYSTEM_PROMPT,
         'Analyze this photo and record the structured observation.',
         { max_tokens: 1000, temperature: 0 },
         [imgData],
-        AZOLLA_COVERAGE_TOOL_CONFIG
+        AZOLLA_COVERAGE_TOOL_CONFIG,
+        meta
       );
 
       await client.query('BEGIN');
@@ -399,7 +417,7 @@ async function runAzollaCoverageProcessor(client, state, linkRows) {
       await client.query(
         `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content)
          VALUES ($1, 'AZOLLA_DUCKWEED_OBSERVATION', $2, 'SUCCESS', $3)`,
-        [derivedStateId, configId, JSON.stringify(result)]
+        [derivedStateId, configId, JSON.stringify({ ...result, request_id: meta.requestId })]
       );
       await client.query('COMMIT');
 
@@ -440,8 +458,53 @@ async function broadcastOfferActions(actionIds, organizationId) {
   }
 }
 
+// ─── CLAIM / SIGNIFICANCE settings ───────────────────────────────────────────
+// Found by model and version, so the extraction never picks up another task's
+// row. The system prompt is the one it ran with on Sonnet 4 (config v4.0).
+const EXTRACTION_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
+const EXTRACTION_VERSION = 'epistemic-v4.1';
+const EXTRACTION_SYSTEM_PROMPT = `You are the internal operations intelligence assistant for Stargazer Farm.
+
+Your purpose is to support operational clarity, structured experimentation tracking, and long-term farm resilience.
+
+Prioritize:
+- Practicality over theory
+- Reproducibility over novelty
+- Low-cost scalable solutions
+- Soil health and biological sustainability
+
+When analyzing observations:
+- Distinguish observations from interpretations
+- Stay within what is directly stated or visible
+
+Communication style:
+- Clear and direct
+- Dense with useful information
+- Avoid unnecessary disclaimers
+
+Never:
+- Invent measurements or results
+- Present assumptions as facts`;
+const EXTRACTION_INFERENCE = { max_tokens: 2000, temperature: 0.1 };
+
+async function getOrCreateExtractionConfig(client) {
+  const existing = await client.query(
+    `SELECT * FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1`,
+    [EXTRACTION_MODEL_ID, EXTRACTION_VERSION]
+  );
+  if (existing.rows.length > 0) return existing.rows[0];
+  const inserted = await client.query(
+    `INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [EXTRACTION_MODEL_ID, EXTRACTION_VERSION, EXTRACTION_SYSTEM_PROMPT, JSON.stringify(EXTRACTION_INFERENCE)]
+  );
+  return inserted.rows[0];
+}
+
 // ─── Core processing logic for a single pending_perspectives record ───────────
-async function processPendingRecord(client, record) {
+// `offersOnly`: only the offers reading, for an observation whose other
+// perspectives already exist (one shared after it was made).
+async function processPendingRecord(client, record, offersOnly = false) {
   // Mark as processing
   await client.query(`
     UPDATE pending_perspectives 
@@ -493,17 +556,42 @@ async function processPendingRecord(client, record) {
   const state = stateResult.rows[0];
 
   // Verify eligibility. Two independent processors can apply to the same state —
-  // the original text-only epistemic extraction (CLAIM/SIGNIFICANCE/ENTROPY), and
+  // the original text-only epistemic extraction (CLAIM/SIGNIFICANCE), and
   // any org-scoped processor (e.g. azolla_coverage) the state's linked tool/part/
   // action is share-granted into. Neither gates the other; only fail the whole job
   // if nothing at all applies (nothing should have been queued in that case).
   const linksRes = await client.query('SELECT * FROM state_links WHERE state_id = $1', [state.id]);
   // Pages showing an offer on this observation's action refresh, so it shows as being read.
-  const offerActions = await offerActionIds(client, linksRes.rows).catch(err => {
+  const offerActions = await offerActionIds(client, linksRes.rows, state).catch(err => {
     console.error('[RSP] offers: could not find offers for state', state.id, err.message);
     return [];
   });
   await broadcastOfferActions(offerActions, state.organization_id);
+
+  const readOffers = async () => {
+    try {
+      const reading = await runOffersReading(client, {
+        state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock, embedText,
+      });
+      if (reading) {
+        console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
+        // Their pages refresh with what it earned, including offers it was newly linked to.
+        const counted = reading.offers.filter(o => o.counts).map(o => String(o.action_id));
+        await broadcastOfferActions([...new Set([...offerActions, ...counted])], state.organization_id);
+      }
+    } catch (err) {
+      console.error('[RSP] offers reading failed for state', state.id, err);
+    }
+  };
+
+  if (offersOnly) {
+    await readOffers();
+    await client.query(
+      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
+      [record.id]
+    );
+    return;
+  }
 
   const qualifyingTypes = ['observation', 'action']; // must match QUALIFYING_LINK_TYPES in lambda/states/index.js
   const runsEpistemicPerspectives = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
@@ -518,6 +606,25 @@ async function processPendingRecord(client, record) {
     } catch (err) {
       console.error('[RSP] azolla_coverage processor failed for state', state.id, err);
     }
+  }
+
+  // An observation with no words: its perspectives would only say it is empty
+  // and describe the action instead. Only the offers reading runs; it credits
+  // nothing and asks the person to describe it.
+  if (runsEpistemicPerspectives && !getCombinedStateText(state).trim()) {
+    await readOffers();
+    await client.query(
+      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
+      [record.id]
+    );
+    await broadcastInvalidation({
+      entityType: 'state',
+      entityId: state.id,
+      mutationType: 'updated',
+      organizationId: state.organization_id
+    });
+    console.log('[RSP] No text for state', state.id, '— offers reading only');
+    return;
   }
 
   if (!runsEpistemicPerspectives) {
@@ -563,10 +670,7 @@ async function processPendingRecord(client, record) {
     }
   }
 
-  // Resolve default LLM config — use Sonnet 4 (same model used by capability + states lambdas)
-  const configRes = await client.query(`SELECT * FROM llm_generation_configs WHERE model_id = 'us.anthropic.claude-sonnet-4-20250514-v1:0' LIMIT 1`);
-  const llmConfig = configRes.rows.length > 0 ? configRes.rows[0] : (await client.query('SELECT * FROM llm_generation_configs ORDER BY created_at DESC LIMIT 1')).rows[0];
-  if (!llmConfig) throw new Error('No LLM generation config found in llm_generation_configs');
+  const llmConfig = await getOrCreateExtractionConfig(client);
 
   // Broadcast perspectives:processing with estimated completion time
   const hasImages = (state.photos || []).some(p => p.photo_url);
@@ -712,7 +816,7 @@ Analyze the following observation:
 Observation: ${getCombinedStateText(state) || 'None'}
 Action Context: ${actionContext}
 
-Extract three distinct epistemic dimensions. CRITICAL RULES:
+Extract two distinct epistemic dimensions. CRITICAL RULES:
 - Be concise and information-dense. Every sentence must carry unique information.
 - Do NOT repeat information across dimensions.
 - Do NOT speculate. If data was not collected, note the absence cleanly — do not infer what the data would have shown.
@@ -723,8 +827,6 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 1. CLAIM: The raw, objective, observable assertion strictly as stated or visible. No interpretation.
 
 2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the stated method/policy for this action, or (b) widely accepted best practice for this type of task — whichever applies. When the policy does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both policy and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
-
-3. ENTROPY: The net change in system knowledge. Did this observation resolve an open question (reduce) or expose a new unknown (increase)? Name the specific question or unknown. Be precise.
 `;
 
 
@@ -732,16 +834,15 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     tools: [{
       toolSpec: {
         name: 'record_epistemic_extraction',
-        description: 'Record the three epistemic dimensions of the observation',
+        description: 'Record the two epistemic dimensions of the observation',
         inputSchema: {
           json: {
             type: 'object',
             properties: {
               claim: { type: 'string', description: 'Raw, objective, directly observable facts as stated. No interpretation or inference.' },
-              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' },
-              entropy: { type: 'string', description: 'Net change in system knowledge: which specific question was resolved (reduction) or which new unknown was exposed (increase). Be precise.' }
+              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' }
             },
-            required: ['claim', 'significance', 'entropy']
+            required: ['claim', 'significance']
           }
         }
       }
@@ -751,7 +852,8 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
 
   try {
     // perspectives should not need to look at images directly; they rely on text + AI descriptions
-    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig);
+    const meta = {};
+    const toolInput = await invokeBedrock(modelId, systemPrompt, userPrompt, inferenceConfig, [], toolConfig, meta);
 
     await client.query('BEGIN');
 
@@ -762,28 +864,24 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
     // amounts are still needed.
     await client.query(`DELETE FROM state_perspectives WHERE state_id = $1 AND perspective_type <> 'OFFERS'`, [state.id]);
 
-    // Insert CLAIM / SIGNIFICANCE / ENTROPY
+    // Insert CLAIM / SIGNIFICANCE. ENTROPY is no longer written (2026-10-24): it
+    // named what the person had not recorded instead of what they observed.
     const claimRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'CLAIM', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.claim })]
+      [state.id, configId, JSON.stringify({ content: toolInput.claim, request_id: meta.requestId })]
     );
     const sigRes = await client.query(
       `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'SIGNIFICANCE', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.significance })]
-    );
-    const entRes = await client.query(
-      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, 'ENTROPY', $2, 'SUCCESS', $3) RETURNING id`,
-      [state.id, configId, JSON.stringify({ content: toolInput.entropy })]
+      [state.id, configId, JSON.stringify({ content: toolInput.significance, request_id: meta.requestId })]
     );
 
     await client.query('COMMIT');
-    console.log('[RSP] Successfully extracted and saved 3 perspective dimensions for state', state.id);
+    console.log('[RSP] Successfully extracted and saved 2 perspective dimensions for state', state.id);
 
     // Queue embeddings
     for (const q of [
       { id: claimRes.rows[0].id, type: 'claim_perspective', text: toolInput.claim },
-      { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance },
-      { id: entRes.rows[0].id, type: 'entropy_perspective', text: toolInput.entropy }
+      { id: sigRes.rows[0].id, type: 'significance_perspective', text: toolInput.significance }
     ]) {
       try {
         await sqs.send(new SendMessageCommand({
@@ -819,19 +917,7 @@ Extract three distinct epistemic dimensions. CRITICAL RULES:
   // Offers of a Positive Sum network the observation was made in: one reading
   // against all of them. Independent of the extraction above; a failure here
   // is logged, and the observation earns nothing until a reading exists.
-  try {
-    const reading = await runOffersReading(client, {
-      state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock,
-    });
-    if (reading) {
-      console.log('[RSP] offers: read state', state.id, 'against', reading.offers.length, 'offer(s)');
-      // Their pages refresh with what it earned, including offers it was newly linked to.
-      const counted = reading.offers.filter(o => o.counts).map(o => String(o.action_id));
-      await broadcastOfferActions([...new Set([...offerActions, ...counted])], state.organization_id);
-    }
-  } catch (err) {
-    console.error('[RSP] offers reading failed for state', state.id, err);
-  }
+  await readOffers();
 
   // Mark pending_perspectives row as DONE
   await client.query(
@@ -860,9 +946,11 @@ exports.handler = async (event) => {
     if (Array.isArray(event.Records) && event.Records.length > 0) {
       console.log(`[RSP] SQS trigger: processing ${event.Records.length} record(s)`);
       for (const sqsRecord of event.Records) {
-        const { stateId } = JSON.parse(sqsRecord.body);
-        // Find or create the pending_perspectives row for this state
-        let pendingRow = (await client.query(
+        const { stateId, perspective } = JSON.parse(sqsRecord.body);
+        const offersOnly = perspective === 'OFFERS';
+        // Find or create the pending_perspectives row for this state. An
+        // offers-only job gets its own, so it never takes a full one's.
+        let pendingRow = offersOnly ? null : (await client.query(
           `SELECT id, state_id FROM pending_perspectives WHERE state_id = $1 AND status IN ('PENDING','PROCESSING') ORDER BY created_at DESC LIMIT 1`,
           [stateId]
         )).rows[0];
@@ -874,7 +962,7 @@ exports.handler = async (event) => {
           )).rows[0];
         }
         try {
-          await processPendingRecord(client, pendingRow);
+          await processPendingRecord(client, pendingRow, offersOnly);
         } catch (err) {
           console.error(`[RSP] Failed processing state ${stateId}:`, err.message);
           await client.query(

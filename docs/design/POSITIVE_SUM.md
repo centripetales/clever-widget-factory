@@ -395,7 +395,7 @@ with the agreement; (3) the tally, public; (4) payment method, payouts and
 closing; (5) private listing of observations, Stargazer's view of all of
 them, and findings.
 
-### 2.9 Offers, and the reading that pays them (decided 2026-10-12; built, not yet deployed or tried on real observations)
+### 2.9 Offers, and the reading that pays them (decided 2026-10-12; built and in use)
 RL framing: an **offer** is a standing **policy** of the payer ("when an
 observation shows X, I pay Y"). Seen from the person acting, another
 agent's paying policy is part of the environment, i.e. their reward
@@ -485,6 +485,40 @@ on one action, each with its own payer, condition and cap.
   by default and is read against all open offers. Nothing else a person
   records is scanned. "Share with Positive Sum" for an observation made
   elsewhere is put off: people are expected to go through Positive Sum.
+- **What an org shares is read too** (2026-10-22): when an org shares an
+  action (or an observation, tool or part) with Positive Sum, its
+  observations there are read against the offers in Positive Sum and its
+  member organizations, but only the offers the observer joined, and only
+  observations made on or after that person's own sharing agreement.
+  Someone else's observation on the shared action counts only once they
+  have agreed too. Sharing queues the observations already made, back to
+  each person's agreement; these get the offers reading only
+  (`perspective: 'OFFERS'` on the queue message), not claim / significance
+  / entropy again. Unsharing stops new readings; what was earned stays.
+  Example: Lester shares his Seryalis harvest action, and his harvest
+  observations are read against the farming-practices offer he joined.
+- **What a reading compares with, and what it shows** (decided 2026-10-23;
+  comparison built 2026-10-24, `revealed` and the links not yet). Comparing
+  is for new information or deeper thinking, so the person can reach the
+  observation it was compared with. Code gives the reading facts: the 5
+  earlier notes on the offer nearest in meaning (by the CLAIM embedding,
+  which matched best in testing; observations with no words have none),
+  each with a label (`[n1]`), who made it, how close they are (you / your
+  organization / another organization) and its date. The reading records `compared_with` (the notes it found relevant)
+  and `revealed` (the ones to show, each with a reason) in its JSON; shown
+  under the feedback, linking to the observation. What counts, how much
+  (closeness is a weight in the offer's equation, not a cutoff) and what is
+  revealed is in the offer's wording, changed freely. What was shared
+  through Positive Sum can be seen by others. First use: the
+  farming-practices offer weights earlier notes 1 (own), 0.5 (own
+  organization), 0 (other organizations). Revealing in proportion to what a
+  person shares is put off until it is thought through.
+  For each note it is compared with, the reading writes what the new
+  observation adds and whether it repeats it, before the amount; a note is
+  repeated only when nothing is added (2026-10-24: the first readings cut 8
+  of 11 people who had added an outcome, a recipe or a new step). Where the
+  payer gives a formula, the reading writes it with the observation's
+  numbers and code works out the amount, so the arithmetic cannot slip.
 - **How it is built**: an offer is a reward with a prompt (set under "Make
   an offer" or "Add a reward"). "Share an observation" on the offer opens the
   usual add-observation page linked to the offer's action; being linked to
@@ -498,7 +532,9 @@ on one action, each with its own payer, condition and cap.
 - **One agreement**: sharing through Positive Sum is the agreement to every
   offer that is read. A person agrees once ("Earn this" on any such offer),
   recorded as `positive_sum.sharing_agreement`; the tally counts their
-  observations from then on.
+  observations from then on. Its wording says (2026-10-24) that what they
+  share can be seen by others in the network, and that a reading may point
+  to it when comparing their observations with someone else's.
 - **Example offers**: document organic and non-organic practices (₱5, new
   for the person); a practice new to the community (compared with
   everyone's); applying an organic practice (shown being done; doing it

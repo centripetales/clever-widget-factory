@@ -61,6 +61,30 @@ describe('POST /shares', () => {
     assert.strictEqual(writes([...noEntity.calls, ...noTarget.calls, ...badType.calls]).length, 0);
   });
 
+  test('shares an observation, checking the org that owns it', async () => {
+    const db = fakeDb([[/FROM states WHERE/, [{ organization_id: ORG_A }]], [/FROM organizations/, [{}]]]);
+    const result = await post(db, { body: { ...body, entity_type: 'state', entity_id: 's9' } });
+    assert.strictEqual(result.statusCode, 200);
+    const link = db.calls.find(c => /INSERT INTO state_links/.test(c.sql) && c.params[1] === 'state');
+    assert.strictEqual(link.params[2], 's9');
+  });
+
+  test('queues the observations already made on what was shared for reading', async () => {
+    const db = fakeDb([[/FROM tools/, [{ organization_id: ORG_A }]], [/FROM organizations/, [{}]], [/sharing_agreement/, [{ id: 's1' }, { id: 's2' }]]]);
+    const queued = [];
+    const result = await post(db, { queueReadings: async (ids, org) => queued.push([ids, org]) });
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(queued, [[['s1', 's2'], ORG_A]]);
+    const find = db.calls.find(c => /sharing_agreement/.test(c.sql));
+    assert.deepStrictEqual(find.params, [ORG_A, 'tool', 't1', ORG_B]);
+  });
+
+  test('a share is made even when its observations cannot be queued', async () => {
+    const db = fakeDb([[/FROM tools/, [{ organization_id: ORG_A }]], [/FROM organizations/, [{}]], [/sharing_agreement/, [{ id: 's1' }]]]);
+    const result = await post(db, { queueReadings: async () => { throw new Error('queue down'); } });
+    assert.strictEqual(result.statusCode, 200);
+  });
+
   test('never writes a placeholder user id', async () => {
     const db = fakeDb([[/FROM tools/, [{ organization_id: ORG_A }]], [/FROM organizations/, [{}]]]);
     const result = await post(db, { auth: { ...memberOfA, userId: undefined } });

@@ -45,6 +45,21 @@ describe('SharedObservations', () => {
     expect(flyCoin).not.toHaveBeenCalled();
   });
 
+  it('links each earlier observation the reading compared it with, opening the list to reach one further down', () => {
+    const compared = { id: 's9', name: 'Lester', created_at: '2026-10-10T01:00:00Z', text: 'Seed trays on the coconut platform', adds: 'sprouting overnight', repeats: false };
+    const list = [
+      observation({ id: 's1', compared_with: [compared, { ...compared, id: 'gone', text: 'Not in this list', repeats: true }] }),
+      observation({ id: 's2' }), observation({ id: 's3' }), observation({ id: 's9', text: 'Trays watered', name: 'Lester', mine: false }),
+    ];
+    render(<SharedObservations observations={list} payerName="Stargazer Farm" />);
+    expect(screen.queryByText('Trays watered')).not.toBeInTheDocument(); // fourth: hidden at first
+    const link = screen.getByRole('button', { name: /10\/2026 · Lester: Seed trays on the coconut platform/ });
+    expect(link).toHaveAttribute('title', 'Adds: sprouting overnight');
+    expect(screen.getByText('Not in this list').closest('button')).toBeNull(); // not in the list: no link
+    fireEvent.click(link);
+    expect(screen.getByText('Trays watered')).toBeInTheDocument();
+  });
+
   it('opens a person\'s own words for editing when they select them', () => {
     render(<SharedObservations observations={[observation({})]} payerName="Stargazer Farm" />);
     fireEvent.click(screen.getByLabelText('Edit what you wrote'));

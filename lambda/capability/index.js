@@ -413,7 +413,7 @@ async function callBedrockForPerAxisCapability(skillProfile, perAxisEvidence, us
   if (!aiConfig) {
     aiConfig = resolveAiConfig(null);
   }
-  const MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 
   const axesDescription = skillProfile.axes.map(a =>
     `- ${a.key} ("${a.label}"): required level ${a.required_level}${a.description ? `\n  Concept: ${a.description}` : ''}`

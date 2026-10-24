@@ -1,11 +1,12 @@
 const { randomUUID } = require('crypto');
 
-const ENTITY_TABLES = { tool: 'tools', part: 'parts', action: 'actions' };
+const ENTITY_TABLES = { tool: 'tools', part: 'parts', action: 'actions', state: 'states' };
 
 // Shares routes. `auth` comes from the authorizer context, never the request:
 // { userId, organizationId, accessibleOrgIds, readAll }.
+// `queueReadings(stateIds, orgId)` queues observations for the perspectives worker.
 // Returns { statusCode, data }, or null when the route is not a shares route.
-async function handleShares({ httpMethod, path, body = {}, query = {}, auth, getDbClient }) {
+async function handleShares({ httpMethod, path, body = {}, query = {}, auth, getDbClient, queueReadings }) {
   const canAccess = orgId => !!orgId && (auth.readAll || auth.accessibleOrgIds.includes(orgId));
   const error = (statusCode, message) => ({ statusCode, data: { error: message } });
 
@@ -47,6 +48,33 @@ async function handleShares({ httpMethod, path, body = {}, query = {}, auth, get
       } catch (e) {
         await client.query('ROLLBACK');
         throw e;
+      }
+      // Observations already made on what was shared are read against the
+      // offers there (lambda/rsp-worker/offers.js), back to when each person
+      // agreed to share through Positive Sum. Ones on an action only: those
+      // are the ones the reading runs for.
+      if (queueReadings) {
+        try {
+          const { rows } = await client.query(
+            `SELECT s.id::text AS id FROM states s
+              WHERE s.organization_id::text = $1
+                AND (($2 = 'state' AND s.id::text = $3)
+                  OR EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = $2 AND sl.entity_id::text = $3))
+                AND EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'action')
+                AND NOT EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'organization')
+                AND s.state_text NOT LIKE '{"type":"positive_sum.%'
+                AND EXISTS (
+                  SELECT 1 FROM states ag
+                   WHERE ag.captured_by = s.captured_by AND ag.captured_at <= s.captured_at
+                     AND ag.state_text LIKE '{"type":"positive_sum.sharing_agreement",%'
+                     AND ag.organization_id IN (SELECT $4::uuid UNION
+                       SELECT mo.member_organization_id FROM member_organizations mo WHERE mo.organization_id = $4::uuid))`,
+            [sourceOrgId, entity_type, entity_id, target_org_id]
+          );
+          await queueReadings(rows.map(r => r.id), sourceOrgId);
+        } catch (e) {
+          console.error('Could not queue shared observations for reading:', e);
+        }
       }
       return { statusCode: 200, data: { success: true, state_id: stateId } };
     } finally {

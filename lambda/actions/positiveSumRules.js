@@ -155,6 +155,7 @@ function rewardTerms({ php, cap_php_per_person: cap, payer_name: payer, conditio
       'What you share through Positive Sum goes to every offer it fits, and each offer pays its own price.',
       'An AI reads each observation against what the offers ask for. You see its reading, and whoever pays has the final say.',
       'Those who pay may use what you share for research and for activities that benefit the group, such as grant proposals, including with partners outside the Philippines.',
+      'What you share can be seen by others in the network, and a reading may point to it when it compares their observations with yours.',
       'Everyone can see how many each person has shared and what it earned.',
     ].join(' ');
   }
@@ -265,7 +266,23 @@ function sharedObservations(reward, observations, userId, names, now = new Date(
       php: entry ? Number(entry.php) || 0 : null,
       was_php: entry && entry.was_php != null ? Number(entry.was_php) : null,
       feedback: entry?.feedback || '',
+      compared_with: comparedWith(entry, observations, names),
     }));
+}
+
+// The earlier observations a reading compared this one with, each with what
+// this one adds to it and whether it repeats it. Only ones on the same offer
+// (all of which are loaded here); any other is left out.
+function comparedWith(entry, observations, names) {
+  return (entry?.compared_with || []).flatMap(c => {
+    const earlier = observations.find(o => String(o.id) === String(c.state_id));
+    if (!earlier) return [];
+    const words = earlier.text || (earlier.photos || []).map(p => p.description).find(Boolean) || '';
+    return [{
+      id: String(earlier.id), name: names[earlier.person] || null, created_at: earlier.created_at,
+      text: words, adds: c.adds || '', repeats: c.repeats === true,
+    }];
+  });
 }
 
 // Who is taking part in a desired state, each with what they said about their
