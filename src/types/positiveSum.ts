@@ -65,6 +65,9 @@ export interface SharedObservation {
   php: number | null; // null until it has been read once
   was_php: number | null; // what it was credited before an edit raised it
   feedback: string;
+  // The earlier observations on the offer its reading compared it with: what
+  // this one adds to each, and whether it repeats it.
+  compared_with?: { id: string; name: string | null; created_at: string; text: string; adds: string; repeats: boolean }[];
 }
 
 // A reward someone attached to an action. Its tally is public: what each person

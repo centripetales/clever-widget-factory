@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,8 @@ import type { SharedObservation } from '@/types/positiveSum';
 
 const peso = (n: number) => `₱${Math.round(n).toLocaleString()}`;
 const SHOWN_AT_FIRST = 3;
+const rowId = (id: string) => `shared-observation-${id}`;
+const short = (text: string) => (text.length > 70 ? `${text.slice(0, 70).trimEnd()}…` : text);
 
 // What an observation was credited, or where its reading is. When a person's
 // own reading arrives while they watch, a coin flies from the feedback (`from`)
@@ -86,7 +88,37 @@ function Words({ text, mine, label, onEdit }: { text: string; mine: boolean; lab
 // One shared observation: the person's words, what the offer credited and why.
 // Its author can edit what they wrote by selecting it, or reply to the
 // feedback; either way it is read again, and the amount can rise but never falls.
-function Row({ observation }: { observation: SharedObservation }) {
+// Each earlier observation the reading compared it with: whether this one builds
+// on it or is the same, and a link to it when it is in the list.
+function Compared({ observation, listed, onShow }: { observation: SharedObservation; listed: Set<string>; onShow: (id: string) => void }) {
+  if (!observation.compared_with?.length) return null;
+  return (
+    <ul className="space-y-0.5 text-xs text-muted-foreground">
+      {observation.compared_with.map(earlier => {
+        const label = (
+          <>
+            {earlier.repeats ? 'Same as' : 'Builds on'} {new Date(earlier.created_at).toLocaleDateString()} · {earlier.name || 'Someone'}:{' '}
+            <span className="italic">{short(earlier.text)}</span>
+          </>
+        );
+        const title = earlier.adds ? `Adds: ${earlier.adds}` : undefined;
+        return (
+          <li key={earlier.id}>
+            {listed.has(earlier.id) ? (
+              <button type="button" title={title} onClick={() => onShow(earlier.id)} className="text-left underline-offset-2 hover:underline">
+                {label}
+              </button>
+            ) : <span title={title}>{label}</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function Row({ observation, listed, onShow, highlighted }: {
+  observation: SharedObservation; listed: Set<string>; onShow: (id: string) => void; highlighted: boolean;
+}) {
   const { toast } = useToast();
   const navigate = useNavigate();
   const edit = useEditSharedObservation();
@@ -126,7 +158,7 @@ function Row({ observation }: { observation: SharedObservation }) {
 
   return (
     // Laid out like a card on the Observations page: who and when, the words, then the photos in a row.
-    <li className="space-y-3 rounded-lg border bg-background p-3">
+    <li id={rowId(observation.id)} className={`space-y-3 rounded-lg border bg-background p-3 transition-shadow ${highlighted ? 'ring-2 ring-orange-400' : ''}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold">{observation.name || (observation.mine ? 'You' : 'Someone')}</span>
@@ -183,6 +215,7 @@ function Row({ observation }: { observation: SharedObservation }) {
           {observation.feedback}
         </button>
       )}
+      <Compared observation={observation} listed={listed} onShow={onShow} />
       {editing?.part === 'reply' && box('Your reply')}
       {observation.mine && !editing && (
         <Button size="sm" variant="ghost" className="h-7 px-1 text-xs" onClick={() => open({ part: 'reply' }, '')}>
@@ -197,14 +230,29 @@ function Row({ observation }: { observation: SharedObservation }) {
 // everyone's), newest first.
 export function SharedObservations({ observations, payerName }: { observations: SharedObservation[]; payerName: string }) {
   const [all, setAll] = useState(false);
+  const [focus, setFocus] = useState<string | null>(null);
+  // Going to an earlier observation: the whole list opens, it scrolls into view and is outlined for a moment.
+  useEffect(() => {
+    if (!focus) return;
+    document.getElementById(rowId(focus))?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    const done = setTimeout(() => setFocus(null), 2000);
+    return () => clearTimeout(done);
+  }, [focus]);
   if (observations.length === 0) return null;
+  const listed = new Set(observations.map(o => o.id));
+  const show = (id: string) => {
+    setAll(true);
+    setFocus(id);
+  };
   const shown = all ? observations : observations.slice(0, SHOWN_AT_FIRST);
   const stuck = observations.some(o => o.mine && o.reading === 'unread');
 
   return (
     <div className="space-y-2">
       <ul className="space-y-3">
-        {shown.map(observation => <Row key={observation.id} observation={observation} />)}
+        {shown.map(observation => (
+          <Row key={observation.id} observation={observation} listed={listed} onShow={show} highlighted={focus === observation.id} />
+        ))}
       </ul>
       {stuck && (
         <p className="text-xs text-muted-foreground">

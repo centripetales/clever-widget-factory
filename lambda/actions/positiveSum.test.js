@@ -359,10 +359,23 @@ describe('offerTally', () => {
     const owned = { ...offer, owner: 'stefan' };
     expect(sharedObservations(owned, [mine, theirs], 'may', { may: 'May' }, now)).toEqual([{
       id: 's1', person: 'may', name: 'May', mine: true, text: 'Compost pit', photos: [{ url: 'p.jpg', description: 'The pit' }],
-      created_at: '2026-10-12T01:00:00Z', reading: 'read', php: 5, was_php: 3, feedback: 'f',
+      created_at: '2026-10-12T01:00:00Z', reading: 'read', php: 5, was_php: 3, feedback: 'f', compared_with: [],
     }]);
     const all = sharedObservations(owned, [mine, theirs], 'stefan', {}, now);
     expect(all.map(o => [o.id, o.mine, o.reading, o.php])).toEqual([['s2', false, 'waiting', null], ['s1', false, 'read', 5]]);
+  });
+
+  it('names the earlier observations a reading compared one with, leaving out any not on the offer', () => {
+    const now = new Date('2026-10-12T06:00:00Z');
+    const earlier = { ...obs('lester', '2026-10-11T01:00:00Z', read(true, 5)), id: 's0', text: '', photos: [{ url: 'p.jpg', description: 'Seed trays' }] };
+    const reading = { shows: 'x', offers: [{ offer_id: 'o1', counts: true, php: 5, feedback: 'f', compared_with: [
+      { state_id: 's0', adds: 'sprouting overnight', repeats: false }, { state_id: 'elsewhere', adds: '', repeats: true },
+    ] }] };
+    const later = { ...obs('may', '2026-10-12T01:00:00Z', reading), id: 's1', text: 'Trays sprouted' };
+    const [row] = sharedObservations({ ...offer, owner: 'stefan' }, [later, earlier], 'may', { lester: 'Lester' }, now);
+    expect(row.compared_with).toEqual([{
+      id: 's0', name: 'Lester', created_at: '2026-10-11T01:00:00Z', text: 'Seed trays', adds: 'sprouting overnight', repeats: false,
+    }]);
   });
 });
 
