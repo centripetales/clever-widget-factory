@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildPrompt, settle, isReadable, parseOffer, loadOffers, loadNearest } = require('./offers');
+const { buildPrompt, settle, isReadable, parseOffer, loadOffers, loadNearest, evaluate } = require('./offers');
 
 const offer = (over = {}) => ({
   id: 'o1', action_id: 'a1', payer_name: 'Stargazer Farm', closed_at: null,
@@ -136,4 +136,27 @@ test('an answer list sent as JSON text is read as the list', () => {
   const settled = settle(input, [offer()], [], 'may', null, [{ label: 'n1', state_id: 's1' }]).offers[0];
   assert.equal(settled.php, 2);
   assert.deepEqual(settled.compared_with, [{ state_id: 's1', adds: '', repeats: true }]);
+});
+
+test('a formula the reading writes out is worked out here', () => {
+  assert.equal(evaluate('5 * 0.5^0.5').toFixed(4), '3.5355');
+  assert.equal(evaluate('5 × 0.5^(1 + 0.5)').toFixed(4), '1.7678');
+  assert.equal(evaluate('2^3^2'), 512);
+  assert.equal(evaluate('-(2 - 5) * 2'), 6);
+  for (const bad of ['', '5 * n', 'process.exit()', '5 *', '(5', '5)']) assert.equal(evaluate(bad), null);
+});
+
+test('the amount comes from the calculation when there is one, and from the reading otherwise', () => {
+  const read = (calculation, php) => settle({ shows: 'x', offers: [{ offer_id: 'o1', compared_with: [], calculation, php, feedback: 'f' }] }, [offer()], [], 'may').offers[0];
+  assert.equal(read('5 * 0.5^0.5', 3).php, 4);
+  assert.equal(read('5 * 0.5^0.5', 3).calculation, '5 * 0.5^0.5');
+  assert.equal(read('', 3).php, 3);
+  assert.equal(read('five', 3).php, 3);
+  assert.equal(read('100', 3).php, 20);
+});
+
+test('a reading whose answers cannot be read is not settled, rather than paying every offer its most', () => {
+  assert.throws(() => settle({ shows: 'x', offers: '[{"offer_id": "o1", "php": 2,' }, [offer()], [], 'may'), /no readable answers/);
+  assert.throws(() => settle({ shows: 'x' }, [offer()], [], 'may'), /no readable answers/);
+  assert.equal(settle({ shows: 'x', offers: [] }, [offer()], [], 'may').offers[0].php, 20);
 });

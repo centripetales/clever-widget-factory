@@ -513,6 +513,12 @@ on one action, each with its own payer, condition and cap.
   farming-practices offer weights earlier notes 1 (own), 0.5 (own
   organization), 0 (other organizations). Revealing in proportion to what a
   person shares is put off until it is thought through.
+  For each note it is compared with, the reading writes what the new
+  observation adds and whether it repeats it, before the amount; a note is
+  repeated only when nothing is added (2026-10-24: the first readings cut 8
+  of 11 people who had added an outcome, a recipe or a new step). Where the
+  payer gives a formula, the reading writes it with the observation's
+  numbers and code works out the amount, so the arithmetic cannot slip.
 - **How it is built**: an offer is a reward with a prompt (set under "Make
   an offer" or "Add a reward"). "Share an observation" on the offer opens the
   usual add-observation page linked to the offer's action; being linked to

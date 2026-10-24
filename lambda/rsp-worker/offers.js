@@ -14,7 +14,7 @@
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const PROMPT_VERSION = 'offers-v13';
+const PROMPT_VERSION = 'offers-v14';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 // How many earlier notes the reading is given: the nearest by meaning.
 const NEAREST = 5;
@@ -25,7 +25,7 @@ You work from words only. The photos are not shown to you, so anything the perso
 
 You are given: the offers, each with what its payer wrote about what they want and how they value it, and the most it pays for one observation; the description of the observation, in the person's words; and the earlier notes most like it, nearest first, each with a label (n1, n2…), who shared it (you, your organization, or another organization) and when.
 
-For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. An offer never pays more than its most for one observation: when what the payer wrote comes to more, give the most, and state that amount as what is credited. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula or a scale, apply it: the amount is what it gives, rounded as it says, with no deductions or bonuses of your own. Where they do not say how the value falls off, use this:
+For each offer, follow what its payer wrote and give an amount in pesos between 0 and its most for one observation. An offer never pays more than its most for one observation: when what the payer wrote comes to more, give the most, and state that amount as what is credited. Use the whole range: value is a matter of degree, not yes or no. Where the payer gives a formula, write it with this observation's numbers in calculation: the amount is worked out from that and rounded to the peso, with no deductions or bonuses of your own. In the feedback, show the calculation rather than its result. Where the payer gives a scale, apply it. Where they do not say how the value falls off, use this:
 - the most, when it shows what the offer asks for and nothing like it is in this person's notes.
 - less the more it overlaps with those notes, by how much it still adds.
 - 0 when it shows nothing the offer asks for, or adds nothing to those notes.
@@ -70,6 +70,7 @@ const TOOL_CONFIG = {
                       },
                       required: ['note', 'adds', 'repeats'],
                     },
+                  calculation: { type: 'string', description: "When the payer gives a formula: it with this observation's numbers, as arithmetic using only numbers, + - * / ^ and parentheses, e.g. 5 * 0.5^(1 + 0.5). The amount is worked out from it. Empty when there is no formula." },
                   php: { type: 'number', minimum: 0, description: 'What this offer pays for the observation, in pesos, by what its payer wrote.' },
                   feedback: { type: 'string', description: 'To the person: how the amount follows from what the payer wrote, and what would be worth more.' },
                   },
@@ -254,6 +255,9 @@ function buildPrompt({ offers, text, nearest }) {
 function settle(input, offers, earlier, person, previous = null, nearest = []) {
   const before = Array.isArray(previous?.offers) ? previous.offers : [];
   const answers = asList(input?.offers);
+  // Not a list at all (e.g. text that is not JSON): no reading, rather than
+  // every offer counting as skipped and paying its most.
+  if (!Array.isArray(input?.offers) && answers.length === 0) throw new Error('The reading gave no readable answers for the offers');
   const paid = (offer, mine) => earlier
     .filter(e => !mine || e.person === person)
     .flatMap(e => e.offers || [])
@@ -264,7 +268,10 @@ function settle(input, offers, earlier, person, previous = null, nearest = []) {
     offers: offers.map(offer => {
       const answer = answers.find(a => a?.offer_id === offer.id);
       const given = Number(answer?.php);
-      const asked = answer && Number.isFinite(given) ? given : offer.max_php_per_observation;
+      const calculation = typeof answer?.calculation === 'string' ? answer.calculation.trim() : '';
+      const worked = calculation ? evaluate(calculation) : null;
+      const asked = Number.isFinite(worked) ? worked
+        : answer && Number.isFinite(given) ? given : offer.max_php_per_observation;
       const limits = [
         offer.max_php_per_observation,
         offer.max_php_per_person ? offer.max_php_per_person - paid(offer, true) : Infinity,
@@ -287,10 +294,45 @@ function settle(input, offers, earlier, person, previous = null, nearest = []) {
         php,
         ...(was && php > (Number(was.php) || 0) ? { was_php: Number(was.php) || 0 } : {}),
         feedback: typeof answer?.feedback === 'string' ? answer.feedback.trim() : '',
+        ...(calculation ? { calculation } : {}),
         ...(compared.length ? { compared_with: compared } : {}),
       };
     }).concat(before.filter(o => !offers.some(offer => offer.id === o.offer_id))),
   };
+}
+
+// The value of an arithmetic expression the reading wrote for a payer's
+// formula: numbers, + - * / ^ (right to left) and parentheses, nothing else.
+// The model reads which notes count; the arithmetic is done here, where it
+// cannot slip. Null when it is not such an expression.
+function evaluate(text) {
+  const tokens = text.replace(/×/g, '*').replace(/,/g, '').match(/\d+(?:\.\d+)?|[-+*/^()]|\S/g) || [];
+  let i = 0;
+  const number = () => {
+    const t = tokens[i++];
+    if (t === '(') { const v = sum(); if (tokens[i++] !== ')') throw new Error(); return v; }
+    if (t === '-') return -power();
+    if (t === '+') return power();
+    if (!/^\d/.test(t || '')) throw new Error();
+    return Number(t);
+  };
+  const power = () => { const b = number(); return tokens[i] === '^' ? (i++, b ** power()) : b; };
+  const product = () => {
+    let v = power();
+    while (tokens[i] === '*' || tokens[i] === '/') v = tokens[i++] === '*' ? v * power() : v / power();
+    return v;
+  };
+  const sum = () => {
+    let v = product();
+    while (tokens[i] === '+' || tokens[i] === '-') v = tokens[i++] === '+' ? v + product() : v - product();
+    return v;
+  };
+  try {
+    const v = sum();
+    return i === tokens.length && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // A list the model was asked for. It sometimes sends one as JSON text; an
@@ -360,4 +402,4 @@ async function runOffersReading(client, { state, links, text, invokeBedrock, emb
   return reading;
 }
 
-module.exports = { runOffersReading, offerActionIds, loadOffers, loadNearest, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };
+module.exports = { runOffersReading, offerActionIds, loadOffers, loadNearest, evaluate, buildPrompt, settle, isReadable, parseOffer, PROMPT_VERSION };
