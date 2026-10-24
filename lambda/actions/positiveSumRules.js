@@ -155,6 +155,7 @@ function rewardTerms({ php, cap_php_per_person: cap, payer_name: payer, conditio
       'What you share through Positive Sum goes to every offer it fits, and each offer pays its own price.',
       'An AI reads each observation against what the offers ask for. You see its reading, and whoever pays has the final say.',
       'Those who pay may use what you share for research and for activities that benefit the group, such as grant proposals, including with partners outside the Philippines.',
+      'What you share can be seen by others in the network, and a reading may point to it when it compares their observations with yours.',
       'Everyone can see how many each person has shared and what it earned.',
     ].join(' ');
   }

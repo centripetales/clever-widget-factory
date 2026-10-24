@@ -395,7 +395,7 @@ with the agreement; (3) the tally, public; (4) payment method, payouts and
 closing; (5) private listing of observations, Stargazer's view of all of
 them, and findings.
 
-### 2.9 Offers, and the reading that pays them (decided 2026-10-12; built, not yet deployed or tried on real observations)
+### 2.9 Offers, and the reading that pays them (decided 2026-10-12; built and in use)
 RL framing: an **offer** is a standing **policy** of the payer ("when an
 observation shows X, I pay Y"). Seen from the person acting, another
 agent's paying policy is part of the environment, i.e. their reward
@@ -532,7 +532,9 @@ on one action, each with its own payer, condition and cap.
 - **One agreement**: sharing through Positive Sum is the agreement to every
   offer that is read. A person agrees once ("Earn this" on any such offer),
   recorded as `positive_sum.sharing_agreement`; the tally counts their
-  observations from then on.
+  observations from then on. Its wording says (2026-10-24) that what they
+  share can be seen by others in the network, and that a reading may point
+  to it when comparing their observations with someone else's.
 - **Example offers**: document organic and non-organic practices (₱5, new
   for the person); a practice new to the community (compared with
   everyone's); applying an organic practice (shown being done; doing it

@@ -283,6 +283,12 @@ describe('offered rewards', () => {
     expect(rewardTerms({ php: 20, cap_php_per_person: null, payer_name: 'X' })).not.toContain('up to');
   });
 
+  it('tells a person sharing through an offer read by AI that others in the network can see what they share', () => {
+    const terms = rewardTerms({ php: 5, cap_php_per_person: 200, payer_name: 'Stargazer Farm', condition: 'Farming practices' });
+    expect(terms).toContain('What you share can be seen by others in the network, and a reading may point to it when it compares their observations with yours.');
+    expect(terms).toContain('Everyone can see how many each person has shared and what it earned.');
+  });
+
   it('counts each person\'s observations with a photo and their own words, made after they accepted', () => {
     const tally = rewardTally(reward, acceptances, [
       obs('may', '08:30'), obs('may', '10:00'),
