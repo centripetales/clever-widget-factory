@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildPrompt, settle, isReadable, parseOffer, loadOffers, loadNearest, evaluate } = require('./offers');
+const { buildPrompt, settle, isReadable, parseOffer, loadOffers, loadNearest, evaluate, runOffersReading } = require('./offers');
 
 const offer = (over = {}) => ({
   id: 'o1', action_id: 'a1', payer_name: 'Stargazer Farm', closed_at: null,
@@ -159,4 +159,25 @@ test('a reading whose answers cannot be read is not settled, rather than paying 
   assert.throws(() => settle({ shows: 'x', offers: '[{"offer_id": "o1", "php": 2,' }, [offer()], [], 'may'), /no readable answers/);
   assert.throws(() => settle({ shows: 'x' }, [offer()], [], 'may'), /no readable answers/);
   assert.equal(settle({ shows: 'x', offers: [] }, [offer()], [], 'may').offers[0].php, 20);
+});
+
+test('a reading whose answers cannot be read is read once more, then given up', async () => {
+  const reward = { id: 'o1', state_text: JSON.stringify({ type: 'positive_sum.reward', action_id: 'a1', closed_at: null, evaluator: { kind: 'prompt', prompt: 'Practices' }, max_php_per_observation: 5 }) };
+  const writes = [];
+  const client = { query: async (sql) => {
+    if (/^\s*(INSERT|DELETE|BEGIN|COMMIT)/.test(sql)) { writes.push(sql); return { rows: [{ id: 'cfg' }] }; }
+    if (/FROM states s\s+WHERE s.state_text LIKE \$2/.test(sql)) return { rows: [reward] };
+    return { rows: [] };
+  } };
+  const state = { id: 's1', organization_id: 'org', captured_by: 'may', captured_at: '2026-10-24T00:00:00Z' };
+  const links = [{ entity_type: 'action', entity_id: 'a1' }];
+  const answers = ['[{"offer_id": "o1",', { shows: 'x', offers: [{ offer_id: 'o1', compared_with: [], php: 5, feedback: 'f' }] }];
+  let calls = 0;
+  const invokeBedrock = async () => { const a = answers[calls++]; return typeof a === 'string' ? { shows: 'x', offers: a } : a; };
+  const reading = await runOffersReading(client, { state, links, text: 'Compost', invokeBedrock, embedText: async () => [] });
+  assert.equal(calls, 2);
+  assert.equal(reading.offers[0].php, 5);
+  calls = 0; answers[1] = answers[0];
+  await assert.rejects(runOffersReading(client, { state, links, text: 'Compost', invokeBedrock, embedText: async () => [] }), /no readable answers/);
+  assert.equal(calls, 2);
 });

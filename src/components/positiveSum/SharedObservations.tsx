@@ -15,18 +15,44 @@ const SHOWN_AT_FIRST = 3;
 const rowId = (id: string) => `shared-observation-${id}`;
 const short = (text: string) => (text.length > 70 ? `${text.slice(0, 70).trimEnd()}…` : text);
 
+// Observations whose coin this browser has already shown, so a coin flies once.
+const CELEBRATED = 'positive-sum-celebrated';
+const RECENT_MS = 10 * 60 * 1000;
+function celebratedBefore(id: string): boolean {
+  try {
+    return (JSON.parse(localStorage.getItem(CELEBRATED) || '[]') as string[]).includes(id);
+  } catch {
+    return false;
+  }
+}
+function markCelebrated(id: string) {
+  try {
+    const ids = JSON.parse(localStorage.getItem(CELEBRATED) || '[]') as string[];
+    localStorage.setItem(CELEBRATED, JSON.stringify([...ids.filter(other => other !== id), id].slice(-50)));
+  } catch {
+    // Without storage a coin may fly again on a later visit; nothing else depends on it.
+  }
+}
+
 // What an observation was credited, or where its reading is. When a person's
 // own reading arrives while they watch, a coin flies from the feedback (`from`)
 // to the amount, which shows once it lands; again each time they press it.
+// A reading quicker than the trip back to this page arrives before it opens:
+// for one of their own made in the last few minutes, the coin flies then, once.
 function Credit({ observation, from }: { observation: SharedObservation; from: RefObject<HTMLElement | null> }) {
   const ref = useRef<HTMLSpanElement>(null);
-  const before = useRef(observation.reading);
+  const before = useRef<SharedObservation['reading'] | null>(null);
   const celebrates = observation.mine && observation.reading === 'read' && !!observation.php;
   // Before the browser paints, so the amount never shows ahead of its coin.
   useLayoutEffect(() => {
-    if (before.current === 'waiting' && celebrates && ref.current) flyCoin(from.current, ref.current);
+    const arrived = before.current === 'waiting';
+    const missed = before.current === null && Date.now() - new Date(observation.created_at).getTime() < RECENT_MS && !celebratedBefore(observation.id);
+    if ((arrived || missed) && celebrates && ref.current) {
+      flyCoin(from.current, ref.current);
+      markCelebrated(observation.id);
+    }
     before.current = observation.reading;
-  }, [observation.reading, celebrates, from]);
+  }, [observation.reading, observation.created_at, observation.id, celebrates, from]);
 
   const value = (
     <>

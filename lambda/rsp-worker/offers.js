@@ -14,7 +14,7 @@
 const REWARD_PREFIX = '{"type":"positive_sum.reward",';
 const AGREEMENT_PREFIX = '{"type":"positive_sum.sharing_agreement",';
 const MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const PROMPT_VERSION = 'offers-v15';
+const PROMPT_VERSION = 'offers-v16';
 const INFERENCE = { max_tokens: 1200, temperature: 0 };
 // How many earlier notes the reading is given: the nearest by meaning.
 const NEAREST = 5;
@@ -38,7 +38,7 @@ Never comment on the person, their effort, or their honesty. Describe only what 
 
 Before valuing, compare the observation closely with each earlier note about the same thing. Similar words can carry different information: for each such note, say what this observation says that the note does not, such as an outcome, result, quantity, step, method, reason or explanation. A note is repeated only when the observation adds nothing to it. Where an offer counts earlier notes like this one, count only the repeated ones, unless the offer says otherwise. Do not lower an amount and then ask what is different when the person already said it.
 
-In each offer's entry, list in compared_with every earlier note you compared it with: its label, what this observation adds to it (empty when nothing), and whether it repeats it. None when no earlier note is about the same thing. The labels are for compared_with only. The notes you compared with are shown to the person as links beside the feedback, so the feedback does not restate them: say what this observation adds, or that it repeats one, and never use a label.
+In each offer's entry, list in compared_with only the earlier notes about the same thing as this observation: its label, what this observation adds to it (empty when nothing), and whether it repeats it. The notes are the nearest by wording, not necessarily related: leave out every note about something else, and never list a note to say it is unrelated. When none is about the same thing, compared_with is empty. The labels are for compared_with only. The notes you compared with are shown to the person as links beside the feedback, so the feedback does not restate them: say what this observation adds, or that it repeats one, and never use a label.
 
 Call record_reading once, with one entry for every offer.`;
 
@@ -60,7 +60,7 @@ const TOOL_CONFIG = {
                   offer_id: { type: 'string' },
                   compared_with: {
                     type: 'array',
-                    description: 'The earlier notes about the same thing that this observation was compared with.',
+                    description: 'Only the earlier notes about the same thing as this observation; empty when none is. Never a note about something else.',
                     items: {
                       type: 'object',
                       properties: {
@@ -370,15 +370,25 @@ async function runOffersReading(client, { state, links, text, invokeBedrock, emb
   const person = String(state.captured_by);
   const earlier = await loadEarlier(client, offers, state);
   const nearest = await loadNearest(client, offers, state, embedText);
-  const meta = {};
-  const input = await invokeBedrock(MODEL_ID, SYSTEM_PROMPT, buildPrompt({ offers, text, nearest }), INFERENCE, [], TOOL_CONFIG, meta);
   const { rows: [existing] } = await client.query(
     `SELECT content FROM state_perspectives WHERE state_id = $1 AND perspective_type = 'OFFERS' AND status = 'SUCCESS'
       ORDER BY created_at DESC LIMIT 1`,
     [state.id]
   );
   const previous = existing ? (typeof existing.content === 'string' ? JSON.parse(existing.content) : existing.content) : null;
-  const reading = settle(input, offers, earlier, person, previous, nearest);
+  // The model now and then sends its answers as text that is not JSON; read
+  // once more before giving up, so the observation is not left unread.
+  const meta = {};
+  let reading;
+  for (let attempt = 1; !reading; attempt++) {
+    const input = await invokeBedrock(MODEL_ID, SYSTEM_PROMPT, buildPrompt({ offers, text, nearest }), INFERENCE, [], TOOL_CONFIG, meta);
+    try {
+      reading = settle(input, offers, earlier, person, previous, nearest);
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      console.warn('[RSP] offers: unreadable answer, reading again for state', state.id);
+    }
+  }
   const configId = await generationConfigId(client);
 
   await client.query('BEGIN');
