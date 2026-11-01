@@ -658,7 +658,7 @@ export function PhotoUploadPanel({
               src={lightboxUrl}
               onError={showDisplayedIfOriginalMissing}
               alt="Full resolution"
-              className="max-w-full max-h-[calc(90vh-1rem)] object-contain rounded"
+              className="max-w-[calc(90vw-1rem)] max-h-[calc(90vh-1rem)] object-contain rounded"
             />
           )}
         </DialogContent>
