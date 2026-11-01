@@ -58,7 +58,11 @@ export function PhotoThumb({ src, alt, href, onClick, className = "", onError, c
               Sizing the container to the actual image keeps the X next to
               the image it belongs to. */}
           <DialogContent className="max-w-[90vw] max-h-[90vh] w-fit h-fit p-2 border-none bg-transparent shadow-none flex items-center justify-center">
-            <img src={href} alt={alt || "Full resolution"} onError={showDisplayedIfOriginalMissing} className="max-w-full max-h-full object-contain rounded" />
+            {/* Viewport units, not max-w-full — DialogContent is positioned
+                at left:50%, so a w-fit box only has half the viewport to
+                shrink into; a % cap on the image let it collapse to that
+                (tiny on a phone). A vw/vh cap lets the box grow to the image. */}
+            <img src={href} alt={alt || "Full resolution"} onError={showDisplayedIfOriginalMissing} className="max-w-[calc(90vw-1rem)] max-h-[calc(90vh-1rem)] object-contain rounded" />
           </DialogContent>
         </Dialog>
       </>
