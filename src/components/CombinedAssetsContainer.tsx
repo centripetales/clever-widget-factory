@@ -531,23 +531,12 @@ export const CombinedAssetsContainer = () => {
         return;
       }
 
-      // Update the parts table
-      await updatePart.mutateAsync({ id: selectedAsset.id, data: { current_quantity: newQuantity } });
-
-      // Log the change to history
-      try {
-        // Log the change to history via API
-        await createPartsHistory.mutateAsync({
-          part_id: selectedAsset.id,
-          change_type: quantityOperation === 'add' ? 'quantity_add' : 'quantity_remove',
-          old_quantity: currentQty,
-          new_quantity: newQuantity,
-          quantity_change: quantityOperation === 'add' ? change : -change,
-          change_reason: quantityChange.reason || `Quantity ${quantityOperation}ed`,
-        });
-      } catch (historyError) {
-        console.error('History logging failed:', historyError);
-      }
+      // The server applies the change to the current stock and logs it, in one transaction
+      await createPartsHistory.mutateAsync({
+        part_id: selectedAsset.id,
+        quantity_change: quantityOperation === 'add' ? change : -change,
+        change_reason: quantityChange.reason || `Quantity ${quantityOperation}ed`,
+      });
 
       // Note: inventory_usage table doesn't exist - usage is tracked in parts_history above
 

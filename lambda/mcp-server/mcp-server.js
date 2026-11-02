@@ -5,6 +5,7 @@ import { generateEmbedding } from './embeddings.js';
 import {
   createAction, updateAction, createObservation, updateObservation, policyToHtml,
   createSnapshot, updateSnapshot, deleteSnapshot,
+  changeStock,
 } from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
@@ -1087,6 +1088,52 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         })), null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching assets: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'adjust_stock',
+    {
+      title: 'Add or remove stock',
+      description:
+        'Add to or remove from a part\'s stock, like the app\'s add/remove quantity, with a reason. ' +
+        'The change applies to the current stock (never below zero) and is logged in the part\'s ' +
+        'history. Find the part with search_assets. Read the change back to the person and only ' +
+        'call this once they say yes.',
+      inputSchema: {
+        part_id: z.string().describe('The part asset_id from search_assets'),
+        change: z.number().refine((n) => n !== 0, 'must not be zero').describe('How much to add (positive) or remove (negative), in the part\'s unit'),
+        reason: z.string().min(1).describe('Why, e.g. "Bought at the hardware store" or "Used on the eggplants"'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ part_id, change, reason }) => {
+      console.log('adjust_stock called with:', JSON.stringify({ part_id, change }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow changing stock.' }],
+          isError: true,
+        };
+      }
+      try {
+        const part = await withDbClient(async (client) => (await client.query(
+          `SELECT id::text AS id, name, unit, organization_id FROM parts WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [part_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!part) return notFound([{ entity_type: 'part', entity_id: part_id }]);
+        const { part: updated } = await changeStock({ cognitoUserId, orgId: part.organization_id, partId: part.id, change, reason });
+        console.log('adjust_stock: changed', part.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          part: part.name,
+          change,
+          current_quantity: Number(updated.current_quantity),
+          unit: part.unit,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('adjust_stock failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not change the stock: ${err.message}` }], isError: true };
       }
     }
   );
