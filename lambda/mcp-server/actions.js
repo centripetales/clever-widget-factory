@@ -16,12 +16,12 @@ async function invoke(functionName, payload) {
   return reply;
 }
 
-async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id } = {}) {
+async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId } = {}) {
   const authorizer = await invoke(AUTHORIZER, { contextFor: cognitoUserId });
   const reply = await invoke(functionName, {
     httpMethod: method,
     path,
-    pathParameters: id ? { id } : undefined,
+    pathParameters: id ? { id } : snapshotId ? { snapshot_id: snapshotId } : undefined,
     headers: orgId ? { 'X-Organization-Id': orgId } : {},
     body: JSON.stringify(body),
     requestContext: { authorizer },
@@ -52,6 +52,20 @@ export async function createObservation({ cognitoUserId, observation }) {
 // it (the person who recorded it, or an admin), as in the app.
 export async function updateObservation({ cognitoUserId, orgId, observationId, changes }) {
   return invokeApp('cwf-states-lambda', `/api/states/${observationId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: observationId });
+}
+
+// Metric values (snapshots) are saved separately from the observation, as the
+// app does, in the observation's org (orgId; none for the primary org).
+export async function createSnapshot({ cognitoUserId, orgId, observationId, metricId, value }) {
+  return invokeApp('cwf-snapshots-lambda', `/api/states/${observationId}/snapshots`, { metric_id: metricId, value }, { cognitoUserId, orgId }, { id: observationId });
+}
+
+export async function updateSnapshot({ cognitoUserId, orgId, snapshotId, value }) {
+  return invokeApp('cwf-snapshots-lambda', `/api/snapshots/${snapshotId}`, { value }, { cognitoUserId, orgId }, { method: 'PUT', snapshotId });
+}
+
+export async function deleteSnapshot({ cognitoUserId, orgId, snapshotId }) {
+  return invokeApp('cwf-snapshots-lambda', `/api/snapshots/${snapshotId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', snapshotId });
 }
 
 // The app stores policy as rich text (HTML); spoken plans arrive as plain text.
