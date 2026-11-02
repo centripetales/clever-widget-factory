@@ -372,9 +372,71 @@ function generatePolicy(principalId, effect, resource, context) {
 }
 
 /**
+ * The context the API's Lambdas read (see the cwf-common-nodejs layer's
+ * getAuthorizerContext), for a signed-in Cognito user.
+ */
+async function getContext(cognitoUserId) {
+  // Check cache first
+  let userData = getCachedUser(cognitoUserId);
+  
+  if (!userData) {
+    // Fetch from database
+    userData = await getUserOrganizationData(cognitoUserId);
+    
+    if (!userData) {
+      throw new Error('Forbidden: User not found in any organization');
+    }
+    
+    // Cache the result
+    setCachedUser(cognitoUserId, userData, 5);
+  }
+  
+  // Include all organization memberships and partner access for multi-tenant data filtering
+  // Validate that accessible_organization_ids is present and not empty
+  if (!userData.accessible_organization_ids || userData.accessible_organization_ids.length === 0) {
+    console.error('❌ ERROR: accessible_organization_ids is missing or empty in userData!');
+    console.error('   cognito_user_id:', cognitoUserId);
+    console.error('   userData:', JSON.stringify(userData, null, 2));
+    throw new Error(`User ${cognitoUserId} has no accessible organizations. User must be added to at least one organization.`);
+  }
+  
+  const accessibleOrgIds = userData.accessible_organization_ids;
+  
+  const context = {
+    organization_id: userData.organization_id,
+    organization_memberships: JSON.stringify(userData.organization_memberships || []),
+    accessible_organization_ids: JSON.stringify(accessibleOrgIds),
+    partner_access: JSON.stringify(userData.partner_access || []),
+    cognito_user_id: cognitoUserId,
+    user_role: userData.role,
+    permissions: JSON.stringify(userData.permissions || [])
+  };
+  
+  console.log('Authorizer context being set:', {
+    cognito_user_id: cognitoUserId,
+    organization_id: userData.organization_id,
+    accessible_organization_ids: accessibleOrgIds,
+    accessible_orgs_count: accessibleOrgIds.length,
+    accessible_orgs_json: JSON.stringify(accessibleOrgIds),
+    permissions: userData.permissions,
+    has_data_read_all: userData.permissions?.includes('data:read:all') || false
+  });
+  return context;
+}
+
+/**
  * Main authorizer handler
  */
 exports.handler = async (event) => {
+  // Direct invocation by the Claude connector (cwf-mcp-server), which has
+  // already verified the person's own token: the same context, so their
+  // writes through the app's Lambdas are allowed exactly what the app allows.
+  // Only callers with IAM invoke rights get here; API Gateway always sends a
+  // token.
+  if (event.contextFor && !event.authorizationToken) {
+    return getContext(event.contextFor);
+  }
+
   console.log('Authorizer event:', JSON.stringify(event, null, 2));
   
   try {
@@ -398,54 +460,8 @@ exports.handler = async (event) => {
     }
     
     const cognitoUserId = decoded.sub;
-    
-    // Check cache first
-    let userData = getCachedUser(cognitoUserId);
-    
-    if (!userData) {
-      // Fetch from database
-      userData = await getUserOrganizationData(cognitoUserId);
-      
-      if (!userData) {
-        throw new Error('Forbidden: User not found in any organization');
-      }
-      
-      // Cache the result
-      setCachedUser(cognitoUserId, userData, 5);
-    }
-    
-    // Generate policy with context
-    // Include all organization memberships and partner access for multi-tenant data filtering
-    // Validate that accessible_organization_ids is present and not empty
-    if (!userData.accessible_organization_ids || userData.accessible_organization_ids.length === 0) {
-      console.error('❌ ERROR: accessible_organization_ids is missing or empty in userData!');
-      console.error('   cognito_user_id:', cognitoUserId);
-      console.error('   userData:', JSON.stringify(userData, null, 2));
-      throw new Error(`User ${cognitoUserId} has no accessible organizations. User must be added to at least one organization.`);
-    }
-    
-    const accessibleOrgIds = userData.accessible_organization_ids;
-    
-    const context = {
-      organization_id: userData.organization_id,
-      organization_memberships: JSON.stringify(userData.organization_memberships || []),
-      accessible_organization_ids: JSON.stringify(accessibleOrgIds),
-      partner_access: JSON.stringify(userData.partner_access || []),
-      cognito_user_id: cognitoUserId,
-      user_role: userData.role,
-      permissions: JSON.stringify(userData.permissions || [])
-    };
-    
-    console.log('Authorizer context being set:', {
-      cognito_user_id: cognitoUserId,
-      organization_id: userData.organization_id,
-      accessible_organization_ids: accessibleOrgIds,
-      accessible_orgs_count: accessibleOrgIds.length,
-      accessible_orgs_json: JSON.stringify(accessibleOrgIds),
-      permissions: userData.permissions,
-      has_data_read_all: userData.permissions?.includes('data:read:all') || false
-    });
-    
+    const context = await getContext(cognitoUserId);
+
     // Allow access to all API Gateway resources
     const resource = event.methodArn.split('/').slice(0, 2).join('/') + '/*/*';
     

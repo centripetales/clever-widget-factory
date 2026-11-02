@@ -29,9 +29,16 @@ async function connect(accessibleOrgIds, callerName, extra = {}) {
 }
 
 // Capture calls to the actions Lambda instead of invoking it.
+// The authorizer answers with the person's context, as API Gateway would pass it.
 let invocations;
 mock.method(LambdaClient.prototype, 'send', async (command) => {
   const event = JSON.parse(Buffer.from(command.input.Payload).toString());
+  if (command.input.FunctionName === 'cwf-api-authorizer') {
+    return { Payload: Buffer.from(JSON.stringify({
+      organization_id: 'org-a', cognito_user_id: event.contextFor, user_role: 'admin',
+      accessible_organization_ids: '["org-a","org-b"]', permissions: '["data:write","data:write:all"]',
+    })) };
+  }
   invocations.push({ functionName: command.input.FunctionName, event });
   const body = JSON.parse(event.body);
   if (command.input.FunctionName === 'cwf-states-lambda') {
@@ -196,8 +203,9 @@ describe('update_action', () => {
     assert.strictEqual(functionName, 'cwf-actions-lambda');
     assert.strictEqual(event.httpMethod, 'PUT');
     assert.strictEqual(event.path, '/api/actions/action-1');
-    assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-b');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
+    assert.strictEqual(event.requestContext.authorizer.permissions, '["data:write","data:write:all"]');
     assert.deepStrictEqual(JSON.parse(event.body), { title: 'Share your farming practices' });
     assert.strictEqual(JSON.parse(result.content[0].text).title, 'Share your farming practices');
   });
@@ -223,25 +231,63 @@ describe('update_action', () => {
 describe('add_observation', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
 
-  test('creates the observation on the action through the app and returns the photo link', async () => {
-    rows = [{ id: 'action-1', title: 'Mount the inverter', organization_id: 'org-b' }];
+  test('creates the observation on the action through the app, in the primary org, and returns the photo link', async () => {
+    rows = [{ entity_type: 'action', entity_id: 'action-1', name: 'Mount the inverter' }];
     const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
-    const result = await client.callTool({ name: 'add_observation', arguments: { action_id: 'action-1', text: 'Lester mounted it.' } });
-    assert.deepStrictEqual(queries[0].params, ['action-1', ['org-a', 'org-b']]);
+    const result = await client.callTool({ name: 'add_observation', arguments: {
+      text: 'Lester mounted it.', links: [{ entity_type: 'action', entity_id: 'action-1' }],
+    } });
+    assert.deepStrictEqual(queries[0].params, [['action-1'], ['org-a', 'org-b']]);
     const [{ functionName, event }] = invocations;
     assert.strictEqual(functionName, 'cwf-states-lambda');
     assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-a');
+    assert.deepStrictEqual(event.headers, {});
     assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
     assert.deepStrictEqual(JSON.parse(event.body), { state_text: 'Lester mounted it.', photos: [], links: [{ entity_type: 'action', entity_id: 'action-1' }] });
     const reply = JSON.parse(result.content[0].text);
     assert.strictEqual(reply.add_photos_link, 'https://stargazer-farm.com/observations/edit/new-observation');
+    assert.strictEqual(reply.action_link, 'https://stargazer-farm.com/actions/action-1');
   });
 
-  test('an action outside the caller orgs is refused and nothing is created', async () => {
+  test('a standalone observation has no links and needs no lookup', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'add_observation', arguments: { text: 'Rain overnight.', captured_at: '2026-11-02T06:00:00+08:00' } });
+    assert.strictEqual(queries.length, 0);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { state_text: 'Rain overnight.', captured_at: '2026-11-02T06:00:00+08:00', photos: [], links: [] });
+  });
+
+  test('links outside the caller orgs are refused and nothing is created', async () => {
+    rows = [{ entity_type: 'tool', entity_id: 'tool-1', name: 'Azolla pond' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'add_observation', arguments: {
+      text: 'x', links: [{ entity_type: 'tool', entity_id: 'tool-1' }, { entity_type: 'action', entity_id: 'other-org-action' }],
+    } });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /other-org-action/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('update_observation', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('sends only the changed fields, in the observation org', async () => {
+    rows = [{ id: 'obs-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1', text: ' Fixed typo. ' } });
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-states-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.pathParameters.id, 'obs-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { state_text: 'Fixed typo.' });
+  });
+
+  test('nothing to change or an unknown observation change nothing', async () => {
     rows = [];
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
-    const result = await client.callTool({ name: 'add_observation', arguments: { action_id: 'other-org-action', text: 'x' } });
-    assert.strictEqual(result.isError, true);
+    assert.strictEqual((await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1' } })).isError, true);
+    assert.strictEqual((await client.callTool({ name: 'update_observation', arguments: { observation_id: 'missing', text: 'x' } })).isError, true);
     assert.strictEqual(invocations.length, 0);
   });
 });

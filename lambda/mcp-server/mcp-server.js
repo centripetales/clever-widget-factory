@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { withDbClient } from './db.js';
 import { generateEmbedding } from './embeddings.js';
-import { createAction, updateAction, createObservation, setObservationLinks, policyToHtml } from './actions.js';
+import { createAction, updateAction, createObservation, updateObservation, policyToHtml } from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
 const DEFAULT_LIMIT = 10;
@@ -120,6 +120,30 @@ const LINK = z.object({
   entity_type: z.enum(['action', 'tool', 'part']),
   entity_id: z.string(),
 });
+
+// The links that exist in the caller's orgs, with names for the reply.
+async function findLinkTargets(client, links, orgIds) {
+  if (links.length === 0) return [];
+  return (await client.query(
+    `SELECT 'action' AS entity_type, id::text AS entity_id, title AS name FROM actions
+       WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+     UNION ALL
+     SELECT 'tool', id::text, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+     UNION ALL
+     SELECT 'part', id::text, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+    [links.map((l) => l.entity_id), orgIds]
+  )).rows;
+}
+
+const sameLink = (a, b) => a.entity_type === b.entity_type && String(a.entity_id) === String(b.entity_id);
+
+const notFound = (missing) => ({
+  content: [{ type: 'text', text: `Not found in your organizations: ${missing.map((l) => `${l.entity_type} ${l.entity_id}`).join(', ')} — check the ids with search_actions / search_assets.` }],
+  isError: true,
+});
+
+const CAPTURED_AT = z.string().datetime({ offset: true })
+  .describe('When it was observed, ISO 8601 with offset, e.g. 2026-11-02T08:30:00+08:00. Leave out for now.');
 
 const NOT_A_MEMBER = {
   content: [{ type: 'text', text: 'You are not an active member of any CWF organization, so there is no farm data to show.' }],
@@ -633,7 +657,6 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
 
         const created = await createAction({
           cognitoUserId,
-          orgIds: accessibleOrgIds,
           action: {
             title,
             description: existing_state || null,
@@ -711,7 +734,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         // Edited where the action lives, as when the app has that org active.
         const updated = await updateAction({
           cognitoUserId,
-          orgIds: [action.organization_id, ...accessibleOrgIds.filter((id) => id !== action.organization_id)],
+          orgId: action.organization_id,
           actionId: action.id,
           changes,
         });
@@ -733,21 +756,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   server.registerTool(
     'add_observation',
     {
-      title: 'Add an observation to an action',
+      title: 'Add an observation',
       description:
-        'Record an observation on an existing action, in the person\'s own words, and get a link ' +
-        'to add photos to it. Claude cannot pass photos from the chat to CWF, so when the person ' +
-        'wants photos on an action, create the observation here and give them the photo link: it ' +
-        'opens the observation in the CWF app, where they can take or pick photos. ' +
-        'Find the action_id with search_actions first.',
+        'Record an observation in the person\'s own words, and get a link to add photos to it. It ' +
+        'can stand on its own or be linked to an action and/or assets (tools and parts), like the ' +
+        'app\'s observation screen. Find actions with search_actions and assets with search_assets. ' +
+        'Claude cannot pass photos from the chat to CWF, so when the person wants photos, create the ' +
+        'observation here and give them the photo link: it opens the observation in the CWF app, ' +
+        'where they can take or pick photos.',
       inputSchema: {
-        action_id: z.string().describe('The action_id from search_actions or create_action'),
         text: z.string().optional().describe('What the person observed, in their own words. Can be left out if they only want to add photos.'),
+        links: z.array(LINK).optional().describe('What it is about: an action and/or tools and parts. Leave out for a standalone observation.'),
+        captured_at: CAPTURED_AT.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ action_id, text }) => {
-      console.log('add_observation called with:', JSON.stringify({ action_id, hasText: Boolean(text) }));
+    async ({ text, links = [], captured_at }) => {
+      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, captured_at }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -757,32 +782,29 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       }
 
       try {
-        const action = await withDbClient(async (client) => (await client.query(
-          `SELECT id, title, organization_id FROM actions WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
-          [action_id, accessibleOrgIds]
-        )).rows[0]);
-        if (!action) {
-          return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
-        }
+        const targets = await withDbClient((client) => findLinkTargets(client, links, accessibleOrgIds));
+        const missing = links.filter((l) => !targets.some((t) => sameLink(t, l)));
+        if (missing.length > 0) return notFound(missing);
 
         // Like the app: the observation goes in the caller's primary organization
         // (oldest membership), even on another org's action, e.g. Positive Sum's.
         const created = await createObservation({
           cognitoUserId,
-          orgIds: accessibleOrgIds,
           observation: {
             state_text: text?.trim() || null,
+            ...(captured_at && { captured_at }),
             photos: [],
-            links: [{ entity_type: 'action', entity_id: action.id }],
+            links: targets.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })),
           },
         });
-        console.log('add_observation: created', created.id, 'on action', action.id);
+        console.log('add_observation: created', created.id);
+        const action = targets.find((t) => t.entity_type === 'action');
         return {
           content: [{ type: 'text', text: JSON.stringify({
             observation_id: created.id,
-            action: action.title,
+            linked_to: targets.map((t) => `${t.entity_type}: ${t.name}`),
             add_photos_link: `https://stargazer-farm.com/observations/edit/${created.id}`,
-            action_link: `https://stargazer-farm.com/actions/${action.id}`,
+            ...(action && { action_link: `https://stargazer-farm.com/actions/${action.entity_id}` }),
           }, null, 2) }],
         };
       } catch (err) {
@@ -793,12 +815,66 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'update_observation',
+    {
+      title: 'Edit an observation',
+      description:
+        'Change an observation\'s text or when it was observed. Only the fields given change. ' +
+        'Find observation_ids with search_claims or search_actions. Read the change back to the ' +
+        'person and only call this once they say yes. The same people can edit it as in the app ' +
+        '(whoever recorded it, or an admin). Use update_observation_links for links.',
+      inputSchema: {
+        observation_id: z.string().describe('The observation to change'),
+        text: z.string().optional().describe('New text, in the person\'s own words'),
+        captured_at: CAPTURED_AT.optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ observation_id, text, captured_at }) => {
+      const changes = {
+        ...(text !== undefined && { state_text: text.trim() || null }),
+        ...(captured_at !== undefined && { captured_at }),
+      };
+      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes) }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing observations.' }],
+          isError: true,
+        };
+      }
+      if (Object.keys(changes).length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give text or captured_at.' }], isError: true };
+      }
+
+      try {
+        const observation = await withDbClient(async (client) => (await client.query(
+          `SELECT id::text AS id, organization_id FROM states WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [observation_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!observation) {
+          return { content: [{ type: 'text', text: 'No observation with that id in your organizations.' }], isError: true };
+        }
+        await updateObservation({ cognitoUserId, orgId: observation.organization_id, observationId: observation.id, changes });
+        console.log('update_observation: updated', observation.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          observation_id: observation.id,
+          edit_link: `https://stargazer-farm.com/observations/edit/${observation.id}`,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('update_observation failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not edit the observation: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
     'search_assets',
     {
       title: 'Search assets',
       description:
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
-        'topic, to get the asset_id and type to link an observation to with update_observation_links.',
+        'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links).',
       inputSchema: {
         query: z.string().min(1).describe('Name or topic, e.g. "azolla pond" or "inverter"'),
         limit: z.number().int().min(1).max(25).optional().describe('Max results, default 10'),
@@ -852,8 +928,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Add or remove what observations are linked to — actions and assets (tools and parts), the ' +
         'same links the observation screen allows. Other links are kept. Works on several ' +
         'observations at once. Find observation_ids with search_claims, actions with search_actions ' +
-        'and assets with search_assets; confirm the change with the person first. Only observations ' +
-        'the person recorded themselves can be changed.',
+        'and assets with search_assets; confirm the change with the person first. The same people ' +
+        'can change an observation as in the app (whoever recorded it, or an admin).',
       inputSchema: {
         observation_ids: z.array(z.string()).min(1).max(25).describe('Observations to change'),
         add: z.array(LINK).optional().describe('Links to add'),
@@ -874,19 +950,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         return { content: [{ type: 'text', text: 'Give links to add or remove.' }], isError: true };
       }
 
-      const same = (a, b) => a.entity_type === b.entity_type && String(a.entity_id) === String(b.entity_id);
+      const same = sameLink;
       try {
         const { targets, observations } = await withDbClient(async (client) => ({
           // What can be added must exist in the caller's orgs; names are for the reply.
-          targets: add.length === 0 ? [] : (await client.query(
-            `SELECT 'action' AS entity_type, id::text AS entity_id, title AS name FROM actions
-               WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
-             UNION ALL
-             SELECT 'tool', id::text, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
-             UNION ALL
-             SELECT 'part', id::text, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
-            [add.map((l) => l.entity_id), accessibleOrgIds]
-          )).rows,
+          targets: await findLinkTargets(client, add, accessibleOrgIds),
           observations: (await client.query(
             `SELECT s.id::text AS id, s.organization_id,
                     COALESCE(json_agg(json_build_object('entity_type', sl.entity_type, 'entity_id', sl.entity_id))
@@ -898,9 +966,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           )).rows,
         }));
         const missing = add.filter((l) => !targets.some((t) => same(t, l)));
-        if (missing.length > 0) {
-          return { content: [{ type: 'text', text: `Not found in your organizations: ${missing.map((l) => `${l.entity_type} ${l.entity_id}`).join(', ')} — check the ids with search_actions / search_assets.` }], isError: true };
-        }
+        if (missing.length > 0) return notFound(missing);
 
         const results = [];
         for (const id of observation_ids) {
@@ -913,12 +979,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             continue;
           }
           try {
-            await setObservationLinks({
+            await updateObservation({
               cognitoUserId,
               // The states service checks the observation is in this org.
-              orgIds: [observation.organization_id, ...accessibleOrgIds.filter((o) => o !== observation.organization_id)],
+              orgId: observation.organization_id,
               observationId: id,
-              links,
+              changes: { links },
             });
             results.push({ observation_id: id, result: 'updated' });
           } catch (err) {
