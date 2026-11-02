@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { withDbClient } from './db.js';
 import { generateEmbedding } from './embeddings.js';
+import { createAction, createObservation, setObservationLinks, policyToHtml } from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
 const DEFAULT_LIMIT = 10;
@@ -113,17 +114,30 @@ const NOT_FROM_TRANSACTION = `NOT EXISTS (
     AND ts.state_text LIKE '{"type":"positive_sum.transaction_context"%'
 )`;
 
+// What an observation can be linked to through the connector — the same as
+// the observation screen's Link Asset (assets) and linked action.
+const LINK = z.object({
+  entity_type: z.enum(['action', 'tool', 'part']),
+  entity_id: z.string(),
+});
+
 const NOT_A_MEMBER = {
   content: [{ type: 'text', text: 'You are not an active member of any CWF organization, so there is no farm data to show.' }],
   isError: true,
 };
 
-// accessibleOrgIds comes from the authenticated caller (see orgs.js); every
-// query is limited to it.
-function create({ accessibleOrgIds }) {
+// accessibleOrgIds, callerName, cognitoUserId and canWrite come from the
+// authenticated caller (see orgs.js, auth.js); every query is limited to
+// accessibleOrgIds.
+function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false }) {
   const server = new McpServer(
     { name: 'cwf-observations', version: '1.0.0' },
-    { capabilities: { tools: {} } }
+    {
+      capabilities: { tools: {} },
+      instructions: callerName
+        ? `You are talking with ${callerName}. Everyone's work is visible here; filter by person when the conversation is about one person.`
+        : undefined,
+    }
   );
 
   server.registerTool(
@@ -330,85 +344,140 @@ function create({ accessibleOrgIds }) {
     {
       title: 'Search actions',
       description:
-        'Search farm actions — work that was planned or done: title, policy (the plan), ' +
-        'expected state, status, who it is assigned to and who took part, and when it ' +
-        'was created and completed. Each result lists observation_ids for the observations ' +
-        'recorded on the action; pass one to get_observation_photos to see its photos.\n\n' +
-        TWO_MODES + ' Date mode matches actions created or completed in the window.',
-      inputSchema: SEARCH_INPUTS,
+        'Search farm actions — work that was planned or done: title, status, who it is ' +
+        'assigned to and who took part, the asset it is on, when it was created and ' +
+        'completed, and its latest observation (date and claim) to show where it stands. ' +
+        'Each result lists observation_ids; pass one to get_observation_photos to see its photos.\n\n' +
+        'Three ways to search — pick one:\n' +
+        '1. List: give only `status` and/or `person` to get every matching action, most recently ' +
+        'active first, e.g. status ["not_started","in_progress"] for what is open when planning a day. ' +
+        'Listed actions leave out policy and expected_state; search by topic for those.\n' +
+        '2. Topical search: give `query`, ranked by semantic similarity. Do NOT put dates in the query.\n' +
+        '3. Date-range lookup: `relative` or `date_from`/`date_to` for actions created or completed in the window.\n' +
+        '`status` and `person` also narrow modes 2 and 3. Status external_proposal is a Positive Sum offer.',
+      inputSchema: {
+        ...SEARCH_INPUTS,
+        status: z.array(z.enum(['not_started', 'in_progress', 'completed', 'external_proposal'])).optional().describe('Only actions with one of these statuses.'),
+        person: z.string().optional().describe('Only actions assigned to, or with as a participant, someone whose name contains this.'),
+        limit: z.number().int().min(1).max(100).optional().describe('Max results, default 10 (100 when listing by status/person)'),
+      },
     },
-    async ({ query, relative, date_from, date_to, limit }) => {
-      console.log('search_actions called with:', JSON.stringify({ query, relative, date_from, date_to, limit }));
+    async ({ query, relative, date_from, date_to, limit, status, person }) => {
+      console.log('search_actions called with:', JSON.stringify({ query, relative, date_from, date_to, limit, status, person }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       const { resolvedFrom, resolvedTo, isDateMode } = resolveWindow('search_actions', { query, relative, date_from, date_to });
-      if (!isDateMode && !query) return NEEDS_QUERY_OR_DATES;
-      const effectiveLimit = limit || DEFAULT_LIMIT;
+      const isListMode = !isDateMode && !query && Boolean(status?.length || person);
+      if (!isDateMode && !query && !isListMode) return NEEDS_QUERY_OR_DATES;
+      const effectiveLimit = limit || (isListMode ? 100 : DEFAULT_LIMIT);
 
+      const params = [accessibleOrgIds];
+      const add = (value) => { params.push(value); return `$${params.length}`; };
+      const where = ['a.organization_id = ANY($1::uuid[])', NOT_FROM_TRANSACTION];
+      if (status?.length) where.push(`a.status::text = ANY(${add(status)}::text[])`);
+      if (person) {
+        where.push(`EXISTS (SELECT 1 FROM organization_members om
+          WHERE om.organization_id = a.organization_id AND om.full_name ILIKE '%' || ${add(person)} || '%'
+            AND (om.user_id::text = a.assigned_to::text OR om.user_id::text = ANY(a.participants::text[])))`);
+      }
+
+      // The latest observation skips Positive Sum's own records (JSON states).
       const columns = `
         a.id, a.title, a.policy, a.expected_state, a.status, a.created_at, a.completed_at,
+        t.name AS asset_name,
+        lo.captured_at AS latest_observation_at, lo.claim AS latest_observation_claim,
         (SELECT om.full_name FROM organization_members om
           WHERE om.user_id::text = a.assigned_to::text AND om.organization_id = a.organization_id LIMIT 1) AS assigned_to_name,
         (SELECT string_agg(om.full_name, ', ') FROM organization_members om
           WHERE om.user_id::text = ANY(a.participants::text[]) AND om.organization_id = a.organization_id) AS participant_names,
         (SELECT array_agg(sl.state_id ORDER BY s.captured_at) FROM state_links sl JOIN states s ON s.id = sl.state_id
           WHERE sl.entity_type = 'action' AND sl.entity_id = a.id) AS observation_ids`;
+      const joins = `
+        LEFT JOIN tools t ON t.id = a.asset_id
+        LEFT JOIN LATERAL (
+          SELECT s.captured_at, cp.content->>'content' AS claim
+          FROM state_links sl
+          JOIN states s ON s.id = sl.state_id
+          LEFT JOIN state_perspectives cp ON cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS'
+          WHERE sl.entity_type = 'action' AND sl.entity_id = a.id
+            AND COALESCE(s.state_text, '') NOT LIKE '{"type":"positive_sum.%'
+          ORDER BY s.captured_at DESC
+          LIMIT 1
+        ) lo ON true`;
 
       try {
         const results = await withDbClient(async (client) => {
-          if (isDateMode) {
+          if (isListMode) {
             const res = await client.query(
               `SELECT ${columns}
-               FROM actions a
-               WHERE a.organization_id = ANY($1::uuid[]) AND ${NOT_FROM_TRANSACTION}
-                 AND (
-                   (a.created_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Manila')
-                     AND a.created_at < (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Manila'))
-                   OR (a.completed_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Manila')
-                     AND a.completed_at < (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Manila'))
-                 )
-               ORDER BY COALESCE(a.completed_at, a.created_at) DESC
-               LIMIT $4`,
-              [accessibleOrgIds, resolvedFrom, resolvedTo, effectiveLimit]
+               FROM actions a ${joins}
+               WHERE ${where.join(' AND ')}
+               ORDER BY COALESCE(lo.captured_at, a.updated_at) DESC
+               LIMIT ${add(effectiveLimit)}`,
+              params
             );
             return res.rows;
           }
 
-          const embeddingStr = `[${(await generateEmbedding(query)).join(',')}]`;
+          if (isDateMode) {
+            const from = add(resolvedFrom);
+            const to = add(resolvedTo);
+            const res = await client.query(
+              `SELECT ${columns}
+               FROM actions a ${joins}
+               WHERE ${where.join(' AND ')}
+                 AND (
+                   (a.created_at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Manila')
+                     AND a.created_at < ((${to}::date + 1)::timestamp AT TIME ZONE 'Asia/Manila'))
+                   OR (a.completed_at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Manila')
+                     AND a.completed_at < ((${to}::date + 1)::timestamp AT TIME ZONE 'Asia/Manila'))
+                 )
+               ORDER BY COALESCE(a.completed_at, a.created_at) DESC
+               LIMIT ${add(effectiveLimit)}`,
+              params
+            );
+            return res.rows;
+          }
+
+          const vector = add(`[${(await generateEmbedding(query)).join(',')}]`);
           const res = await client.query(
             `WITH matches AS (
-               SELECT entity_id, 1 - (embedding <=> $1::vector) AS similarity
+               SELECT entity_id, 1 - (embedding <=> ${vector}::vector) AS similarity
                FROM unified_embeddings
-               WHERE organization_id = ANY($2::uuid[]) AND entity_type = 'action_policy'
-               ORDER BY embedding <=> $1::vector
-               LIMIT $3
+               WHERE organization_id = ANY($1::uuid[]) AND entity_type = 'action_policy'
+               ORDER BY embedding <=> ${vector}::vector
+               LIMIT ${add(effectiveLimit)}
              )
              SELECT m.similarity, ${columns}
              FROM matches m
-             JOIN actions a ON a.id = m.entity_id
-             WHERE a.organization_id = ANY($2::uuid[]) AND ${NOT_FROM_TRANSACTION}
-               AND m.similarity > $4
+             JOIN actions a ON a.id = m.entity_id ${joins}
+             WHERE ${where.join(' AND ')}
+               AND m.similarity > ${add(SIMILARITY_THRESHOLD)}
              ORDER BY m.similarity DESC`,
-            [embeddingStr, accessibleOrgIds, effectiveLimit, SIMILARITY_THRESHOLD]
+            params
           );
           return res.rows;
         });
 
-        console.log(`search_actions: isDateMode=${isDateMode} resolved(${resolvedFrom},${resolvedTo}) -> ${results.length} results`);
+        console.log(`search_actions: mode=${isListMode ? 'list' : isDateMode ? 'date' : 'topic'} resolved(${resolvedFrom},${resolvedTo}) -> ${results.length} results`);
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: isDateMode ? 'No actions were created or completed in that date range.' : 'No actions matched that query above the similarity threshold — try a broader query.' }] };
+          return { content: [{ type: 'text', text: isListMode ? 'No actions match that status/person.' : isDateMode ? 'No actions were created or completed in that date range.' : 'No actions matched that query above the similarity threshold — try a broader query.' }] };
         }
 
         const formatted = results.map((r) => ({
           action_id: r.id,
-          similarity: isDateMode ? undefined : Number(r.similarity.toFixed(3)),
+          similarity: r.similarity === undefined ? undefined : Number(r.similarity.toFixed(3)),
           title: r.title,
-          policy: r.policy,
-          expected_state: r.expected_state,
           status: r.status,
+          policy: isListMode ? undefined : r.policy,
+          expected_state: isListMode ? undefined : r.expected_state,
+          asset: r.asset_name,
           assigned_to: r.assigned_to_name,
           participants: r.participant_names,
           created_at_manila: formatManilaTime(r.created_at),
           completed_at_manila: r.completed_at ? formatManilaTime(r.completed_at) : null,
+          latest_observation: r.latest_observation_at
+            ? { at_manila: formatManilaTime(r.latest_observation_at), claim: r.latest_observation_claim }
+            : null,
           observation_ids: r.observation_ids || [],
         }));
         return { content: [{ type: 'text', text: JSON.stringify(formatted, null, 2) }] };
@@ -508,6 +577,294 @@ function create({ accessibleOrgIds }) {
         return { content: [{ type: 'text', text: JSON.stringify(formatted, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching financial records: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_action',
+    {
+      title: 'Create an action',
+      description:
+        'Create a new action (planned work) in CWF, as not started. Draft all of these from what ' +
+        'the person said, using search_actions / search_claims for context where it helps: ' +
+        'title, existing_state (where things are now), expected_state (where we want to get to) ' +
+        'and policy (how to do it). They are optional, but fill them by default. ' +
+        'Before calling this, read the draft back to the person (title, existing state, expected ' +
+        'state, policy, who it is assigned to) and only call it once they say yes.',
+      inputSchema: {
+        title: z.string().min(1).describe('Short name for the work, e.g. "Waterproof the bamboo treatment bins"'),
+        existing_state: z.string().optional().describe('Where things are now'),
+        expected_state: z.string().optional().describe('Where we want to get to'),
+        policy: z.string().optional().describe('How to do it; plain text, blank lines between paragraphs'),
+        assigned_to: z.string().optional().describe('Name of the person it is assigned to'),
+        participants: z.array(z.string()).optional().describe('Names of other people taking part'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ title, existing_state, expected_state, policy, assigned_to, participants }) => {
+      console.log('create_action called with:', JSON.stringify({ title, assigned_to, participants }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow creating actions.' }],
+          isError: true,
+        };
+      }
+
+      try {
+        // Names become the member user_ids the app stores, within the org
+        // the action is created in (the first one, as the app does).
+        const names = [assigned_to, ...(participants || [])].filter(Boolean);
+        const members = names.length === 0 ? [] : await withDbClient(async (client) => (await client.query(
+          `SELECT user_id::text AS user_id, full_name FROM organization_members
+           WHERE organization_id = $1 AND is_active = true AND user_id IS NOT NULL`,
+          [accessibleOrgIds[0]]
+        )).rows);
+        const resolve = (name) => {
+          const exact = members.filter((m) => m.full_name?.trim().toLowerCase() === name.trim().toLowerCase());
+          const partial = members.filter((m) => m.full_name?.toLowerCase().includes(name.trim().toLowerCase()));
+          const found = exact.length === 1 ? exact : partial;
+          if (found.length === 1) return found[0].user_id;
+          throw new Error(found.length === 0
+            ? `No active member named "${name}". Members: ${members.map((m) => m.full_name).join(', ')}`
+            : `"${name}" matches ${found.map((m) => m.full_name).join(', ')} — ask which one.`);
+        };
+
+        const created = await createAction({
+          cognitoUserId,
+          orgIds: accessibleOrgIds,
+          action: {
+            title,
+            description: existing_state || null,
+            expected_state: expected_state || null,
+            policy: policy ? policyToHtml(policy) : null,
+            status: 'not_started',
+            assigned_to: assigned_to ? resolve(assigned_to) : null,
+            participants: (participants || []).map(resolve),
+            required_tools: [],
+            attachments: [],
+          },
+        });
+        console.log('create_action: created', created.id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            action_id: created.id,
+            title: created.title,
+            status: created.status,
+            link: `https://stargazer-farm.com/actions/${created.id}`,
+          }, null, 2) }],
+        };
+      } catch (err) {
+        console.log('create_action failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not create the action: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'add_observation',
+    {
+      title: 'Add an observation to an action',
+      description:
+        'Record an observation on an existing action, in the person\'s own words, and get a link ' +
+        'to add photos to it. Claude cannot pass photos from the chat to CWF, so when the person ' +
+        'wants photos on an action, create the observation here and give them the photo link: it ' +
+        'opens the observation in the CWF app, where they can take or pick photos. ' +
+        'Find the action_id with search_actions first.',
+      inputSchema: {
+        action_id: z.string().describe('The action_id from search_actions or create_action'),
+        text: z.string().optional().describe('What the person observed, in their own words. Can be left out if they only want to add photos.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ action_id, text }) => {
+      console.log('add_observation called with:', JSON.stringify({ action_id, hasText: Boolean(text) }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow adding observations.' }],
+          isError: true,
+        };
+      }
+
+      try {
+        const action = await withDbClient(async (client) => (await client.query(
+          `SELECT id, title, organization_id FROM actions WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [action_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!action) {
+          return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
+        }
+
+        // The observation goes in the action's organization.
+        const created = await createObservation({
+          cognitoUserId,
+          orgIds: [action.organization_id, ...accessibleOrgIds.filter((id) => id !== action.organization_id)],
+          observation: {
+            state_text: text?.trim() || null,
+            photos: [],
+            links: [{ entity_type: 'action', entity_id: action.id }],
+          },
+        });
+        console.log('add_observation: created', created.id, 'on action', action.id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            observation_id: created.id,
+            action: action.title,
+            add_photos_link: `https://stargazer-farm.com/observations/edit/${created.id}`,
+            action_link: `https://stargazer-farm.com/actions/${action.id}`,
+          }, null, 2) }],
+        };
+      } catch (err) {
+        console.log('add_observation failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not add the observation: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'search_assets',
+    {
+      title: 'Search assets',
+      description:
+        'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
+        'topic, to get the asset_id and type to link an observation to with update_observation_links.',
+      inputSchema: {
+        query: z.string().min(1).describe('Name or topic, e.g. "azolla pond" or "inverter"'),
+        limit: z.number().int().min(1).max(25).optional().describe('Max results, default 10'),
+      },
+    },
+    async ({ query, limit }) => {
+      console.log('search_assets called with:', JSON.stringify({ query, limit }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      const effectiveLimit = limit || DEFAULT_LIMIT;
+      try {
+        const results = await withDbClient(async (client) => {
+          // Name matches first, then the closest by meaning.
+          const byName = (await client.query(
+            `SELECT 'tool' AS type, id::text AS id, name, category FROM tools
+               WHERE organization_id = ANY($1::uuid[]) AND name ILIKE '%' || $2 || '%'
+             UNION ALL
+             SELECT 'part', id::text, name, category FROM parts
+               WHERE organization_id = ANY($1::uuid[]) AND name ILIKE '%' || $2 || '%'
+             LIMIT $3`,
+            [accessibleOrgIds, query, effectiveLimit]
+          )).rows;
+          const vector = `[${(await generateEmbedding(query)).join(',')}]`;
+          const byMeaning = (await client.query(
+            `SELECT ue.entity_type AS type, ue.entity_id::text AS id, COALESCE(t.name, p.name) AS name, COALESCE(t.category, p.category) AS category
+             FROM unified_embeddings ue
+             LEFT JOIN tools t ON ue.entity_type = 'tool' AND t.id = ue.entity_id
+             LEFT JOIN parts p ON ue.entity_type = 'part' AND p.id = ue.entity_id
+             WHERE ue.organization_id = ANY($1::uuid[]) AND ue.entity_type IN ('tool', 'part')
+               AND 1 - (ue.embedding <=> $2::vector) > $4
+             ORDER BY ue.embedding <=> $2::vector
+             LIMIT $3`,
+            [accessibleOrgIds, vector, effectiveLimit, SIMILARITY_THRESHOLD]
+          )).rows;
+          const seen = new Set();
+          return [...byName, ...byMeaning].filter((r) => r.name && !seen.has(r.id) && seen.add(r.id)).slice(0, effectiveLimit);
+        });
+        console.log(`search_assets: -> ${results.length} results`);
+        if (results.length === 0) return { content: [{ type: 'text', text: 'No assets matched — try another name.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(results.map((r) => ({ asset_id: r.id, type: r.type, name: r.name, category: r.category })), null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error searching assets: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_observation_links',
+    {
+      title: 'Link or unlink observations',
+      description:
+        'Add or remove what observations are linked to — actions and assets (tools and parts), the ' +
+        'same links the observation screen allows. Other links are kept. Works on several ' +
+        'observations at once. Find observation_ids with search_claims, actions with search_actions ' +
+        'and assets with search_assets; confirm the change with the person first. Only observations ' +
+        'the person recorded themselves can be changed.',
+      inputSchema: {
+        observation_ids: z.array(z.string()).min(1).max(25).describe('Observations to change'),
+        add: z.array(LINK).optional().describe('Links to add'),
+        remove: z.array(LINK).optional().describe('Links to remove'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ observation_ids, add = [], remove = [] }) => {
+      console.log('update_observation_links called with:', JSON.stringify({ observation_ids, add, remove }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing observations.' }],
+          isError: true,
+        };
+      }
+      if (add.length === 0 && remove.length === 0) {
+        return { content: [{ type: 'text', text: 'Give links to add or remove.' }], isError: true };
+      }
+
+      const same = (a, b) => a.entity_type === b.entity_type && String(a.entity_id) === String(b.entity_id);
+      try {
+        const { targets, observations } = await withDbClient(async (client) => ({
+          // What can be added must exist in the caller's orgs; names are for the reply.
+          targets: add.length === 0 ? [] : (await client.query(
+            `SELECT 'action' AS entity_type, id::text AS entity_id, title AS name FROM actions
+               WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+             UNION ALL
+             SELECT 'tool', id::text, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+             UNION ALL
+             SELECT 'part', id::text, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+            [add.map((l) => l.entity_id), accessibleOrgIds]
+          )).rows,
+          observations: (await client.query(
+            `SELECT s.id::text AS id, s.organization_id,
+                    COALESCE(json_agg(json_build_object('entity_type', sl.entity_type, 'entity_id', sl.entity_id))
+                      FILTER (WHERE sl.state_id IS NOT NULL), '[]') AS links
+             FROM states s LEFT JOIN state_links sl ON sl.state_id = s.id
+             WHERE s.id::text = ANY($1::text[]) AND s.organization_id = ANY($2::uuid[])
+             GROUP BY s.id`,
+            [observation_ids, accessibleOrgIds]
+          )).rows,
+        }));
+        const missing = add.filter((l) => !targets.some((t) => same(t, l)));
+        if (missing.length > 0) {
+          return { content: [{ type: 'text', text: `Not found in your organizations: ${missing.map((l) => `${l.entity_type} ${l.entity_id}`).join(', ')} — check the ids with search_actions / search_assets.` }], isError: true };
+        }
+
+        const results = [];
+        for (const id of observation_ids) {
+          const observation = observations.find((o) => o.id === id);
+          if (!observation) { results.push({ observation_id: id, result: 'not found in your organizations' }); continue; }
+          const kept = observation.links.filter((l) => !remove.some((r) => same(r, l)));
+          const links = [...kept, ...add.filter((l) => !kept.some((k) => same(k, l)))];
+          if (links.length === observation.links.length && links.every((l) => observation.links.some((o) => same(o, l)))) {
+            results.push({ observation_id: id, result: 'no change' });
+            continue;
+          }
+          try {
+            await setObservationLinks({
+              cognitoUserId,
+              // The states service checks the observation is in this org.
+              orgIds: [observation.organization_id, ...accessibleOrgIds.filter((o) => o !== observation.organization_id)],
+              observationId: id,
+              links,
+            });
+            results.push({ observation_id: id, result: 'updated' });
+          } catch (err) {
+            results.push({ observation_id: id, result: `not changed: ${err.message}` });
+          }
+        }
+        console.log('update_observation_links:', JSON.stringify(results));
+        return { content: [{ type: 'text', text: JSON.stringify({
+          added: targets.map((t) => `${t.entity_type}: ${t.name}`),
+          removed: remove.map((l) => `${l.entity_type} ${l.entity_id}`),
+          results,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('update_observation_links failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not update the observations: ${err.message}` }], isError: true };
       }
     }
   );

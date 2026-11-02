@@ -5,7 +5,7 @@
 // as the authorization server, points every endpoint at Cognito, and answers
 // /register with the single pre-registered public Cognito client. Nothing is
 // created or stored.
-import { REQUIRED_SCOPE } from './auth.js';
+import { REQUIRED_SCOPE, WRITE_SCOPE } from './auth.js';
 
 const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
 
@@ -18,7 +18,7 @@ export function protectedResourceMetadata() {
   return {
     resource: `${base}/mcp`,
     authorization_servers: [base],
-    scopes_supported: [REQUIRED_SCOPE],
+    scopes_supported: [REQUIRED_SCOPE, WRITE_SCOPE],
     bearer_methods_supported: ['header'],
   };
 }
@@ -36,7 +36,7 @@ export function authorizationServerMetadata() {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: [REQUIRED_SCOPE],
+    scopes_supported: [REQUIRED_SCOPE, WRITE_SCOPE],
   };
 }
 
@@ -48,7 +48,7 @@ export function registrationResponse(body = {}) {
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
-    scope: REQUIRED_SCOPE,
+    scope: `${REQUIRED_SCOPE} ${WRITE_SCOPE}`,
   };
 }
 

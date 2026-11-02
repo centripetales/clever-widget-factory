@@ -14,6 +14,8 @@ for (const key of requiredEnv) {
 const COGNITO_REGION = process.env.COGNITO_REGION || 'us-west-2';
 const COGNITO_ISSUER = `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${process.env.COGNITO_USER_POOL_ID}`;
 export const REQUIRED_SCOPE = 'cwf-mcp/read';
+// Only needed for tools that change data (creating actions).
+export const WRITE_SCOPE = 'cwf-mcp/write';
 
 const client = jwksClient({
   jwksUri: `${COGNITO_ISSUER}/.well-known/jwks.json`,
@@ -52,7 +54,7 @@ function verifyToken(token) {
 export function unauthorized(res) {
   res.set(
     'WWW-Authenticate',
-    `Bearer resource_metadata="${process.env.PUBLIC_BASE_URL}/.well-known/oauth-protected-resource", scope="${REQUIRED_SCOPE}"`
+    `Bearer resource_metadata="${process.env.PUBLIC_BASE_URL}/.well-known/oauth-protected-resource", scope="${REQUIRED_SCOPE} ${WRITE_SCOPE}"`
   );
   return res.status(401).json({ error: 'Unauthorized' });
 }
@@ -66,6 +68,7 @@ export async function requireAuth(req, res, next) {
     const decoded = await verifyToken(match[1]);
     if (!checkClaims(decoded)) return unauthorized(res);
     req.cognitoUserId = decoded.sub;
+    req.canWrite = (decoded.scope || '').split(' ').includes(WRITE_SCOPE);
     return next();
   } catch (err) {
     console.log('Token rejected:', err.message);

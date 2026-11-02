@@ -6,6 +6,7 @@
   "main": "index.js",
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.0.0",
+    "@aws-sdk/client-lambda": "^3.1101.0",
     "@modelcontextprotocol/sdk": "^1.17.1",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.3",

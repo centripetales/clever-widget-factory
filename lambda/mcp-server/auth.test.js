@@ -49,7 +49,7 @@ describe('requireAuth', () => {
     assert.strictEqual(called, false);
     assert.strictEqual(res.statusCode, 401);
     assert.match(res.headers['WWW-Authenticate'], /resource_metadata="https:\/\/mcp\.example\.test\/\.well-known\/oauth-protected-resource"/);
-    assert.match(res.headers['WWW-Authenticate'], /scope="cwf-mcp\/read"/);
+    assert.match(res.headers['WWW-Authenticate'], /scope="cwf-mcp\/read cwf-mcp\/write"/);
   });
   test('401 for a malformed token', async () => {
     const res = fakeRes();
