@@ -242,11 +242,13 @@ describe('update_action', () => {
     assert.strictEqual(invocations.length, 0);
   });
 
-  test('completing is not offered yet', async () => {
+  test('completing sends the status and completion time; the actions service uses up the stock', async () => {
+    rows = [{ id: 'action-1', organization_id: 'org-a' }];
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
-    const result = await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', status: 'completed' } });
-    assert.strictEqual(result.isError, true);
-    assert.strictEqual(invocations.length, 0);
+    await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', status: 'completed' } });
+    const body = JSON.parse(invocations[0].event.body);
+    assert.strictEqual(body.status, 'completed');
+    assert.ok(!Number.isNaN(Date.parse(body.completed_at)));
   });
 
   test('nothing to change, an unknown action or a read-only connection change nothing', async () => {
@@ -314,6 +316,73 @@ describe('add_observation', () => {
     assert.strictEqual(result.isError, true);
     assert.match(result.content[0].text, /other-org-action/);
     assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('metrics', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const coverage = { metric_id: 'metric-1', tool_id: 'tool-1', name: 'Coverage %', unit: '%', value_type: 'number', min_value: 0, max_value: 100 };
+
+  test('search_assets lists a tool\'s metrics', async () => {
+    rows = (sql) => sql.includes('FROM metrics') ? [coverage] : sql.includes('unified_embeddings') ? [] : [{ type: 'tool', id: 'tool-1', name: 'Azolla pond' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const [pond] = JSON.parse((await client.callTool({ name: 'search_assets', arguments: { query: 'azolla' } })).content[0].text);
+    assert.deepStrictEqual(pond.metrics, [{ metric_id: 'metric-1', name: 'Coverage %', unit: '%', value_type: 'number', min_value: 0, max_value: 100 }]);
+  });
+
+  test('add_observation saves the readings through the snapshots service after the observation', async () => {
+    rows = (sql) => sql.includes('FROM metrics') ? [coverage] : [{ entity_type: 'tool', entity_id: 'tool-1', name: 'Azolla pond' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'add_observation', arguments: {
+      text: 'Pond is filling in.', links: [{ entity_type: 'tool', entity_id: 'tool-1' }], metrics: [{ metric_id: 'metric-1', value: 60 }],
+    } });
+    const [observation, snapshot] = invocations;
+    assert.strictEqual(observation.functionName, 'cwf-states-lambda');
+    assert.strictEqual(snapshot.functionName, 'cwf-snapshots-lambda');
+    assert.strictEqual(snapshot.event.path, '/api/states/new-observation/snapshots');
+    assert.strictEqual(snapshot.event.pathParameters.id, 'new-observation');
+    assert.deepStrictEqual(JSON.parse(snapshot.event.body), { metric_id: 'metric-1', value: '60' });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).metrics, [{ metric: 'Coverage %', value: '60', result: 'saved' }]);
+  });
+
+  test('a metric not on a linked tool is refused and nothing is created', async () => {
+    rows = (sql) => sql.includes('FROM metrics') ? [] : [{ entity_type: 'tool', entity_id: 'tool-1', name: 'Azolla pond' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'add_observation', arguments: {
+      links: [{ entity_type: 'tool', entity_id: 'tool-1' }], metrics: [{ metric_id: 'other-metric', value: '1' }],
+    } });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /other-metric/);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('update_observation updates a reading already there, adds a new one, after the edit check', async () => {
+    const depth = { ...coverage, metric_id: 'metric-2', name: 'Depth' };
+    rows = (sql) => sql.includes('FROM metric_snapshots') ? [{ snapshot_id: 'snap-1', metric_id: 'metric-1' }]
+      : sql.includes('FROM metrics') ? [coverage, depth]
+      : [{ id: 'obs-1', organization_id: 'org-b', tool_ids: ['tool-1'] }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_observation', arguments: {
+      observation_id: 'obs-1', metrics: [{ metric_id: 'metric-1', value: '70' }, { metric_id: 'metric-2', value: '12' }],
+    } });
+    const [edit, update, create] = invocations;
+    assert.strictEqual(edit.functionName, 'cwf-states-lambda');
+    assert.deepStrictEqual(JSON.parse(edit.event.body), {});
+    assert.strictEqual(update.event.httpMethod, 'PUT');
+    assert.strictEqual(update.event.pathParameters.snapshot_id, 'snap-1');
+    assert.strictEqual(update.event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(update.event.body), { value: '70' });
+    assert.strictEqual(create.event.path, '/api/states/obs-1/snapshots');
+    assert.deepStrictEqual(JSON.parse(create.event.body), { metric_id: 'metric-2', value: '12' });
+  });
+
+  test('someone who may not edit the observation changes no readings', async () => {
+    rows = (sql) => sql.includes('FROM metric_snapshots') ? [] : sql.includes('FROM metrics') ? [coverage]
+      : [{ id: 'not-mine', organization_id: 'org-a', tool_ids: ['tool-1'] }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_observation', arguments: { observation_id: 'not-mine', metrics: [{ metric_id: 'metric-1', value: '5' }] } });
+    assert.strictEqual(result.isError, true);
+    assert.ok(invocations.every((i) => i.functionName !== 'cwf-snapshots-lambda'));
   });
 });
 

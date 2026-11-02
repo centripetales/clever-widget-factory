@@ -26,7 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationId } from "@/hooks/useOrganizationId";
 import { apiService, getApiData, errorMessage } from '@/lib/apiService';
-import { toolHistoryQueryKey } from '@/lib/queryKeys';
+import { toolHistoryQueryKey, partsQueryKey } from '@/lib/queryKeys';
 import {
   Paperclip,
   Calendar as CalendarIcon,
@@ -225,6 +225,13 @@ export function ActionForm({
 
       // Show appropriate toast message based on action status
       const isCompleting = variables.status === 'completed' || updatedAction?.status === 'completed';
+      // Completing used up the required stock on the server.
+      if (variables.status === 'completed') {
+        queryClient.invalidateQueries({ queryKey: partsQueryKey() });
+        (variables.required_stock ?? []).forEach((item: { part_id: string }) => {
+          queryClient.invalidateQueries({ queryKey: ['part_history', item.part_id] });
+        });
+      }
       toast({
         title: isCompleting ? "Action Completed!" : "Success",
         description: isCompleting
@@ -590,24 +597,8 @@ export function ActionForm({
     setIsCompleting(true);
 
     try {
-      // Ensure we have user ID before processing stock
-      if (!user?.id) {
-        toast({
-          title: "Error",
-          description: "User authentication is missing. Please refresh the page.",
-          variant: "destructive"
-        });
-        setIsCompleting(false);
-        return;
-      }
-
-      // Process required stock consumption if any
-      const requiredStock = formData.required_stock || [];
-      if (requiredStock.length > 0) {
-        await processStockConsumption(requiredStock, action.id);
-      }
-
-      // Update action to completed status using saveActionMutation to ensure cache is updated
+      // Update action to completed status using saveActionMutation to ensure cache is updated.
+      // The server uses up the required stock in the same transaction.
       const actionData = {
         id: action.id,
         title: formData.title,
@@ -823,62 +814,6 @@ export function ActionForm({
       setIsGeneratingExpectedState(false);
     }
   };
-
-  const processStockConsumption = async (requiredStock: any[], actionId: string) => {
-    if (!requiredStock || requiredStock.length === 0) {
-      return; // No stock to process
-    }
-
-    if (!user?.id) {
-      console.error('User ID required for stock consumption', {
-        userId: user?.id
-      });
-      toast({
-        title: "Error",
-        description: "Unable to process stock consumption: user information missing",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    try {
-      // Use the utility function from utils.ts
-      // Organization ID is handled by the backend authorizer, not needed here
-      const { processStockConsumption: processStock } = await import('@/lib/utils');
-      await processStock(
-        requiredStock,
-        actionId,
-        user.id,
-        formData.title || action?.title || 'Unknown Action',
-        queryClient // Pass queryClient to use cached parts data
-      );
-    } catch (error: any) {
-      console.error('Error processing stock consumption:', error);
-
-      // Provide more specific error message
-      let errorMessage = "Failed to process stock consumption";
-      if (error?.message) {
-        if (error.message.includes('no longer exists in inventory')) {
-          // This is the specific error for missing parts - show the full message
-          errorMessage = error.message;
-        } else if (error.message.includes('Part with ID') && error.message.includes('not found')) {
-          errorMessage = `Stock item not found: ${error.message}`;
-        } else if (error.message.includes('network') || error.message.includes('fetch')) {
-          errorMessage = "Network error while processing stock. Please check your connection.";
-        } else {
-          errorMessage = `Stock processing error: ${error.message}`;
-        }
-      }
-
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive"
-      });
-      throw error; // Re-throw so calling function can handle it
-    }
-  };
-
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;

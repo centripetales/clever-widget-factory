@@ -2,7 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { withDbClient } from './db.js';
 import { generateEmbedding } from './embeddings.js';
-import { createAction, updateAction, createObservation, updateObservation, policyToHtml } from './actions.js';
+import {
+  createAction, updateAction, createObservation, updateObservation, policyToHtml,
+  createSnapshot, updateSnapshot, deleteSnapshot,
+} from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
 const DEFAULT_LIMIT = 10;
@@ -134,6 +137,51 @@ async function findLinkTargets(client, links, orgIds) {
     [links.map((l) => l.entity_id), orgIds]
   )).rows;
 }
+
+// Metric values for an observation of a tool, like the observation screen's
+// Metrics section. Metrics are defined per tool; search_assets lists them.
+const METRIC_VALUES = z.array(z.object({
+  metric_id: z.string(),
+  value: z.union([z.string(), z.number()]).describe('The reading; a number unless the metric is text'),
+})).describe('Metric values, for metrics of a tool the observation is linked to (search_assets lists each tool\'s metrics)');
+
+// The active metrics of these tools in the caller's orgs.
+async function findToolMetrics(client, toolIds, orgIds) {
+  if (toolIds.length === 0) return [];
+  return (await client.query(
+    `SELECT metric_id::text AS metric_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+     FROM metrics
+     WHERE tool_id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[]) AND active IS NOT FALSE
+     ORDER BY created_at`,
+    [toolIds, orgIds]
+  )).rows;
+}
+
+// Saves each value through the snapshots service, as the app does after the
+// observation itself: updates a reading already there, adds a new one, and a
+// blank value removes it. Each metric reports its own result.
+async function saveMetrics({ cognitoUserId, orgId, observationId, metrics, known, existing = [] }) {
+  const results = [];
+  for (const { metric_id, value } of metrics) {
+    const name = known.find((m) => m.metric_id === metric_id).name;
+    const text = String(value).trim();
+    const snapshot = existing.find((s) => s.metric_id === metric_id);
+    try {
+      if (snapshot && text === '') await deleteSnapshot({ cognitoUserId, orgId, snapshotId: snapshot.snapshot_id });
+      else if (snapshot) await updateSnapshot({ cognitoUserId, orgId, snapshotId: snapshot.snapshot_id, value: text });
+      else if (text !== '') await createSnapshot({ cognitoUserId, orgId, observationId, metricId: metric_id, value: text });
+      results.push({ metric: name, value: text || null, result: 'saved' });
+    } catch (err) {
+      results.push({ metric: name, value: text, result: `not saved: ${err.message}` });
+    }
+  }
+  return results;
+}
+
+const unknownMetrics = (ids) => ({
+  content: [{ type: 'text', text: `These metric_ids are not metrics of a tool the observation is linked to: ${ids.join(', ')}. search_assets lists each tool's metrics.` }],
+  isError: true,
+});
 
 const sameLink = (a, b) => a.entity_type === b.entity_type && String(a.entity_id) === String(b.entity_id);
 
@@ -698,7 +746,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Change an existing action, like its screen in the app. Only the fields given change. ' +
         'Lists (participants, required_tools, required_stock) replace the whole list, and a new ' +
         'policy replaces the whole policy, so start from the current values (search_actions) when ' +
-        'changing part of one. status starts an action (in_progress) or puts it back (not_started). ' +
+        'changing part of one. status starts an action (in_progress), puts it back (not_started) or ' +
+        'completes it (completed), which uses up its required stock, as in the app. ' +
         'Find the action_id with search_actions, tools and parts with search_assets. Before calling ' +
         'this, read the change back to the person and only call it once they say yes.',
       inputSchema: {
@@ -713,7 +762,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         required_tools: z.array(z.string()).optional().describe('Tool asset_ids needed (the whole list)'),
         required_stock: z.array(z.object({ part_id: z.string(), quantity: z.number() })).optional()
           .describe('Parts used and how many (the whole list); a negative quantity is produced'),
-        status: z.enum(['not_started', 'in_progress']).optional().describe('Start the action, or put it back to not started'),
+        status: z.enum(['not_started', 'in_progress', 'completed']).optional().describe('Start, put back to not started, or complete the action'),
         shared_with_partners: z.boolean().optional().describe('Share the action with partner organizations'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -732,6 +781,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         ...(expected_state !== undefined && { expected_state: expected_state || null }),
         ...(policy !== undefined && { policy: policy ? policyToHtml(policy) : null }),
         ...(status !== undefined && { status }),
+        ...(status === 'completed' && { completed_at: new Date().toISOString() }),
         ...(shared_with_partners !== undefined && { shared_with_partners }),
       };
       const fields = [...Object.keys(changes), ...Object.entries({ assigned_to, participants, asset_id, required_tools, required_stock })
@@ -816,16 +866,18 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'app\'s observation screen. Find actions with search_actions and assets with search_assets. ' +
         'Claude cannot pass photos from the chat to CWF, so when the person wants photos, create the ' +
         'observation here and give them the photo link: it opens the observation in the CWF app, ' +
-        'where they can take or pick photos.',
+        'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
+        'when the observation is of such a tool, ask for the readings and give them in metrics.',
       inputSchema: {
         text: z.string().optional().describe('What the person observed, in their own words. Can be left out if they only want to add photos.'),
         links: z.array(LINK).optional().describe('What it is about: an action and/or tools and parts. Leave out for a standalone observation.'),
+        metrics: METRIC_VALUES.optional(),
         captured_at: CAPTURED_AT.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ text, links = [], captured_at }) => {
-      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, captured_at }));
+    async ({ text, links = [], metrics = [], captured_at }) => {
+      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, metrics, captured_at }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -835,9 +887,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       }
 
       try {
-        const targets = await withDbClient((client) => findLinkTargets(client, links, accessibleOrgIds));
+        const { targets, known } = await withDbClient(async (client) => ({
+          targets: await findLinkTargets(client, links, accessibleOrgIds),
+          known: metrics.length === 0 ? [] : await findToolMetrics(
+            client, links.filter((l) => l.entity_type === 'tool').map((l) => l.entity_id), accessibleOrgIds),
+        }));
         const missing = links.filter((l) => !targets.some((t) => sameLink(t, l)));
         if (missing.length > 0) return notFound(missing);
+        const unknown = metrics.filter((m) => !known.some((k) => k.metric_id === m.metric_id)).map((m) => m.metric_id);
+        if (unknown.length > 0) return unknownMetrics(unknown);
 
         // Like the app: the observation goes in the caller's primary organization
         // (oldest membership), even on another org's action, e.g. Positive Sum's.
@@ -851,11 +909,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           },
         });
         console.log('add_observation: created', created.id);
+        // In the primary org, like the observation.
+        const metricResults = await saveMetrics({ cognitoUserId, observationId: created.id, metrics, known });
         const action = targets.find((t) => t.entity_type === 'action');
         return {
           content: [{ type: 'text', text: JSON.stringify({
             observation_id: created.id,
             linked_to: targets.map((t) => `${t.entity_type}: ${t.name}`),
+            ...(metricResults.length > 0 && { metrics: metricResults }),
             add_photos_link: `https://stargazer-farm.com/observations/edit/${created.id}`,
             ...(action && { action_link: `https://stargazer-farm.com/actions/${action.entity_id}` }),
           }, null, 2) }],
@@ -875,20 +936,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Change an observation\'s text or when it was observed. Only the fields given change. ' +
         'Find observation_ids with search_claims or search_actions. Read the change back to the ' +
         'person and only call this once they say yes. The same people can edit it as in the app ' +
-        '(whoever recorded it, or an admin). Use update_observation_links for links.',
+        '(whoever recorded it, or an admin). Use update_observation_links for links. metrics sets ' +
+        'readings for the metrics of a tool it is linked to (search_assets lists them); other ' +
+        'readings are kept, and a blank value removes one.',
       inputSchema: {
         observation_id: z.string().describe('The observation to change'),
         text: z.string().optional().describe('New text, in the person\'s own words'),
         captured_at: CAPTURED_AT.optional(),
+        metrics: METRIC_VALUES.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ observation_id, text, captured_at }) => {
+    async ({ observation_id, text, captured_at, metrics = [] }) => {
       const changes = {
         ...(text !== undefined && { state_text: text.trim() || null }),
         ...(captured_at !== undefined && { captured_at }),
       };
-      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes) }));
+      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes), metrics }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -896,22 +960,44 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
-      if (Object.keys(changes).length === 0) {
-        return { content: [{ type: 'text', text: 'Nothing to change — give text or captured_at.' }], isError: true };
+      if (Object.keys(changes).length === 0 && metrics.length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give text, captured_at or metrics.' }], isError: true };
       }
 
       try {
-        const observation = await withDbClient(async (client) => (await client.query(
-          `SELECT id::text AS id, organization_id FROM states WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
-          [observation_id, accessibleOrgIds]
-        )).rows[0]);
+        const { observation, known, existing } = await withDbClient(async (client) => {
+          const observation = (await client.query(
+            `SELECT s.id::text AS id, s.organization_id,
+                    COALESCE(array_agg(sl.entity_id::text) FILTER (WHERE sl.entity_type = 'tool'), '{}') AS tool_ids
+             FROM states s LEFT JOIN state_links sl ON sl.state_id = s.id
+             WHERE s.id::text = $1 AND s.organization_id = ANY($2::uuid[])
+             GROUP BY s.id`,
+            [observation_id, accessibleOrgIds]
+          )).rows[0];
+          if (!observation || metrics.length === 0) return { observation, known: [], existing: [] };
+          return {
+            observation,
+            known: await findToolMetrics(client, observation.tool_ids, accessibleOrgIds),
+            existing: (await client.query(
+              `SELECT snapshot_id::text AS snapshot_id, metric_id::text AS metric_id FROM metric_snapshots WHERE state_id = $1::uuid`,
+              [observation.id]
+            )).rows,
+          };
+        });
         if (!observation) {
           return { content: [{ type: 'text', text: 'No observation with that id in your organizations.' }], isError: true };
         }
+        const unknown = metrics.filter((m) => !known.some((k) => k.metric_id === m.metric_id)).map((m) => m.metric_id);
+        if (unknown.length > 0) return unknownMetrics(unknown);
+        // Sent even with only metrics to change: the states service decides who may edit it.
         await updateObservation({ cognitoUserId, orgId: observation.organization_id, observationId: observation.id, changes });
+        const metricResults = await saveMetrics({
+          cognitoUserId, orgId: observation.organization_id, observationId: observation.id, metrics, known, existing,
+        });
         console.log('update_observation: updated', observation.id);
         return { content: [{ type: 'text', text: JSON.stringify({
           observation_id: observation.id,
+          ...(metricResults.length > 0 && { metrics: metricResults }),
           edit_link: `https://stargazer-farm.com/observations/edit/${observation.id}`,
         }, null, 2) }] };
       } catch (err) {
@@ -928,6 +1014,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
         'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links). ' +
+        'Tools list their metrics — the readings an observation of that tool can record. ' +
         'low_stock lists the parts below their minimum quantity, like the app\'s Low Stock filter, with ' +
         'quantities, unit cost and supplier — use it to plan purchases.',
       inputSchema: {
@@ -988,11 +1075,16 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [accessibleOrgIds, vector, effectiveLimit, SIMILARITY_THRESHOLD]
           )).rows;
           const seen = new Set();
-          return [...byName, ...byMeaning].filter((r) => r.name && !seen.has(r.id) && seen.add(r.id)).slice(0, effectiveLimit);
+          const assets = [...byName, ...byMeaning].filter((r) => r.name && !seen.has(r.id) && seen.add(r.id)).slice(0, effectiveLimit);
+          const metrics = await findToolMetrics(client, assets.filter((a) => a.type === 'tool').map((a) => a.id), accessibleOrgIds);
+          return assets.map((a) => ({ ...a, metrics: metrics.filter((m) => m.tool_id === a.id) }));
         });
         console.log(`search_assets: -> ${results.length} results`);
         if (results.length === 0) return { content: [{ type: 'text', text: 'No assets matched — try another name.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(results.map((r) => ({ asset_id: r.id, type: r.type, name: r.name, category: r.category })), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(results.map((r) => ({
+          asset_id: r.id, type: r.type, name: r.name, category: r.category,
+          ...(r.metrics.length > 0 && { metrics: r.metrics.map(({ tool_id, ...m }) => m) }),
+        })), null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching assets: ${err.message}` }], isError: true };
       }
