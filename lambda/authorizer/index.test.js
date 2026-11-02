@@ -119,3 +119,33 @@ describe('Lambda Authorizer - Integration Tests', () => {
     assert.ok(true, 'Integration tests require database and Cognito setup');
   });
 });
+
+describe('Lambda Authorizer - direct context for the Claude connector', () => {
+  test('returns the context API Gateway would get, for the given user', async () => {
+    process.env.DB_PASSWORD = process.env.DB_PASSWORD || 'test';
+    const { Client } = require('pg');
+    mock.method(Client.prototype, 'connect', async () => {});
+    mock.method(Client.prototype, 'end', async () => {});
+    mock.method(Client.prototype, 'query', async (sql) => {
+      if (sql.includes('partner_members')) throw new Error('relation "partner_members" does not exist');
+      return { rows: [
+        { organization_id: 'org-1', role: 'admin', is_active: true },
+        { organization_id: 'org-2', role: 'admin', is_active: true },
+      ] };
+    });
+    delete require.cache[require.resolve('./index.js')];
+    const { handler } = require('./index.js');
+
+    const context = await handler({ contextFor: 'cognito-1' });
+    assert.strictEqual(context.cognito_user_id, 'cognito-1');
+    assert.strictEqual(context.organization_id, 'org-1');
+    assert.strictEqual(context.user_role, 'admin');
+    assert.deepStrictEqual(JSON.parse(context.accessible_organization_ids), ['org-1', 'org-2']);
+    assert.deepStrictEqual(JSON.parse(context.organization_memberships), [
+      { organization_id: 'org-1', role: 'admin' },
+      { organization_id: 'org-2', role: 'admin' },
+    ]);
+    assert.ok(JSON.parse(context.permissions).includes('data:write:all'));
+    mock.restoreAll();
+  });
+});

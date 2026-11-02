@@ -6,6 +6,7 @@ const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { handlePositiveSum, completeGoalsForOption } = require('./positiveSum');
 const { isAgentEvent, handleAgentEvent } = require('./agentEvent');
 const { handleReward, buildReward, withClient } = require('./reward');
+const { completeAction } = require('./completeAction');
 const { isUuid, deleteAction } = require('./deleteAction');
 const { handleTransactionAction, handleOrganizations, transactionForAction } = require('./transaction');
 
@@ -573,8 +574,33 @@ exports.handler = async (event) => {
         updates.push(`updated_by = '${userId}'`);
         if (completed_at) updates.push(`completed_at = '${completed_at}'`);
         
-        const sql = `UPDATE actions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''} RETURNING *`;
-        result = await queryJSON(sql);
+        const set = `${updates.join(', ')}, updated_at = NOW()`;
+        const where = `id = '${actionId}' ${orgFilter.condition ? 'AND ' + orgFilter.condition : ''}`;
+        if (actionData.status === 'completed' && currentAction.status !== 'completed') {
+          // Completing uses up the required stock in the same transaction.
+          let completion;
+          try {
+            completion = await withClient(dbConfig, client => completeAction(client, {
+              set, where,
+              requiredStock: actionData.required_stock !== undefined ? actionData.required_stock : currentAction.required_stock,
+              userId,
+              actionTitle: actionData.title || currentAction.title || 'Unknown Action',
+            }));
+          } catch (err) {
+            if (err.statusCode === 400) return { statusCode: 400, headers, body: JSON.stringify({ error: err.message }) };
+            throw err;
+          }
+          result = completion.rows;
+          for (const partId of completion.partIds) {
+            try {
+              await broadcastInvalidation({ entityType: 'part', entityId: partId, mutationType: 'updated', organizationId, excludeConnectionId: null });
+            } catch (err) {
+              console.error('[ACTIONS] Part broadcast failed:', err.message);
+            }
+          }
+        } else {
+          result = await queryJSON(`UPDATE actions SET ${set} WHERE ${where} RETURNING *`);
+        }
       }
 
       // Completing an option's action completes the goals it served.

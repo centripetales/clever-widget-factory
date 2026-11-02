@@ -1,6 +1,7 @@
 import express from 'express';
 import transport from './transport.js';
 import { requireAuth } from './auth.js';
+import { mountDiscovery } from './discovery.js';
 
 const PORT = 3000;
 
@@ -22,7 +23,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Everything else (the actual MCP endpoint) requires the static bearer token.
+// OAuth discovery for Claude's connector — unauthenticated by design.
+mountDiscovery(app);
+
+// Everything else (the actual MCP endpoint) requires a Cognito access token.
 app.use(requireAuth);
 
 await transport.bootstrap(app);

@@ -1,5 +1,6 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import mcpServer from './mcp-server.js';
+import { getCaller } from './orgs.js';
 
 const MCP_PATH = '/mcp';
 
@@ -13,7 +14,13 @@ async function postRequestHandler(req, res) {
   try {
     // New MCP server + transport per request — this is a stateless deployment,
     // no session state carried between requests.
-    const newMcpServer = mcpServer.create();
+    const caller = await getCaller(req.cognitoUserId);
+    const newMcpServer = mcpServer.create({
+      accessibleOrgIds: caller.orgIds,
+      callerName: caller.name,
+      cognitoUserId: req.cognitoUserId,
+      canWrite: req.canWrite,
+    });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
