@@ -47,6 +47,9 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-core-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'h-1' }, part: { id: body.part_id, current_quantity: '8.000' } }) })) };
+  }
   if (event.httpMethod === 'PUT') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: event.pathParameters.id, title: body.title ?? 'Old title' } }) })) };
   }
@@ -276,6 +279,32 @@ describe('search_assets low_stock', () => {
     const client = await connect(['org-a']);
     assert.strictEqual((await client.callTool({ name: 'search_assets', arguments: {} })).isError, true);
     assert.strictEqual(queries.length, 0);
+  });
+});
+
+describe('adjust_stock', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('sends the change to the parts service in the part org and reports the new quantity', async () => {
+    rows = [{ id: 'part-1', name: 'Steel Wool', unit: 'kg', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'adjust_stock', arguments: { part_id: 'part-1', change: 3, reason: 'Bought 3 kg' } });
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-core-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/parts_history');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { part_id: 'part-1', quantity_change: 3, change_reason: 'Bought 3 kg' });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), { part: 'Steel Wool', change: 3, current_quantity: 8, unit: 'kg' });
+  });
+
+  test('a part outside the caller orgs or a read-only connection changes nothing', async () => {
+    rows = [];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await client.callTool({ name: 'adjust_stock', arguments: { part_id: 'x', change: 1, reason: 'r' } })).isError, true);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'adjust_stock', arguments: { part_id: 'x', change: 1, reason: 'r' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
   });
 });
 

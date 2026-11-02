@@ -4,6 +4,7 @@ const { getAuthorizerContext, buildOrganizationFilter, hasPermission, canAccessO
 const { composePartEmbeddingSource, composeToolEmbeddingSource, composeIssueEmbeddingSource, composePolicyEmbeddingSource } = require('/opt/nodejs/embedding-composition');
 const { getDbClient } = require('/opt/nodejs/db');
 const { handleShares } = require('./shares');
+const { changeStock } = require('./stockChange');
 const { escapeLiteral, formatSqlValue, buildUpdateClauses } = require('/opt/nodejs/sqlUtils');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
 const { fetchAiConfig, resolveAiConfig, isValidInt, isValidFloat } = require('/opt/nodejs/aiConfigDefaults');
@@ -1132,6 +1133,39 @@ exports.handler = async (event) => {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
         const { part_id, change_type, old_quantity, new_quantity, quantity_change, change_reason } = body;
+
+        // A change without old/new quantities: the server applies it to the
+        // current stock and logs it, in one transaction.
+        if (part_id && old_quantity === undefined && new_quantity === undefined && quantity_change !== undefined) {
+          const change = Number(quantity_change);
+          if (!Number.isFinite(change) || change === 0) {
+            return { statusCode: 400, headers, body: JSON.stringify({ error: 'quantity_change must be a non-zero number' }) };
+          }
+          const client = await getDbClient();
+          let changed;
+          try {
+            changed = await changeStock(client, {
+              partId: part_id, change, reason: change_reason, userId: authContext.cognito_user_id, orgIds: accessibleOrgIds,
+            });
+          } finally {
+            client.release();
+          }
+          if (!changed) {
+            return { statusCode: 404, headers, body: JSON.stringify({ error: 'Part not found' }) };
+          }
+          try {
+            await broadcastInvalidation({
+              entityType: 'part',
+              entityId: part_id,
+              mutationType: 'updated',
+              organizationId,
+              excludeConnectionId: event.headers?.['x-connection-id'] || event.headers?.['X-Connection-Id'] || null
+            });
+          } catch (err) {
+            console.error('[CORE] Broadcast failed:', err.message);
+          }
+          return { statusCode: 201, headers, body: JSON.stringify({ data: changed.history, part: changed.part }) };
+        }
         
         if (!part_id || change_type === undefined || old_quantity === undefined || new_quantity === undefined) {
           return {

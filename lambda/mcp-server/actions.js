@@ -68,6 +68,12 @@ export async function deleteSnapshot({ cognitoUserId, orgId, snapshotId }) {
   return invokeApp('cwf-snapshots-lambda', `/api/snapshots/${snapshotId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', snapshotId });
 }
 
+// A stock change (positive adds, negative removes): the parts service applies
+// it to the current stock and logs it, in one transaction, in the part's org.
+export async function changeStock({ cognitoUserId, orgId, partId, change, reason }) {
+  return invokeApp('cwf-core-lambda', '/api/parts_history', { part_id: partId, quantity_change: change, change_reason: reason }, { cognitoUserId, orgId });
+}
+
 // The app stores policy as rich text (HTML); spoken plans arrive as plain text.
 export function policyToHtml(text) {
   const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

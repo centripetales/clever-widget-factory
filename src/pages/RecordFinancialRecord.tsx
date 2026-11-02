@@ -18,7 +18,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useCreateFinancialRecord } from '@/hooks/useFinancialRecords';
 import { useToast } from '@/components/ui/use-toast';
-import { useAuth } from '@/hooks/useCognitoAuth';
 import { StockSelector } from '@/components/StockSelector';
 import { processStockAdjustment } from '@/lib/utils';
 import {
@@ -37,7 +36,6 @@ export default function RecordFinancialRecord() {
   const { uploadFiles, isUploading } = useFileUpload();
   const createRecord = useCreateFinancialRecord();
   const { toast } = useToast();
-  const { user } = useAuth();
   const queryClient = useQueryClient();
 
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
@@ -121,7 +119,6 @@ export default function RecordFinancialRecord() {
         try {
           await processStockAdjustment(
             selectedStock,
-            user?.id || '',
             `transaction: ${description.trim()}`,
             queryClient
           );

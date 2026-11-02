@@ -145,6 +145,8 @@ export function useAssetMutations() {
     onSettled: (data, error, variables) => {
       queryClient.invalidateQueries({ queryKey: ['parts_history'] });
       queryClient.invalidateQueries({ queryKey: ['inventoryData'] });
+      // A change without old/new quantities changes the stock on the server.
+      queryClient.invalidateQueries({ queryKey: partsQueryKey() });
       if (variables?.part_id) {
         queryClient.invalidateQueries({ queryKey: partHistoryQueryKey(variables.part_id) });
       }
