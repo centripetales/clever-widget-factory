@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { withDbClient } from './db.js';
 import { generateEmbedding } from './embeddings.js';
-import { createAction, createObservation, setObservationLinks, policyToHtml } from './actions.js';
+import { createAction, updateAction, createObservation, setObservationLinks, policyToHtml } from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
 const DEFAULT_LIMIT = 10;
@@ -658,6 +658,74 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       } catch (err) {
         console.log('create_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not create the action: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_action',
+    {
+      title: 'Edit an action',
+      description:
+        'Change an existing action\'s title, existing_state, expected_state or policy. Only the ' +
+        'fields given change. A new policy replaces the whole policy, so start from the current one ' +
+        '(search_actions) when changing part of it. Find the action_id with search_actions first. ' +
+        'Before calling this, read the change back to the person and only call it once they say yes.',
+      inputSchema: {
+        action_id: z.string().describe('The action_id from search_actions or create_action'),
+        title: z.string().min(1).optional().describe('New title'),
+        existing_state: z.string().optional().describe('New existing state (where things are now)'),
+        expected_state: z.string().optional().describe('New expected state (where we want to get to)'),
+        policy: z.string().optional().describe('New policy; plain text, blank lines between paragraphs'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ action_id, title, existing_state, expected_state, policy }) => {
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing actions.' }],
+          isError: true,
+        };
+      }
+      const changes = {
+        ...(title !== undefined && { title }),
+        ...(existing_state !== undefined && { description: existing_state || null }),
+        ...(expected_state !== undefined && { expected_state: expected_state || null }),
+        ...(policy !== undefined && { policy: policy ? policyToHtml(policy) : null }),
+      };
+      console.log('update_action called with:', JSON.stringify({ action_id, fields: Object.keys(changes) }));
+      if (Object.keys(changes).length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give a title, existing_state, expected_state or policy.' }], isError: true };
+      }
+
+      try {
+        const action = await withDbClient(async (client) => (await client.query(
+          `SELECT id, organization_id FROM actions WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [action_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!action) {
+          return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
+        }
+
+        // Edited where the action lives, as when the app has that org active.
+        const updated = await updateAction({
+          cognitoUserId,
+          orgIds: [action.organization_id, ...accessibleOrgIds.filter((id) => id !== action.organization_id)],
+          actionId: action.id,
+          changes,
+        });
+        console.log('update_action: updated', action.id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            action_id: action.id,
+            title: updated.title,
+            link: `https://stargazer-farm.com/actions/${action.id}`,
+          }, null, 2) }],
+        };
+      } catch (err) {
+        console.log('update_action failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not edit the action: ${err.message}` }], isError: true };
       }
     }
   );

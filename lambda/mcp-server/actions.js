@@ -36,6 +36,12 @@ export async function createAction({ cognitoUserId, orgIds, action }) {
   return (await invokeApp('cwf-actions-lambda', '/api/actions', action, { cognitoUserId, orgIds })).data;
 }
 
+// Only the fields given change; the actions service scopes the edit to the
+// first org, so pass the action's org first.
+export async function updateAction({ cognitoUserId, orgIds, actionId, changes }) {
+  return (await invokeApp('cwf-actions-lambda', `/api/actions/${actionId}`, changes, { cognitoUserId, orgIds }, { method: 'PUT', id: actionId })).data;
+}
+
 // The states service answers with the saved observation itself.
 export async function createObservation({ cognitoUserId, orgIds, observation }) {
   return invokeApp('cwf-states-lambda', '/api/states', observation, { cognitoUserId, orgIds });

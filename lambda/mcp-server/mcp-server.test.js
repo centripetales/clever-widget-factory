@@ -40,6 +40,9 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (event.httpMethod === 'PUT') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: event.pathParameters.id, title: body.title ?? 'Old title' } }) })) };
+  }
   return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'new-action', title: body.title, status: body.status } }) })) };
 });
 
@@ -177,6 +180,42 @@ describe('create_action', () => {
     const result = await client.callTool({ name: 'create_action', arguments: { title: 'X' } });
     assert.strictEqual(result.isError, true);
     assert.match(result.content[0].text, /reconnect/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('update_action', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('sends only the changed fields to the actions service, in the action org', async () => {
+    rows = [{ id: 'action-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', title: 'Share your farming practices' } });
+    assert.deepStrictEqual(queries[0].params, ['action-1', ['org-a', 'org-b']]);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-actions-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/actions/action-1');
+    assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-b');
+    assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
+    assert.deepStrictEqual(JSON.parse(event.body), { title: 'Share your farming practices' });
+    assert.strictEqual(JSON.parse(result.content[0].text).title, 'Share your farming practices');
+  });
+
+  test('existing state and policy map to the app fields', async () => {
+    rows = [{ id: 'action-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', existing_state: 'Bins leak', policy: 'Seal the seams.' } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { description: 'Bins leak', policy: '<p>Seal the seams.</p>' });
+  });
+
+  test('nothing to change, an unknown action or a read-only connection change nothing', async () => {
+    rows = [];
+    const writerClient = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await writerClient.callTool({ name: 'update_action', arguments: { action_id: 'action-1' } })).isError, true);
+    assert.strictEqual((await writerClient.callTool({ name: 'update_action', arguments: { action_id: 'other-org-action', title: 'x' } })).isError, true);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'update_action', arguments: { action_id: 'action-1', title: 'x' } })).isError, true);
     assert.strictEqual(invocations.length, 0);
   });
 });
