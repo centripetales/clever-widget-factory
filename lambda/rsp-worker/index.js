@@ -462,7 +462,7 @@ async function broadcastOfferActions(actionIds, organizationId) {
 // Found by model and version, so the extraction never picks up another task's
 // row. The system prompt is the one it ran with on Sonnet 4 (config v4.0).
 const EXTRACTION_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const EXTRACTION_VERSION = 'epistemic-v4.1';
+const EXTRACTION_VERSION = 'epistemic-v4.3';
 const EXTRACTION_SYSTEM_PROMPT = `You are the internal operations intelligence assistant for Stargazer Farm.
 
 Your purpose is to support operational clarity, structured experimentation tracking, and long-term farm resilience.
@@ -593,12 +593,8 @@ async function processPendingRecord(client, record, offersOnly = false) {
     return;
   }
 
-  const qualifyingTypes = ['observation', 'action']; // must match QUALIFYING_LINK_TYPES in lambda/states/index.js
-  const runsEpistemicPerspectives = linksRes.rows.some(link => qualifyingTypes.includes(link.entity_type));
+  // Every observation gets CLAIM/SIGNIFICANCE, linked to anything or nothing.
   const runsAzollaCoverage = await stateLinkedToProcessorEnabledOrg(client, state.id, linksRes.rows, 'azolla_coverage');
-  if (!runsEpistemicPerspectives && !runsAzollaCoverage) {
-    throw new Error(`State ${state.id} does not qualify for any perspective/processor. Linked entities: ${JSON.stringify(linksRes.rows.map(r => r.entity_type))}`);
-  }
 
   if (runsAzollaCoverage) {
     try {
@@ -611,7 +607,7 @@ async function processPendingRecord(client, record, offersOnly = false) {
   // An observation with no words: its perspectives would only say it is empty
   // and describe the action instead. Only the offers reading runs; it credits
   // nothing and asks the person to describe it.
-  if (runsEpistemicPerspectives && !getCombinedStateText(state).trim()) {
+  if (!getCombinedStateText(state).trim()) {
     await readOffers();
     await client.query(
       `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
@@ -624,23 +620,6 @@ async function processPendingRecord(client, record, offersOnly = false) {
       organizationId: state.organization_id
     });
     console.log('[RSP] No text for state', state.id, '— offers reading only');
-    return;
-  }
-
-  if (!runsEpistemicPerspectives) {
-    // Mark pending_perspectives row as DONE — an azolla-only state (no action/observation
-    // link) has nothing further to do here.
-    await client.query(
-      `UPDATE pending_perspectives SET status = 'DONE', processed_at = NOW(), last_error = NULL WHERE id = $1`,
-      [record.id]
-    );
-    await broadcastInvalidation({
-      entityType: 'state',
-      entityId: state.id,
-      mutationType: 'updated',
-      organizationId: state.organization_id
-    });
-    console.log('[RSP] Broadcast complete for state', state.id, '(azolla_coverage only, no epistemic perspectives)');
     return;
   }
 
@@ -819,12 +798,12 @@ Action Context: ${actionContext}
 Extract two distinct epistemic dimensions. CRITICAL RULES:
 - Be concise and information-dense. Every sentence must carry unique information.
 - Do NOT repeat information across dimensions.
-- Do NOT speculate. If data was not collected, note the absence cleanly — do not infer what the data would have shown.
+- Do NOT speculate. Do not infer what data that was not collected would have shown.
 - Do NOT use filler openers (e.g. "This observation...", "It is important...", "This suggests...").
 - Do NOT moralize or judge decisions. Record gaps as neutral facts.
 - Write in direct declarative statements only.
 
-1. CLAIM: The raw, objective, observable assertion strictly as stated or visible. No interpretation.
+1. CLAIM: This observation restated densely in the person's own terms: what they saw, did, measured, decided or plan, in their tense and with their words for things. A reader of the claim alone learns exactly what this person said here, and nothing else.
 
 2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the stated method/policy for this action, or (b) widely accepted best practice for this type of task — whichever applies. When the policy does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both policy and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
 `;
@@ -839,7 +818,7 @@ Extract two distinct epistemic dimensions. CRITICAL RULES:
           json: {
             type: 'object',
             properties: {
-              claim: { type: 'string', description: 'Raw, objective, directly observable facts as stated. No interpretation or inference.' },
+              claim: { type: 'string', description: 'This observation restated densely in the person\'s own terms and tense. Exactly what they said here, and nothing else.' },
               significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' }
             },
             required: ['claim', 'significance']

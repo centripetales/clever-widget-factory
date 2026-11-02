@@ -13,68 +13,22 @@ const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/c
 const PERSPECTIVES_QUEUE_URL = process.env.PERSPECTIVES_QUEUE_URL;
 if (!PERSPECTIVES_QUEUE_URL) throw new Error('Missing required environment variable: PERSPECTIVES_QUEUE_URL');
 
-// Must match the qualifyingTypes check in lambda/rsp-worker/index.js — states linked to
-// anything other than these types are rejected by the worker, so there's no point enqueueing them.
-const QUALIFYING_LINK_TYPES = ['observation', 'action'];
-
-/**
- * Whether a state has a link type the perspectives worker will actually process.
- * Pass `knownLinks` when the caller already has the state's current links in memory
- * (e.g. just inserted them) to avoid a redundant query; omit it to look them up.
- */
-async function stateQualifiesForPerspectives(client, stateId, knownLinks) {
-  if (knownLinks !== undefined) {
-    return knownLinks.some(link => QUALIFYING_LINK_TYPES.includes(link.entity_type));
-  }
-  const linksRes = await client.query(
-    `SELECT 1 FROM state_links WHERE state_id = $1 AND entity_type = ANY($2) LIMIT 1`,
-    [stateId, QUALIFYING_LINK_TYPES]
-  );
-  return linksRes.rows.length > 0;
-}
-
 // Positive Sum keeps its own records (offers, agreements, approvals) as states
 // whose text is JSON starting with this. They are written only by its own
 // service: an offer people agreed to must not be rewritten or removed through
 // the general observation routes.
 const isPositiveSumRecord = text => typeof text === 'string' && text.startsWith('{"type":"positive_sum.');
 
-// Entity types that can be share-granted to another org via POST /shares
-// (lambda/core/index.js). Independent of QUALIFYING_LINK_TYPES above — a plain
-// tool-linked observation with no action attached doesn't qualify for that gate,
-// but should still queue for perspectives if its tool belongs to an org running
-// auto-processors (e.g. the Azolla vision-scoring pipeline).
-const SHAREABLE_LINK_TYPES = ['tool', 'part', 'action'];
-
-/**
- * Whether a state is linked to an entity (tool/part/action) that's been share-granted
- * (via POST /shares) to an org configured with at least one auto-processor
- * (organizations.ai_config.processors, e.g. ["azolla_coverage"]). Mirrors the join
- * GET /shares/{entityType}/{entityId} already uses (lambda/core/index.js), filtered to
- * processor-enabled orgs instead of listing every share. Always queries — unlike
- * stateQualifiesForPerspectives, there's no way to answer this from knownLinks alone,
- * since it depends on a separate share-grant + org config lookup.
- */
-async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks) {
-  if (knownLinks !== undefined && !knownLinks.some(l => SHAREABLE_LINK_TYPES.includes(l.entity_type))) {
-    return false;
-  }
+// Learning records are saved as states too: quiz answers (linked to a learning
+// objective) and takeaways (text from composeLearningTakeawayStateText). They get
+// no perspectives, so they aren't paid for or searched.
+async function isLearningRecord(client, stateId) {
   const res = await client.query(
-    `SELECT 1
-     FROM state_links our_link
-     JOIN state_links share_entity_link
-       ON share_entity_link.entity_type = our_link.entity_type
-      AND share_entity_link.entity_id = our_link.entity_id
-     JOIN state_links share_org_link
-       ON share_org_link.state_id = share_entity_link.state_id
-      AND share_org_link.entity_type = 'organization'
-     JOIN organizations o ON o.id = share_org_link.entity_id::uuid
-     WHERE our_link.state_id = $1
-       AND our_link.entity_type = ANY($2)
-       AND o.ai_config -> 'processors' IS NOT NULL
-       AND jsonb_array_length(o.ai_config -> 'processors') > 0
-     LIMIT 1`,
-    [stateId, SHAREABLE_LINK_TYPES]
+    `SELECT 1 FROM states s
+     WHERE s.id = $1
+       AND (s.state_text LIKE '[learning\\_takeaway]%'
+         OR EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'learning_objective'))`,
+    [stateId]
   );
   return res.rows.length > 0;
 }
@@ -810,8 +764,7 @@ async function createState(event, authContext, headers) {
       console.error('Failed to broadcast cache invalidation:', err);
     }
 
-    if (await stateQualifiesForPerspectives(client, state.id, links)
-      || await stateLinkedToProcessorEnabledOrg(client, state.id, links)) {
+    if (!(await isLearningRecord(client, state.id))) {
       try {
         const pClient = await getDbClient();
         await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [state.id]);
@@ -881,9 +834,8 @@ async function updateState(event, id, authContext, headers) {
       await client.query('COMMIT');
 
       // 3. Queue SQS perspective run
-      try {
-        if (await stateQualifiesForPerspectives(client, id)
-          || await stateLinkedToProcessorEnabledOrg(client, id)) {
+      if (!(await isLearningRecord(client, id))) {
+        try {
           const pClient = await getDbClient();
           await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
           pClient.release();
@@ -893,9 +845,9 @@ async function updateState(event, id, authContext, headers) {
             MessageBody: JSON.stringify({ stateId: id, organizationId })
           }));
           console.log('[Reanalyze] Queued perspective run successfully.');
+        } catch (pErr) {
+          console.error('[Reanalyze] Failed to queue perspectives:', pErr);
         }
-      } catch (pErr) {
-        console.error('[Reanalyze] Failed to queue perspectives:', pErr);
       }
       
       return await getState(id, authContext, headers);
@@ -1095,9 +1047,8 @@ async function updateState(event, id, authContext, headers) {
       console.error('Failed to broadcast cache invalidation:', err);
     }
 
-    try {
-      if (await stateQualifiesForPerspectives(client, id, links)
-        || await stateLinkedToProcessorEnabledOrg(client, id, links)) {
+    if (!(await isLearningRecord(client, id))) {
+      try {
         const pClient = await getDbClient();
         await pClient.query('INSERT INTO pending_perspectives (state_id) VALUES ($1)', [id]);
         pClient.release();
@@ -1105,9 +1056,9 @@ async function updateState(event, id, authContext, headers) {
           QueueUrl: PERSPECTIVES_QUEUE_URL,
           MessageBody: JSON.stringify({ stateId: id, organizationId })
         }));
+      } catch (pErr) {
+        console.error('Failed to queue observation for perspectives:', pErr);
       }
-    } catch (pErr) {
-      console.error('Failed to queue observation for perspectives:', pErr);
     }
 
     // Explicitly await queueing to prevent AWS Lambda environment freeze
