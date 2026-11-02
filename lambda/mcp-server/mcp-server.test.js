@@ -191,7 +191,7 @@ describe('add_observation', () => {
     assert.deepStrictEqual(queries[0].params, ['action-1', ['org-a', 'org-b']]);
     const [{ functionName, event }] = invocations;
     assert.strictEqual(functionName, 'cwf-states-lambda');
-    assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-b');
+    assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-a');
     assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
     assert.deepStrictEqual(JSON.parse(event.body), { state_text: 'Lester mounted it.', photos: [], links: [{ entity_type: 'action', entity_id: 'action-1' }] });
     const reply = JSON.parse(result.content[0].text);

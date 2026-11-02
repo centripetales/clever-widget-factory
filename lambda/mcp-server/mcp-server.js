@@ -697,10 +697,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
         }
 
-        // The observation goes in the action's organization.
+        // Like the app: the observation goes in the caller's primary organization
+        // (oldest membership), even on another org's action, e.g. Positive Sum's.
         const created = await createObservation({
           cognitoUserId,
-          orgIds: [action.organization_id, ...accessibleOrgIds.filter((id) => id !== action.organization_id)],
+          orgIds: accessibleOrgIds,
           observation: {
             state_text: text?.trim() || null,
             photos: [],
