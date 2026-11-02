@@ -228,6 +228,24 @@ describe('update_action', () => {
   });
 });
 
+describe('search_assets low_stock', () => {
+  test('lists parts below their minimum in the caller orgs, with what is on order', async () => {
+    rows = [{ asset_id: 'part-1', name: 'Tick buster Fipronil', current_quantity: '1', minimum_quantity: '3', on_order: '0' }];
+    const client = await connect(['org-a', 'org-b']);
+    const result = await client.callTool({ name: 'search_assets', arguments: { low_stock: true } });
+    assert.match(queries[0].sql, /p\.current_quantity < p\.minimum_quantity/);
+    assert.match(queries[0].sql, /parts_orders/);
+    assert.deepStrictEqual(queries[0].params, [['org-a', 'org-b'], null, 100]);
+    assert.strictEqual(JSON.parse(result.content[0].text)[0].name, 'Tick buster Fipronil');
+  });
+
+  test('a search without a query or low_stock is refused', async () => {
+    const client = await connect(['org-a']);
+    assert.strictEqual((await client.callTool({ name: 'search_assets', arguments: {} })).isError, true);
+    assert.strictEqual(queries.length, 0);
+  });
+});
+
 describe('add_observation', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
 

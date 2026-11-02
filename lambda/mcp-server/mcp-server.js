@@ -874,15 +874,43 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       title: 'Search assets',
       description:
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
-        'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links).',
+        'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links). ' +
+        'low_stock lists the parts below their minimum quantity, like the app\'s Low Stock filter, with ' +
+        'quantities, unit cost, supplier and what is already on order — use it to plan purchases.',
       inputSchema: {
-        query: z.string().min(1).describe('Name or topic, e.g. "azolla pond" or "inverter"'),
-        limit: z.number().int().min(1).max(25).optional().describe('Max results, default 10'),
+        query: z.string().min(1).optional().describe('Name or topic, e.g. "azolla pond" or "inverter". Required unless low_stock; with low_stock it narrows by name.'),
+        low_stock: z.boolean().optional().describe('Only parts below their minimum quantity'),
+        limit: z.number().int().min(1).max(100).optional().describe('Max results, default 10 (100 with low_stock)'),
       },
     },
-    async ({ query, limit }) => {
-      console.log('search_assets called with:', JSON.stringify({ query, limit }));
+    async ({ query, low_stock, limit }) => {
+      console.log('search_assets called with:', JSON.stringify({ query, low_stock, limit }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (low_stock) {
+        try {
+          // The app's rule: both quantities set and current below minimum.
+          const parts = await withDbClient(async (client) => (await client.query(
+            `SELECT p.id::text AS asset_id, p.name, p.category, p.current_quantity, p.minimum_quantity, p.unit,
+                    p.cost_per_unit, p.supplier, p.storage_location,
+                    COALESCE((SELECT SUM(o.quantity_ordered - COALESCE(o.quantity_received, 0)) FROM parts_orders o
+                               WHERE o.part_id = p.id AND o.status IN ('pending', 'partially_received')), 0) AS on_order
+             FROM parts p
+             WHERE p.organization_id = ANY($1::uuid[])
+               AND p.current_quantity IS NOT NULL AND p.minimum_quantity IS NOT NULL
+               AND p.current_quantity < p.minimum_quantity
+               AND ($2::text IS NULL OR p.name ILIKE '%' || $2 || '%')
+             ORDER BY p.current_quantity / NULLIF(p.minimum_quantity, 0) NULLS FIRST, p.name
+             LIMIT $3`,
+            [accessibleOrgIds, query || null, limit || 100]
+          )).rows);
+          console.log(`search_assets low_stock: -> ${parts.length} parts`);
+          if (parts.length === 0) return { content: [{ type: 'text', text: 'No parts are below their minimum quantity.' }] };
+          return { content: [{ type: 'text', text: JSON.stringify(parts.map((p) => ({ type: 'part', ...p })), null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error listing low stock: ${err.message}` }], isError: true };
+        }
+      }
+      if (!query) return { content: [{ type: 'text', text: 'Give a query, or low_stock: true.' }], isError: true };
       const effectiveLimit = limit || DEFAULT_LIMIT;
       try {
         const results = await withDbClient(async (client) => {
