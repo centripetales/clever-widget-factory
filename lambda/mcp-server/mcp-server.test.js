@@ -217,6 +217,38 @@ describe('update_action', () => {
     assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { description: 'Bins leak', policy: '<p>Seal the seams.</p>' });
   });
 
+  test('people, asset, tools, stock, status and sharing go to the app fields', async () => {
+    rows = (sql) => sql.includes('FROM actions') ? [{ id: 'action-1', organization_id: 'org-a' }]
+      : sql.includes('organization_members') ? [{ user_id: 'u-lester', full_name: 'Lester Paniel' }, { user_id: 'u-mae', full_name: 'Mae Dela Torre' }]
+      : sql.includes('FROM tools') ? [{ id: 'tool-1' }, { id: 'tool-2' }]
+      : [{ id: 'part-1', name: 'Beauveria' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_action', arguments: {
+      action_id: 'action-1', assigned_to: 'Lester', participants: ['Mae'], asset_id: 'tool-1', required_tools: ['tool-2'],
+      required_stock: [{ part_id: 'part-1', quantity: 2 }], status: 'in_progress', shared_with_partners: true,
+    } });
+    assert.ok(!result.isError, result.content[0].text);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), {
+      status: 'in_progress', shared_with_partners: true, assigned_to: 'u-lester', participants: ['u-mae'],
+      asset_id: 'tool-1', required_tools: ['tool-2'], required_stock: [{ part_id: 'part-1', quantity: 2, part_name: 'Beauveria' }],
+    });
+  });
+
+  test('a tool or part outside the caller orgs is refused', async () => {
+    rows = (sql) => sql.includes('FROM actions') ? [{ id: 'action-1', organization_id: 'org-a' }] : [];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', required_tools: ['other-tool'] } });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('completing is not offered yet', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', status: 'completed' } });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
   test('nothing to change, an unknown action or a read-only connection change nothing', async () => {
     rows = [];
     const writerClient = await connect(['org-a'], 'Stefan Hamilton', writer);
@@ -229,12 +261,11 @@ describe('update_action', () => {
 });
 
 describe('search_assets low_stock', () => {
-  test('lists parts below their minimum in the caller orgs, with what is on order', async () => {
-    rows = [{ asset_id: 'part-1', name: 'Tick buster Fipronil', current_quantity: '1', minimum_quantity: '3', on_order: '0' }];
+  test('lists parts below their minimum in the caller orgs', async () => {
+    rows = [{ asset_id: 'part-1', name: 'Tick buster Fipronil', current_quantity: '1', minimum_quantity: '3' }];
     const client = await connect(['org-a', 'org-b']);
     const result = await client.callTool({ name: 'search_assets', arguments: { low_stock: true } });
     assert.match(queries[0].sql, /p\.current_quantity < p\.minimum_quantity/);
-    assert.match(queries[0].sql, /parts_orders/);
     assert.deepStrictEqual(queries[0].params, [['org-a', 'org-b'], null, 100]);
     assert.strictEqual(JSON.parse(result.content[0].text)[0].name, 'Tick buster Fipronil');
   });

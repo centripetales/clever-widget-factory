@@ -145,6 +145,25 @@ const notFound = (missing) => ({
 const CAPTURED_AT = z.string().datetime({ offset: true })
   .describe('When it was observed, ISO 8601 with offset, e.g. 2026-11-02T08:30:00+08:00. Leave out for now.');
 
+// Turns people's names into the member user_ids the app stores, within one
+// org; throws with the member list when a name matches no one or several.
+async function memberResolver(orgId, names) {
+  const members = names.filter(Boolean).length === 0 ? [] : await withDbClient(async (client) => (await client.query(
+    `SELECT user_id::text AS user_id, full_name FROM organization_members
+     WHERE organization_id = $1 AND is_active = true AND user_id IS NOT NULL`,
+    [orgId]
+  )).rows);
+  return (name) => {
+    const exact = members.filter((m) => m.full_name?.trim().toLowerCase() === name.trim().toLowerCase());
+    const partial = members.filter((m) => m.full_name?.toLowerCase().includes(name.trim().toLowerCase()));
+    const found = exact.length === 1 ? exact : partial;
+    if (found.length === 1) return found[0].user_id;
+    throw new Error(found.length === 0
+      ? `No active member named "${name}". Members: ${members.map((m) => m.full_name).join(', ')}`
+      : `"${name}" matches ${found.map((m) => m.full_name).join(', ')} — ask which one.`);
+  };
+}
+
 const NOT_A_MEMBER = {
   content: [{ type: 'text', text: 'You are not an active member of any CWF organization, so there is no farm data to show.' }],
   isError: true,
@@ -639,21 +658,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       try {
         // Names become the member user_ids the app stores, within the org
         // the action is created in (the first one, as the app does).
-        const names = [assigned_to, ...(participants || [])].filter(Boolean);
-        const members = names.length === 0 ? [] : await withDbClient(async (client) => (await client.query(
-          `SELECT user_id::text AS user_id, full_name FROM organization_members
-           WHERE organization_id = $1 AND is_active = true AND user_id IS NOT NULL`,
-          [accessibleOrgIds[0]]
-        )).rows);
-        const resolve = (name) => {
-          const exact = members.filter((m) => m.full_name?.trim().toLowerCase() === name.trim().toLowerCase());
-          const partial = members.filter((m) => m.full_name?.toLowerCase().includes(name.trim().toLowerCase()));
-          const found = exact.length === 1 ? exact : partial;
-          if (found.length === 1) return found[0].user_id;
-          throw new Error(found.length === 0
-            ? `No active member named "${name}". Members: ${members.map((m) => m.full_name).join(', ')}`
-            : `"${name}" matches ${found.map((m) => m.full_name).join(', ')} — ask which one.`);
-        };
+        const resolve = await memberResolver(accessibleOrgIds[0], [assigned_to, ...(participants || [])]);
 
         const created = await createAction({
           cognitoUserId,
@@ -690,20 +695,30 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Edit an action',
       description:
-        'Change an existing action\'s title, existing_state, expected_state or policy. Only the ' +
-        'fields given change. A new policy replaces the whole policy, so start from the current one ' +
-        '(search_actions) when changing part of it. Find the action_id with search_actions first. ' +
-        'Before calling this, read the change back to the person and only call it once they say yes.',
+        'Change an existing action, like its screen in the app. Only the fields given change. ' +
+        'Lists (participants, required_tools, required_stock) replace the whole list, and a new ' +
+        'policy replaces the whole policy, so start from the current values (search_actions) when ' +
+        'changing part of one. status starts an action (in_progress) or puts it back (not_started). ' +
+        'Find the action_id with search_actions, tools and parts with search_assets. Before calling ' +
+        'this, read the change back to the person and only call it once they say yes.',
       inputSchema: {
         action_id: z.string().describe('The action_id from search_actions or create_action'),
         title: z.string().min(1).optional().describe('New title'),
         existing_state: z.string().optional().describe('New existing state (where things are now)'),
         expected_state: z.string().optional().describe('New expected state (where we want to get to)'),
         policy: z.string().optional().describe('New policy; plain text, blank lines between paragraphs'),
+        assigned_to: z.string().nullable().optional().describe('Name of the person it is assigned to; null to unassign'),
+        participants: z.array(z.string()).optional().describe('Names of everyone else taking part (the whole list)'),
+        asset_id: z.string().nullable().optional().describe('The tool (asset) the action is about, from search_assets; null to clear'),
+        required_tools: z.array(z.string()).optional().describe('Tool asset_ids needed (the whole list)'),
+        required_stock: z.array(z.object({ part_id: z.string(), quantity: z.number() })).optional()
+          .describe('Parts used and how many (the whole list); a negative quantity is produced'),
+        status: z.enum(['not_started', 'in_progress']).optional().describe('Start the action, or put it back to not started'),
+        shared_with_partners: z.boolean().optional().describe('Share the action with partner organizations'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ action_id, title, existing_state, expected_state, policy }) => {
+    async ({ action_id, title, existing_state, expected_state, policy, assigned_to, participants, asset_id, required_tools, required_stock, status, shared_with_partners }) => {
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -716,10 +731,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         ...(existing_state !== undefined && { description: existing_state || null }),
         ...(expected_state !== undefined && { expected_state: expected_state || null }),
         ...(policy !== undefined && { policy: policy ? policyToHtml(policy) : null }),
+        ...(status !== undefined && { status }),
+        ...(shared_with_partners !== undefined && { shared_with_partners }),
       };
-      console.log('update_action called with:', JSON.stringify({ action_id, fields: Object.keys(changes) }));
-      if (Object.keys(changes).length === 0) {
-        return { content: [{ type: 'text', text: 'Nothing to change — give a title, existing_state, expected_state or policy.' }], isError: true };
+      const fields = [...Object.keys(changes), ...Object.entries({ assigned_to, participants, asset_id, required_tools, required_stock })
+        .filter(([, v]) => v !== undefined).map(([k]) => k)];
+      console.log('update_action called with:', JSON.stringify({ action_id, fields }));
+      if (fields.length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change.' }], isError: true };
       }
 
       try {
@@ -729,6 +748,38 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         )).rows[0]);
         if (!action) {
           return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
+        }
+
+        // People are members of the action's org; tools and parts are in the
+        // caller's orgs. Parts carry their names, as the app stores them.
+        if (assigned_to !== undefined || participants) {
+          const resolve = await memberResolver(action.organization_id, [assigned_to, ...(participants || [])]);
+          if (assigned_to !== undefined) changes.assigned_to = assigned_to ? resolve(assigned_to) : null;
+          if (participants) changes.participants = participants.map(resolve);
+        }
+        const toolIds = [...(asset_id ? [asset_id] : []), ...(required_tools || [])];
+        const partIds = (required_stock || []).map((p) => p.part_id);
+        const { tools, parts } = await withDbClient(async (client) => ({
+          tools: toolIds.length === 0 ? [] : (await client.query(
+            `SELECT id::text AS id FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+            [toolIds, accessibleOrgIds]
+          )).rows,
+          parts: partIds.length === 0 ? [] : (await client.query(
+            `SELECT id::text AS id, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+            [partIds, accessibleOrgIds]
+          )).rows,
+        }));
+        const missing = [
+          ...toolIds.filter((id) => !tools.some((t) => t.id === id)).map((id) => ({ entity_type: 'tool', entity_id: id })),
+          ...partIds.filter((id) => !parts.some((p) => p.id === id)).map((id) => ({ entity_type: 'part', entity_id: id })),
+        ];
+        if (missing.length > 0) return notFound(missing);
+        if (asset_id !== undefined) changes.asset_id = asset_id;
+        if (required_tools) changes.required_tools = required_tools;
+        if (required_stock) {
+          changes.required_stock = required_stock.map(({ part_id, quantity }) => ({
+            part_id, quantity, part_name: parts.find((p) => p.id === part_id).name,
+          }));
         }
 
         // Edited where the action lives, as when the app has that org active.
@@ -743,6 +794,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           content: [{ type: 'text', text: JSON.stringify({
             action_id: action.id,
             title: updated.title,
+            status: updated.status,
+            changed: fields,
             link: `https://stargazer-farm.com/actions/${action.id}`,
           }, null, 2) }],
         };
@@ -876,7 +929,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
         'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links). ' +
         'low_stock lists the parts below their minimum quantity, like the app\'s Low Stock filter, with ' +
-        'quantities, unit cost, supplier and what is already on order — use it to plan purchases.',
+        'quantities, unit cost and supplier — use it to plan purchases.',
       inputSchema: {
         query: z.string().min(1).optional().describe('Name or topic, e.g. "azolla pond" or "inverter". Required unless low_stock; with low_stock it narrows by name.'),
         low_stock: z.boolean().optional().describe('Only parts below their minimum quantity'),
@@ -891,9 +944,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           // The app's rule: both quantities set and current below minimum.
           const parts = await withDbClient(async (client) => (await client.query(
             `SELECT p.id::text AS asset_id, p.name, p.category, p.current_quantity, p.minimum_quantity, p.unit,
-                    p.cost_per_unit, p.supplier, p.storage_location,
-                    COALESCE((SELECT SUM(o.quantity_ordered - COALESCE(o.quantity_received, 0)) FROM parts_orders o
-                               WHERE o.part_id = p.id AND o.status IN ('pending', 'partially_received')), 0) AS on_order
+                    p.cost_per_unit, p.supplier, p.storage_location
              FROM parts p
              WHERE p.organization_id = ANY($1::uuid[])
                AND p.current_quantity IS NOT NULL AND p.minimum_quantity IS NOT NULL
