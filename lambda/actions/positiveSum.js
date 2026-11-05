@@ -499,6 +499,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
           organization_id, title: titleFrom(null, challenge), description: challenge.trim(), created_by: userId,
           assigned_to: userId, // its owner
         });
+        queueEmbedding(created);
         await notify(created);
         return { statusCode: 201, data: summarize(created) };
       }
@@ -521,6 +522,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
         created_by: userId, assigned_to: userId, attachments,
       });
       await markProposal(goal.id, situation?.id);
+      queueEmbedding(goal);
       await notify(goal);
       return { statusCode: 201, data: summarize(goal) };
     }

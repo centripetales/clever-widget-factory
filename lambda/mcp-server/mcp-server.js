@@ -118,6 +118,18 @@ const NOT_FROM_TRANSACTION = `NOT EXISTS (
     AND ts.state_text LIKE '{"type":"positive_sum.transaction_context"%'
 )`;
 
+// The actions the caller can see, given their orgs as the SQL parameter `orgs`:
+// their orgs' own, and the proposed collaborations of an org one of their orgs
+// is a member of (Positive Sum) — same rule as lambda/actions.
+const VISIBLE_ACTION = (orgs) => `(a.organization_id = ANY(${orgs}::uuid[]) OR (
+  a.organization_id IN (SELECT mo.organization_id FROM member_organizations mo WHERE mo.member_organization_id = ANY(${orgs}::uuid[]))
+  AND EXISTS (
+    SELECT 1 FROM state_links pl JOIN states ps ON ps.id = pl.state_id
+    WHERE pl.entity_type = 'action' AND pl.entity_id = a.id
+      AND ps.state_text LIKE '{"type":"positive_sum.collaboration"%'
+  )
+))`;
+
 // What an observation can be linked to through the connector — the same as
 // the observation screen's Link Asset (assets) and linked action.
 const LINK = z.object({
@@ -129,8 +141,8 @@ const LINK = z.object({
 async function findLinkTargets(client, links, orgIds) {
   if (links.length === 0) return [];
   return (await client.query(
-    `SELECT 'action' AS entity_type, id::text AS entity_id, title AS name FROM actions
-       WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+    `SELECT 'action' AS entity_type, a.id::text AS entity_id, a.title AS name FROM actions a
+       WHERE a.id::text = ANY($1::text[]) AND ${VISIBLE_ACTION('$2')}
      UNION ALL
      SELECT 'tool', id::text, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
      UNION ALL
@@ -464,7 +476,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
 
       const params = [accessibleOrgIds];
       const add = (value) => { params.push(value); return `$${params.length}`; };
-      const where = ['a.organization_id = ANY($1::uuid[])', NOT_FROM_TRANSACTION];
+      const where = [VISIBLE_ACTION('$1'), NOT_FROM_TRANSACTION];
       if (status?.length) where.push(`a.status::text = ANY(${add(status)}::text[])`);
       if (person) {
         where.push(`EXISTS (SELECT 1 FROM organization_members om
@@ -533,10 +545,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const vector = add(`[${(await generateEmbedding(query)).join(',')}]`);
           const res = await client.query(
             `WITH matches AS (
-               SELECT entity_id, 1 - (embedding <=> ${vector}::vector) AS similarity
-               FROM unified_embeddings
-               WHERE organization_id = ANY($1::uuid[]) AND entity_type = 'action_policy'
-               ORDER BY embedding <=> ${vector}::vector
+               SELECT ue.entity_id, 1 - (ue.embedding <=> ${vector}::vector) AS similarity
+               FROM unified_embeddings ue
+               JOIN actions a ON a.id = ue.entity_id
+               WHERE ue.entity_type = 'action_policy' AND ${VISIBLE_ACTION('$1')}
+               ORDER BY ue.embedding <=> ${vector}::vector
                LIMIT ${add(effectiveLimit)}
              )
              SELECT m.similarity, ${columns}
