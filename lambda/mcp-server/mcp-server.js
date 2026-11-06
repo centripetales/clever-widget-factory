@@ -11,6 +11,9 @@ import {
 const SIMILARITY_THRESHOLD = 0.45;
 const DEFAULT_LIMIT = 10;
 const MAX_PHOTOS_PER_REQUEST = 5;
+const S3_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
+// Some photo_url values are bare S3 keys; resolve them as the app's getImageUrl does.
+const photoUrl = (u) => /^https?:\/\//.test(u) ? u : `${S3_BUCKET_URL}/${u.replace(/^\//, '')}`;
 
 // The DB stores captured_at as a UTC instant. Returning that raw and letting
 // the model guess at a timezone is exactly the bug this project already got
@@ -417,9 +420,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const content = [];
         for (const photo of photos) {
           try {
-            const response = await fetch(photo.photo_url);
+            const url = photoUrl(photo.photo_url);
+            const response = await fetch(url);
             if (!response.ok) {
-              content.push({ type: 'text', text: `Could not fetch photo (HTTP ${response.status}): ${photo.photo_url}` });
+              content.push({ type: 'text', text: `Could not fetch photo (HTTP ${response.status}): ${url}` });
               continue;
             }
             const mimeType = response.headers.get('content-type') || 'image/jpeg';
