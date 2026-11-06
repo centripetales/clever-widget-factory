@@ -99,7 +99,11 @@ export default function AddObservation() {
   const isEditMode = !!observationId;
 
   // Fetch existing state when in edit mode
-  const { data: existingState, isLoading: isLoadingState } = useStateById(orgId, observationId || '');
+  const { data: existingState, isLoading: isLoadingExisting } = useStateById(orgId, observationId || '');
+  // Until the organization loads (opening a link starts there) the query is
+  // disabled and not "loading" — without this the form shows, then is replaced
+  // by the spinner and rebuilt, dropping photos picked in between.
+  const isLoadingState = isLoadingExisting || !orgId;
 
   // Fetch existing snapshots when editing
   const { data: existingSnapshots } = useSnapshots(isEditMode ? observationId : undefined);

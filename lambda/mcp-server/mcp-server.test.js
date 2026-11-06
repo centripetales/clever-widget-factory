@@ -80,6 +80,19 @@ describe('organization scoping', () => {
     assert.match(result.content[0].text, /No photos/);
   });
 
+  test('get_observation_photos resolves bare S3 keys against the bucket', async () => {
+    rows = [{ photo_url: 'mission-attachments/receipt.jpg' }, { photo_url: 'https://example.com/full.jpg' }];
+    const fetched = [];
+    const restore = mock.method(globalThis, 'fetch', async (url) => {
+      fetched.push(url);
+      return new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/jpeg' } });
+    });
+    const client = await connect(['org-a']);
+    await client.callTool({ name: 'get_observation_photos', arguments: { observation_id: 'obs-1' } });
+    restore.mock.restore();
+    assert.deepStrictEqual(fetched, ['https://cwf-dev-assets.s3.us-west-2.amazonaws.com/mission-attachments/receipt.jpg', 'https://example.com/full.jpg']);
+  });
+
   for (const name of ['search_actions', 'search_financial_records']) {
     test(`${name} date mode filters by the caller orgs`, async () => {
       const client = await connect(['org-a', 'org-b']);
