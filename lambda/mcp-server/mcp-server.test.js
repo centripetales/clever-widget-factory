@@ -47,6 +47,9 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-experiences-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };
+  }
   if (command.input.FunctionName === 'cwf-core-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'h-1' }, part: { id: body.part_id, current_quantity: '8.000' } }) })) };
   }
@@ -91,6 +94,23 @@ describe('organization scoping', () => {
     await client.callTool({ name: 'get_observation_photos', arguments: { observation_id: 'obs-1' } });
     restore.mock.restore();
     assert.deepStrictEqual(fetched, ['https://cwf-dev-assets.s3.us-west-2.amazonaws.com/mission-attachments/receipt.jpg', 'https://example.com/full.jpg']);
+  });
+
+  test('get_observation_photos names each photo with when it was taken and where, when known', async () => {
+    rows = [
+      { photo_url: 'photos/a.jpg', photo_description: 'Row 3', taken_at: '2026-10-05T09:30:00Z', gps_latitude: '10.5', gps_longitude: '123.25' },
+      { photo_url: 'photos/b.jpg', photo_description: null, taken_at: null, gps_latitude: null, gps_longitude: null },
+    ];
+    const restore = mock.method(globalThis, 'fetch', async () => new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/jpeg' } }));
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'get_observation_photos', arguments: { observation_id: 'obs-1' } });
+    restore.mock.restore();
+    assert.match(queries[0].sql, /photo_metadata_extractions pme WHERE pme\.photo_url = sp\.photo_url/);
+    const texts = result.content.filter((c) => c.type === 'text').map((c) => c.text);
+    assert.deepStrictEqual(texts, [
+      'photo_url: photos/a.jpg\ntaken: Oct 5, 2026, 9:30 AM PHT\ngps: 10.5,123.25\nRow 3',
+      'photo_url: photos/b.jpg',
+    ]);
   });
 
   for (const name of ['search_actions', 'search_financial_records']) {
@@ -719,5 +739,189 @@ describe('Systems', () => {
       photos: [],
       links: [{ entity_type: 'tool', entity_id: 'inv-0' }, { entity_type: 'ends', entity_id: 'o-9' }],
     });
+  });
+});
+
+describe('experiences', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('search_experiences filters by asset, components and date, with a label per component', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ experience_id: 'x-1', type: 'tool', asset_id: 'pond-1', asset: 'Azolla Pond', created_at: '2026-11-01T00:00:00Z', written_by: 'Mae', total: '4' }];
+      if (sql.includes('FROM experience_components ec')) return [
+        { experience_id: 'x-1', component_type: 'initial_state', label: 'Pond 30% covered' },
+        { experience_id: 'x-1', component_type: 'action', label: 'Added ash' },
+        { experience_id: 'x-1', component_type: 'final_state', label: 'Pond 80% covered' },
+      ];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'search_experiences', arguments: {
+      asset_id: 'pond-1', observation_ids: ['o-1'], date_from: '2026-10-01', date_to: '2026-11-07',
+    } })).content[0].text);
+    assert.deepStrictEqual(queries[0].params, [['org-a'], 'pond-1', ['o-1'], [], '2026-10-01', '2026-11-07', 10]);
+    assert.strictEqual(reply.total, 4);
+    assert.deepStrictEqual(reply.experiences[0].asset, { asset_id: 'pond-1', type: 'tool', name: 'Azolla Pond' });
+    assert.deepStrictEqual(reply.experiences[0].actions, ['Added ash']);
+    assert.deepStrictEqual(reply.experiences[0].final_states, ['Pond 80% covered']);
+  });
+
+  test('get_experience shows each leg in order, with readings and the person\'s rewrite of an action claim', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-1', type: 'tool', asset_id: 'pond-1', asset: 'Azolla Pond', created_at: '2026-11-01T00:00:00Z', metadata: { action_claim_edits: { 'a-1': 'Spread 2 kg of ash' } }, written_by: 'Mae' }];
+      if (sql.includes('FROM experience_components ec')) return [
+        { component_type: 'initial_state', observation_id: 'o-1', captured_at: '2026-10-01T00:00:00Z', text: 'Thin cover', observation_claim: 'Pond 30% covered', has_photos: true },
+        { component_type: 'action', action_id: 'a-1', title: 'Add ash', status: 'completed', completed_at: '2026-10-02T00:00:00Z', action_type: 'treatment', action_claim: 'Added ash' },
+        { component_type: 'final_state', observation_id: 'o-2', captured_at: '2026-10-20T00:00:00Z', text: 'Thick cover', observation_claim: null, has_photos: false },
+      ];
+      if (sql.includes('FROM metric_snapshots')) return [{ observation_id: 'o-2', name: 'Coverage', value: '80', unit: '%' }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_experience', arguments: { experience_id: 'x-1' } })).content[0].text);
+    assert.strictEqual(reply.initial_states[0].claim, 'Pond 30% covered');
+    assert.strictEqual(reply.actions[0].claim, 'Added ash');
+    assert.strictEqual(reply.actions[0].claim_as_rewritten_here, 'Spread 2 kg of ash');
+    assert.deepStrictEqual(reply.final_states[0].readings, [{ name: 'Coverage', value: '80', unit: '%' }]);
+    assert.strictEqual('claim' in reply.final_states[0], false);
+    assert.strictEqual(reply.link, 'https://stargazer-farm.com/experiences/x-1');
+    rows = [];
+    assert.strictEqual((await client.callTool({ name: 'get_experience', arguments: { experience_id: 'nope' } })).isError, true);
+  });
+
+  test('create_experience writes it up through the experiences service on the asset', async () => {
+    rows = (sql) => {
+      if (sql.includes("SELECT 'tool' AS type")) return [{ type: 'tool', id: 'pond-1', name: 'Azolla Pond' }];
+      if (sql.includes('FROM states WHERE')) return [{ id: 'o-1' }, { id: 'a-1' }];
+      return [];
+    };
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_experience', arguments: { asset_id: 'pond-1', initial_state_ids: ['o-1'], action_ids: ['a-1'] } });
+    assert.strictEqual(JSON.parse(result.content[0].text).experience_id, 'new-experience');
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-experiences-lambda');
+    assert.strictEqual(event.path, '/api/experiences');
+    assert.deepStrictEqual(JSON.parse(event.body), { entity_type: 'tool', entity_id: 'pond-1', initial_state_ids: ['o-1'], action_ids: ['a-1'], final_state_ids: [] });
+  });
+
+  test('create_experience refuses observations or actions outside the caller orgs, and a read-only connection', async () => {
+    rows = (sql) => (sql.includes("SELECT 'tool' AS type") ? [{ type: 'tool', id: 'pond-1', name: 'Azolla Pond' }] : []);
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.match((await client.callTool({ name: 'create_experience', arguments: { asset_id: 'pond-1', final_state_ids: ['o-9'] } })).content[0].text, /o-9/);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_experience', arguments: { asset_id: 'pond-1' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('update_experience sends only the legs given and claim rewrites, in the experience org', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-1', organization_id: 'org-b', action_ids: ['a-1'] }];
+      if (sql.includes('FROM states WHERE')) return [{ id: 'o-2' }];
+      return [];
+    };
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'update_experience', arguments: {
+      experience_id: 'x-1', final_state_ids: ['o-2'], action_claim_rewrites: { 'a-1': 'Spread 2 kg of ash' },
+    } })).content[0].text);
+    assert.deepStrictEqual(reply.changed, ['final_state_ids', 'action_claim_rewrites']);
+    const [{ event }] = invocations;
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/experiences/x-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { final_state_ids: ['o-2'], action_claim_edits: { 'a-1': 'Spread 2 kg of ash' } });
+  });
+
+  test('update_experience refuses a rewrite of an action not in it, or nothing to change', async () => {
+    rows = (sql) => (sql.includes('FROM experiences e') ? [{ id: 'x-1', organization_id: 'org-a', action_ids: ['a-1'] }] : []);
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.match((await client.callTool({ name: 'update_experience', arguments: { experience_id: 'x-1', action_claim_rewrites: { 'a-9': 'x' } } })).content[0].text, /a-9/);
+    assert.strictEqual((await client.callTool({ name: 'update_experience', arguments: { experience_id: 'x-1' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('delete_experience deletes through the experiences service in its org; unknown ones are refused', async () => {
+    rows = [{ id: 'x-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'delete_experience', arguments: { experience_id: 'x-1' } });
+    const [{ event }] = invocations;
+    assert.strictEqual(event.httpMethod, 'DELETE');
+    assert.strictEqual(event.path, '/api/experiences/x-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    rows = [];
+    assert.strictEqual((await client.callTool({ name: 'delete_experience', arguments: { experience_id: 'nope' } })).isError, true);
+    assert.strictEqual(invocations.length, 1);
+  });
+
+  test('create_experience needs no asset, and takes photos picked from its actions', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM states WHERE')) return [{ id: 'o-1' }, { id: 'a-1' }];
+      if (sql.includes('FROM state_links sl JOIN state_photos')) return [{ action_id: 'a-1', photo_url: 'photos/stake.jpg' }];
+      return [];
+    };
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'create_experience', arguments: {
+      initial_state_ids: ['o-1'], action_ids: ['a-1'], action_photos: { 'a-1': ['photos/stake.jpg'] },
+    } })).content[0].text);
+    assert.strictEqual(reply.asset, null);
+    assert.strictEqual(queries.some((q) => q.sql.includes("SELECT 'tool' AS type")), false);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), {
+      initial_state_ids: ['o-1'], action_ids: ['a-1'], final_state_ids: [], action_photo_inclusions: { 'a-1': ['photos/stake.jpg'] },
+    });
+  });
+
+  test('photos can only be picked from an action in the experience, from its own observations', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM states WHERE')) return [{ id: 'a-1' }];
+      if (sql.includes('FROM state_links sl JOIN state_photos')) return [{ action_id: 'a-1', photo_url: 'photos/stake.jpg' }];
+      return [];
+    };
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.match((await client.callTool({ name: 'create_experience', arguments: { action_ids: ['a-1'], action_photos: { 'a-1': ['photos/other.jpg'] } } })).content[0].text, /other\.jpg/);
+    assert.match((await client.callTool({ name: 'create_experience', arguments: { action_ids: ['a-1'], action_photos: { 'a-2': [] } } })).content[0].text, /not in it: a-2/);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('get_experience lists each action\'s photos and whether they are included; no asset is shown as null', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-2', type: null, asset_id: null, asset: null, created_at: '2026-11-01T00:00:00Z', metadata: { action_photo_inclusions: { 'a-1': ['photos/stake.jpg'] } }, written_by: 'Stefan' }];
+      if (sql.includes('FROM experience_components ec')) return [{ component_type: 'action', action_id: 'a-1', title: 'Spread gypsum by the stake', status: 'completed' }];
+      if (sql.includes("sl.entity_type = 'action' AND sl.entity_id::text = ANY")) return [
+        { action_id: 'a-1', observation_id: 'o-5', photo_url: 'photos/stake.jpg', photo_description: 'Stake at row 3', taken_at: '2026-10-05T09:30:00Z', gps_latitude: '10.123456', gps_longitude: '123.654321' },
+        { action_id: 'a-1', observation_id: 'o-5', photo_url: 'photos/bag.jpg', photo_description: null },
+      ];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_experience', arguments: { experience_id: 'x-2' } })).content[0].text);
+    assert.strictEqual(reply.asset, null);
+    assert.deepStrictEqual(reply.actions[0].photos, [
+      { observation_id: 'o-5', photo_url: 'photos/stake.jpg', description: 'Stake at row 3', taken_at_manila: 'Oct 5, 2026, 9:30 AM PHT', gps: '10.123456,123.654321', included: true },
+      { observation_id: 'o-5', photo_url: 'photos/bag.jpg', included: false },
+    ]);
+  });
+
+  test('update_experience replaces an action\'s photo pick', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-2', organization_id: 'org-a', action_ids: ['a-1'] }];
+      if (sql.includes('FROM state_links sl JOIN state_photos')) return [{ action_id: 'a-1', photo_url: 'photos/bag.jpg' }];
+      return [];
+    };
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'update_experience', arguments: { experience_id: 'x-2', action_photos: { 'a-1': ['photos/bag.jpg'] } } })).content[0].text);
+    assert.deepStrictEqual(reply.changed, ['action_photos']);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { action_photo_inclusions: { 'a-1': ['photos/bag.jpg'] } });
+  });
+
+  test('get_asset lists its recent experiences and how many it has', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{ type: 'tool', fields: { name: 'Azolla Pond' } }];
+      if (sql.includes('FROM experiences e')) return [{ experience_id: 'x-1', type: 'tool', asset_id: 'pond-1', asset: 'Azolla Pond', created_at: '2026-11-01T00:00:00Z', written_by: 'Mae', total: '5' }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'pond-1' } })).content[0].text);
+    assert.strictEqual(reply.experience_count, 5);
+    assert.strictEqual(reply.recent_experiences[0].experience_id, 'x-1');
+    assert.strictEqual('asset' in reply.recent_experiences[0], false);
   });
 });

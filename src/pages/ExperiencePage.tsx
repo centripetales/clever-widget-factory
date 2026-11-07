@@ -113,6 +113,8 @@ export default function ExperiencePage() {
 
   const entityType = experience?.entity_type || entityTypeParam;
   const entityId = experience?.entity_id || entityIdParam;
+  // New observations made here are linked to the asset, when there is one.
+  const entityLinks = entityId ? [{ entity_type: entityType, entity_id: entityId }] : [];
 
   const createExperience = useCreateExperience();
   const updateExperience = useUpdateExperience(entityType, entityId);
@@ -588,10 +590,6 @@ export default function ExperiencePage() {
 
   // --- Save ------------------------------------------------------------
   const handleSave = async () => {
-    if (!entityId) {
-      toast({ title: 'Missing container', description: 'This experience has no container.', variant: 'destructive' });
-      return;
-    }
     setIsSaving(true);
     try {
       const toPhotoPayload = (photos: PhotoItem[]) =>
@@ -635,7 +633,7 @@ export default function ExperiencePage() {
         const createdState = await stateService.createState({
           state_text: draft.text.trim() || undefined,
           photos: toPhotoPayload(draft.photos),
-          links: [{ entity_type: entityType, entity_id: entityId }],
+          links: entityLinks,
         });
 
         const replaceIn = (ids: string[]) => ids.map((id) => (id === pendingId ? createdState.id : id));
@@ -679,10 +677,7 @@ export default function ExperiencePage() {
         if (photos.length === 0) continue;
         await stateService.createState({
           photos: toPhotoPayload(photos),
-          links: [
-            { entity_type: 'action', entity_id: actionId },
-            { entity_type: entityType, entity_id: entityId },
-          ],
+          links: [{ entity_type: 'action', entity_id: actionId }, ...entityLinks],
         });
       }
 
@@ -722,7 +717,7 @@ export default function ExperiencePage() {
           scoring_data: { action_type: draftAction.action_type },
           status: 'completed',
           completed_at: new Date().toISOString(),
-          asset_id: entityType === 'tool' ? entityId : undefined,
+          asset_id: entityType === 'tool' && entityId ? entityId : undefined,
         });
         nextActionIds = [...actionIds, created.id];
       }
@@ -745,17 +740,14 @@ export default function ExperiencePage() {
           description: newActionDraft.text.trim() || undefined,
           status: 'completed',
           completed_at: new Date().toISOString(),
-          asset_id: entityType === 'tool' ? entityId : undefined,
+          asset_id: entityType === 'tool' && entityId ? entityId : undefined,
         });
         const hasObservationContent = newActionDraft.text.trim().length > 0 || newActionDraft.photos.length > 0;
         if (hasObservationContent) {
           await stateService.createState({
             state_text: newActionDraft.text.trim() || undefined,
             photos: toPhotoPayload(newActionDraft.photos),
-            links: [
-              { entity_type: 'action', entity_id: createdAction.id },
-              { entity_type: entityType, entity_id: entityId },
-            ],
+            links: [{ entity_type: 'action', entity_id: createdAction.id }, ...entityLinks],
           });
         }
         nextActionIds = [...nextActionIds, createdAction.id];
@@ -764,8 +756,7 @@ export default function ExperiencePage() {
       // 6. Persist membership.
       if (isNew) {
         await createExperience.mutateAsync({
-          entity_type: entityType,
-          entity_id: entityId,
+          ...(entityId ? { entity_type: entityType, entity_id: entityId } : {}),
           initial_state_ids: nextInitialIds,
           action_ids: nextActionIds,
           final_state_ids: nextFinalIds,
@@ -794,8 +785,10 @@ export default function ExperiencePage() {
       // shows up there (Reviewed, if it now has both an initial and final
       // state) rather than leaving the person staring at the same form. The
       // component unmounts on navigate, so there's no need to reset local
-      // draft/lane state here.
-      navigate(`/combined-assets/${entityId}/details?tab=experiences`);
+      // draft/lane state here. One without an asset has no tab to go back
+      // to: a saved one stays open, a new one goes back where it came from.
+      if (entityId) navigate(`/combined-assets/${entityId}/details?tab=experiences`);
+      else if (isNew) navigate(-1);
     } catch (err) {
       console.error('Failed to save experience:', err);
       const message = err instanceof Error && err.message ? err.message : 'Failed to save this experience.';
@@ -1330,6 +1323,8 @@ export default function ExperiencePage() {
         </Button>
       </div>
 
+      {/* Candidates come from the asset; one without an asset has none here. */}
+      {entityId && (<>
       <Separator className="my-6" />
 
       <Card>
@@ -1445,6 +1440,7 @@ export default function ExperiencePage() {
           )}
         </CardContent>
       </Card>
+      </>)}
 
       <LinkExistingPhotoDialog
         open={!!linkPhotoTarget}

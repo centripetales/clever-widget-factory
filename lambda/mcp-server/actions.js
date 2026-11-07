@@ -86,6 +86,22 @@ export async function updateAsset({ cognitoUserId, orgId, type, assetId, changes
   return (await invokeApp('cwf-core-lambda', `/api/${type}s/${assetId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: assetId })).data;
 }
 
+// Experiences go through the experiences service, as the app's experience
+// screens do. It decides who may edit or delete one (whoever wrote it up, or
+// an admin). New ones go in the primary org (none given).
+export async function createExperience({ cognitoUserId, experience }) {
+  return invokeApp('cwf-experiences-lambda', '/api/experiences', experience, { cognitoUserId });
+}
+
+// Each leg given replaces that leg; legs left out stay as they are.
+export async function updateExperience({ cognitoUserId, orgId, experienceId, changes }) {
+  return invokeApp('cwf-experiences-lambda', `/api/experiences/${experienceId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: experienceId });
+}
+
+export async function deleteExperience({ cognitoUserId, orgId, experienceId }) {
+  return invokeApp('cwf-experiences-lambda', `/api/experiences/${experienceId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', id: experienceId });
+}
+
 // The app stores policy as rich text (HTML); spoken plans arrive as plain text.
 export function policyToHtml(text) {
   const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -7,8 +7,10 @@ import { ObservationPhoto } from './observations';
  */
 export interface Experience {
   id: string;
-  entity_type: 'tool' | 'part';
-  entity_id: string;
+  /** The tool or part it is on, if any — an experience can stand on its
+   *  observations and actions alone. Both set or both null. */
+  entity_type: 'tool' | 'part' | null;
+  entity_id: string | null;
   organization_id: string;
   created_by: string;
   created_at: string;
@@ -117,11 +119,12 @@ export interface Part {
  * CreateExperienceRequest - Request payload for creating a new experience
  */
 export interface CreateExperienceRequest {
-  entity_type: 'tool' | 'part';
-  entity_id: string;
+  // The asset is optional; give both or neither.
+  entity_type?: 'tool' | 'part';
+  entity_id?: string;
 
-  // Plural forms are current. Every leg is optional — only the entity is
-  // required, so an experience can be created before its outcome is observed.
+  // Plural forms are current. Every leg is optional, so an experience can be
+  // created before its outcome is observed.
   initial_state_ids?: string[];
   action_ids?: string[];
   final_state_ids?: string[];
@@ -167,6 +170,8 @@ export interface UpdateExperienceRequest {
 export interface ExperienceListParams {
   entity_type?: 'tool' | 'part';
   entity_id?: string;
+  /** Only experiences that include this action. */
+  action_id?: string;
   limit?: number;
   offset?: number;
 }
