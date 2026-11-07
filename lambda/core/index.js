@@ -144,6 +144,46 @@ exports.handler = async (event) => {
     // Tools endpoint
     
     // Tools Geolocation endpoint
+    // GET /tools/{id}/memberships — the Systems a tool is part of and, for a
+    // System, its components, current and former. Each membership is a
+    // part_of observation (member + 'part_of' System links), from its
+    // captured_at until a later observation ends it ('ends' link to it).
+    // Same rule as the Claude connector's findMemberships.
+    if (httpMethod === 'GET' && path.match(/\/tools\/[a-f0-9-]+\/memberships$/)) {
+      const toolId = path.split('/')[2];
+      const endedAt = `LEFT JOIN LATERAL (
+          SELECT es.captured_at FROM state_links e JOIN states es ON es.id = e.state_id
+          WHERE e.entity_type = 'ends' AND e.entity_id = js.id
+          ORDER BY es.captured_at LIMIT 1
+        ) ended ON true`;
+      const partOf = await queryJSON(
+        `SELECT DISTINCT t.id::text AS asset_id, 'tool' AS type, t.name, js.id::text AS observation_id,
+                js.captured_at AS since, ended.captured_at AS until
+         FROM state_links m
+         JOIN state_links p ON p.state_id = m.state_id AND p.entity_type = 'part_of'
+         JOIN states js ON js.id = m.state_id AND js.organization_id::text = ANY($2::text[])
+         JOIN tools t ON t.id = p.entity_id
+         ${endedAt}
+         WHERE m.entity_type IN ('tool', 'part') AND m.entity_id::text = $1
+         ORDER BY since`,
+        [toolId, accessibleOrgIds]
+      );
+      const components = await queryJSON(
+        `SELECT DISTINCT m.entity_id::text AS asset_id, m.entity_type AS type, COALESCE(t.name, pt.name) AS name,
+                js.id::text AS observation_id, js.captured_at AS since, ended.captured_at AS until
+         FROM state_links p
+         JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+         JOIN states js ON js.id = p.state_id AND js.organization_id::text = ANY($2::text[])
+         LEFT JOIN tools t ON m.entity_type = 'tool' AND t.id = m.entity_id
+         LEFT JOIN parts pt ON m.entity_type = 'part' AND pt.id = m.entity_id
+         ${endedAt}
+         WHERE p.entity_type = 'part_of' AND p.entity_id::text = $1
+         ORDER BY since`,
+        [toolId, accessibleOrgIds]
+      );
+      return { statusCode: 200, headers, body: JSON.stringify({ data: { part_of: partOf, components } }) };
+    }
+
     if (httpMethod === 'GET' && path.match(/\/tools\/[a-f0-9-]+\/geolocation$/)) {
       const toolId = path.split('/')[2];
       const sql = `
