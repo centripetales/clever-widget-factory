@@ -95,6 +95,13 @@ function resolveWindow(toolName, { query, relative, date_from, date_to }) {
   };
 }
 
+// Similarity search matches content, not questions: a query phrased like
+// what was recorded finds it; the person's question often doesn't.
+const QUERY_AS_CONTENT =
+  'Similarity search matches content, not questions: rewrite the question as descriptive keywords or a ' +
+  'short sample claim of what would have been recorded, e.g. "doe in heat, estrus, mating with buck" ' +
+  'instead of "when were the goats last in heat?".';
+
 const NEEDS_QUERY_OR_DATES = {
   content: [{ type: 'text', text: 'Either query (topical search) or relative/date_from/date_to (date-range lookup) is required.' }],
   isError: true,
@@ -102,7 +109,7 @@ const NEEDS_QUERY_OR_DATES = {
 
 // Same two-mode search inputs for actions and financial records as for claims.
 const SEARCH_INPUTS = {
-  query: z.string().optional().describe('Natural language topical search. Ignored if relative/date_from/date_to given.'),
+  query: z.string().optional().describe(`Topical search, as descriptive keywords or a short sample of what was recorded. ${QUERY_AS_CONTENT} Ignored if relative/date_from/date_to given.`),
   relative: z.enum(['today', 'yesterday', 'last_7_days', 'last_30_days']).optional().describe('Preferred over date_from/date_to for anything phrased relative to today — resolved server-side in the farm\'s timezone (Asia/Manila).'),
   date_from: z.string().optional().describe('Start date YYYY-MM-DD (Asia/Manila, inclusive), for an explicit non-relative date only. Ignored if relative is given.'),
   date_to: z.string().optional().describe('End date YYYY-MM-DD (Asia/Manila, inclusive). Defaults to date_from if omitted. Ignored if relative is given.'),
@@ -111,7 +118,7 @@ const SEARCH_INPUTS = {
 
 const TWO_MODES =
   'Two modes, like search_claims — pick one:\n' +
-  '1. Topical search: give `query` only, ranked by semantic similarity. Do NOT put dates in the query.\n' +
+  '1. Topical search: give `query` only, ranked by semantic similarity. ' + QUERY_AS_CONTENT + ' Do NOT put dates in the query.\n' +
   '2. Date-range lookup: `relative` for anything relative to today, or `date_from`/`date_to` for a specific named date. Returns everything in the window, newest first.';
 
 // Actions the app creates for a financial record (Positive Sum) duplicate the
@@ -206,6 +213,12 @@ const notFound = (missing) => ({
   content: [{ type: 'text', text: `Not found in your organizations: ${missing.map((l) => `${l.entity_type} ${l.entity_id}`).join(', ')} — check the ids with search_actions / search_assets.` }],
   isError: true,
 });
+
+// A day a membership started or ended, in the farm's calendar; recorded as
+// the start (joined) or end (left) of that day, Asia/Manila.
+const MEMBERSHIP_DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a date, YYYY-MM-DD');
+const dayStart = (day) => `${day}T00:00:00+08:00`;
+const dayEnd = (day) => `${day}T23:59:59+08:00`;
 
 const CAPTURED_AT = z.string().datetime({ offset: true })
   .describe('When it was observed, ISO 8601 with offset, e.g. 2026-11-02T08:30:00+08:00. Leave out for now.');
@@ -416,6 +429,31 @@ const NOT_AN_EXPERIENCE = (id) => ({
   isError: true,
 });
 
+// An asset and, when it is a System, everything it is made of at any depth,
+// each with the window it was part of it (members.from_at..to_at; former
+// marks one that has left). assetRef/orgsRef are the SQL for the asset id
+// (text) and the caller's orgs.
+const MEMBERS_CTE = (assetRef, orgsRef) => `members(id, from_at, to_at, former) AS (
+  SELECT ${assetRef}::text, '-infinity'::timestamptz, 'infinity'::timestamptz, false
+  UNION
+  SELECT m.entity_id::text, GREATEST(members.from_at, js.captured_at::timestamptz),
+         LEAST(members.to_at, COALESCE(ended.captured_at::timestamptz, 'infinity'::timestamptz)),
+         members.former OR ended.captured_at IS NOT NULL
+  FROM members
+  JOIN state_links p ON p.entity_type = 'part_of' AND p.entity_id::text = members.id
+  JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+  JOIN states js ON js.id = p.state_id AND js.organization_id = ANY(${orgsRef}::uuid[])
+  ${ENDED_AT('js.id')}
+)`;
+// An observation on one of those members while it was one.
+const ON_MEMBERS = (state) => `EXISTS (SELECT 1 FROM state_links al JOIN members mb ON mb.id = al.entity_id::text
+  WHERE al.state_id = ${state}.id AND al.entity_type IN ('tool', 'part') AND ${state}.captured_at BETWEEN mb.from_at AND mb.to_at)`;
+// A person's observation, not a record the app keeps as a state (Positive
+// Sum records, [summary]/[photo_analysis] write-ups, quiz answers).
+const IS_OBSERVATION = (state) => `COALESCE(${state}.state_text, '') NOT LIKE '{"type":"positive_sum.%'
+  AND COALESCE(${state}.state_text, '') NOT LIKE '[%'
+  AND NOT EXISTS (SELECT 1 FROM state_links lo WHERE lo.state_id = ${state}.id AND lo.entity_type = 'learning_objective')`;
+
 const NOT_AN_ASSET = (id) => ({
   content: [{ type: 'text', text: `No tool or part ${id} in your organizations — find it with search_assets.` }],
   isError: true,
@@ -458,10 +496,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Search farm observation claims — dense, self-contained summaries of ' +
         'what each observation asserts (not the raw field note or photos). ' +
-        'Observations get one whatever they are linked to; some older ones may not have one. ' +
-        'Give asset_id (from search_assets) to search only one asset\'s observations.\n\n' +
+        'Observations get one whatever they are linked to; older ones may not have one, and are matched ' +
+        'and shown by their own text instead (text in place of claim). Give asset_id (from search_assets) ' +
+        'to search one asset\'s observations; for a System that includes everything it is made of (e.g. each ' +
+        'goat in Goats), from while each was part of it.\n\n' +
         'Two modes, and they don\'t combine well — pick one:\n' +
-        '1. Topical search: give `query` only. Ranks by semantic similarity. ' +
+        '1. Topical search: give `query` only. Ranks by semantic similarity. ' + QUERY_AS_CONTENT + ' ' +
         'Do NOT put dates or "yesterday"/"this week" in the query text — ' +
         'similarity search cannot match on time, only on content.\n' +
         '2. Date-range lookup ("what happened yesterday/this week/on July 31"): ' +
@@ -473,12 +513,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'when it isn\'t relative to today). This mode ignores semantic ranking and ' +
         'returns everything in the window chronologically; `query` is not needed.',
       inputSchema: {
-        query: z.string().optional().describe('Natural language topical search, e.g. "cogon suppression". Ignored if relative/date_from/date_to given.'),
+        query: z.string().optional().describe(`Topical search, as descriptive keywords or a short sample claim, e.g. "cogon suppression" or "doe in heat, estrus, mating with buck". ${QUERY_AS_CONTENT} Ignored if relative/date_from/date_to given.`),
         relative: z.enum(['today', 'yesterday', 'last_7_days', 'last_30_days']).optional().describe('Preferred over date_from/date_to for anything phrased relative to today — resolved server-side against the farm\'s actual timezone, not the caller\'s guess at today\'s date.'),
         date_from: z.string().optional().describe('Start date YYYY-MM-DD (Asia/Manila calendar date, inclusive), for an explicit non-relative date only. Ignored if relative is given.'),
         date_to: z.string().optional().describe('End date YYYY-MM-DD (Asia/Manila calendar date, inclusive). Defaults to date_from if omitted. Ignored if relative is given.'),
         limit: z.number().int().min(1).max(25).optional().describe('Max results to return, default 10'),
-        asset_id: z.string().optional().describe('Only observations linked to this tool or part'),
+        asset_id: z.string().optional().describe('Only observations on this tool or part — for a System, on it or anything it is made of'),
       },
     },
     async ({ query, relative, date_from, date_to, limit, asset_id }) => {
@@ -491,70 +531,65 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
 
       try {
         const results = await withDbClient(async (client) => {
-          if (isDateMode) {
-            const from = resolvedFrom;
-            const to = resolvedTo;
-            const sql = `
-              SELECT
-                1 as similarity,
-                s.id as state_id,
-                sp.content->>'content' as claim_text,
-                s.captured_at,
-                COALESCE(om.full_name, s.captured_by::text) as captured_by_name,
-                EXISTS(SELECT 1 FROM state_photos sp2 WHERE sp2.state_id = s.id) as has_photos,
-                (
-                  SELECT string_agg(sl.entity_type || ':' || sl.entity_id::text, ', ')
-                  FROM state_links sl WHERE sl.state_id = s.id
-                ) as links
-              FROM state_perspectives sp
-              JOIN states s ON s.id = sp.state_id
-              LEFT JOIN organization_members om
-                ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id
-              WHERE sp.perspective_type = 'CLAIM' AND sp.status = 'SUCCESS'
-                AND s.organization_id = ANY($1::uuid[])
-                AND s.captured_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Manila')
-                AND s.captured_at < (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
-                AND ($5::text IS NULL OR EXISTS (
-                  SELECT 1 FROM state_links al WHERE al.state_id = s.id
-                    AND al.entity_type IN ('tool', 'part') AND al.entity_id::text = $5))
-              ORDER BY s.captured_at DESC
-              LIMIT $4
-            `;
-            const res = await client.query(sql, [accessibleOrgIds, from, to, effectiveLimit, asset_id || null]);
-            return res.rows;
-          }
-
-          const queryEmbedding = await generateEmbedding(query);
-          const embeddingStr = `[${queryEmbedding.join(',')}]`;
-          const sql = `
-            WITH query_vector AS (SELECT $1::vector AS vec),
-            matches AS (
-              SELECT entity_id, (1 - (embedding <=> (SELECT vec FROM query_vector))) as similarity
-              FROM unified_embeddings
-              WHERE organization_id = ANY($2::uuid[]) AND entity_type = 'claim_perspective'
-                AND ($5::text IS NULL OR entity_id IN (
-                  SELECT cp.id FROM state_perspectives cp
-                  JOIN state_links al ON al.state_id = cp.state_id
-                  WHERE al.entity_type IN ('tool', 'part') AND al.entity_id::text = $5))
-              ORDER BY embedding <=> (SELECT vec FROM query_vector)
-              LIMIT $3
-            )
-            SELECT
-              m.similarity,
+          // Each observation once: its claim when it has one, else the start
+          // of its own note — older observations often have no claim.
+          const columns = `
               s.id as state_id,
-              sp.content->>'content' as claim_text,
+              c.claim as claim_text,
+              LEFT(s.state_text, 300) as text_start,
               s.captured_at,
               COALESCE(om.full_name, s.captured_by::text) as captured_by_name,
               EXISTS(SELECT 1 FROM state_photos sp2 WHERE sp2.state_id = s.id) as has_photos,
               (
                 SELECT string_agg(sl.entity_type || ':' || sl.entity_id::text, ', ')
                 FROM state_links sl WHERE sl.state_id = s.id
-              ) as links
-            FROM matches m
-            JOIN state_perspectives sp ON sp.id = m.entity_id
-            JOIN states s ON s.id = sp.state_id
+              ) as links`;
+          const joins = `
+            LEFT JOIN LATERAL (
+              SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+              WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+            ) c ON true
             LEFT JOIN organization_members om
-              ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id
+              ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id`;
+          if (isDateMode) {
+            const sql = `
+              WITH RECURSIVE ${MEMBERS_CTE('$5', '$1')}
+              SELECT 1 as similarity, ${columns}
+              FROM states s ${joins}
+              WHERE s.organization_id = ANY($1::uuid[])
+                AND s.captured_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Manila')
+                AND s.captured_at < (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
+                AND ${IS_OBSERVATION('s')}
+                AND ($5::text IS NULL OR ${ON_MEMBERS('s')})
+              ORDER BY s.captured_at DESC
+              LIMIT $4
+            `;
+            const res = await client.query(sql, [accessibleOrgIds, resolvedFrom, resolvedTo, effectiveLimit, asset_id || null]);
+            return res.rows;
+          }
+
+          // Ranked on the claim and on the observation's own text, whichever
+          // is closer.
+          const queryEmbedding = await generateEmbedding(query);
+          const embeddingStr = `[${queryEmbedding.join(',')}]`;
+          const sql = `
+            WITH RECURSIVE ${MEMBERS_CTE('$5', '$2')},
+            query_vector AS (SELECT $1::vector AS vec),
+            matches AS (
+              SELECT s.id AS state_id, MAX(1 - (ue.embedding <=> (SELECT vec FROM query_vector))) AS similarity
+              FROM unified_embeddings ue
+              LEFT JOIN state_perspectives cp ON ue.entity_type = 'claim_perspective' AND cp.id = ue.entity_id
+              JOIN states s ON s.id = COALESCE(cp.state_id, ue.entity_id)
+              WHERE ue.organization_id = ANY($2::uuid[]) AND ue.entity_type IN ('claim_perspective', 'state')
+                AND ${IS_OBSERVATION('s')}
+                AND ($5::text IS NULL OR ${ON_MEMBERS('s')})
+              GROUP BY s.id
+              ORDER BY similarity DESC
+              LIMIT $3
+            )
+            SELECT m.similarity, ${columns}
+            FROM matches m
+            JOIN states s ON s.id = m.state_id ${joins}
             WHERE m.similarity > $4
             ORDER BY m.similarity DESC
           `;
@@ -566,15 +601,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
 
         if (results.length === 0) {
           const msg = isDateMode
-            ? 'No claims found in that date range. Some older observations have no claim, so there may be raw observations on this date without one.'
-            : 'No claims matched that query above the similarity threshold. Some older observations have no claim, so this may be a coverage gap rather than a real absence — try a broader query or ask about raw observations instead.';
+            ? 'No observations in that date range.'
+            : 'Nothing matched that query above the similarity threshold — try other words, or a date range.';
           return { content: [{ type: 'text', text: msg }] };
         }
 
         const formatted = results.map((r) => ({
           observation_id: r.state_id,
           similarity: isDateMode ? undefined : Number(r.similarity.toFixed(3)),
-          claim: r.claim_text,
+          ...(r.claim_text ? { claim: r.claim_text } : { text: r.text_start }),
           captured_at_manila: formatManilaTime(r.captured_at),
           captured_by: r.captured_by_name,
           links: r.links || null,
@@ -1419,18 +1454,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           // any depth, from while each was part of it, each once, labelled
           // with the components they are on (former ones marked).
           const observations = (await client.query(
-            `WITH RECURSIVE members(id, from_at, to_at, former) AS (
-               SELECT $1::text, '-infinity'::timestamptz, 'infinity'::timestamptz, false
-               UNION
-               SELECT m.entity_id::text, GREATEST(members.from_at, js.captured_at::timestamptz),
-                      LEAST(members.to_at, COALESCE(ended.captured_at::timestamptz, 'infinity'::timestamptz)),
-                      members.former OR ended.captured_at IS NOT NULL
-               FROM members
-               JOIN state_links p ON p.entity_type = 'part_of' AND p.entity_id::text = members.id
-               JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
-               JOIN states js ON js.id = p.state_id AND js.organization_id = ANY($2::uuid[])
-               ${ENDED_AT('js.id')}
-             )
+            `WITH RECURSIVE ${MEMBERS_CTE('$1', '$2')}
              SELECT s.id::text AS observation_id, s.captured_at, COALESCE(om.full_name, s.captured_by::text) AS captured_by,
                     c.claim, LEFT(s.state_text, 300) AS text_start,
                     EXISTS(SELECT 1 FROM state_photos ph WHERE ph.state_id = s.id) AS has_photos,
@@ -1642,22 +1666,29 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Make tools or parts components of a System (a tool whose category is System; set it with ' +
         'update_asset), e.g. the inverter and batteries part of the Solar System. A System can be part of ' +
         'another System. Each link is recorded as an observation on the component, linked to the System, ' +
-        'so it shows in both histories. Find assets with search_assets; confirm with the person first.',
+        'so it shows in both histories. Give since to backdate it to when it actually became part of the System ' +
+        '(e.g. when the goats arrived): the System then rolls up its observations from that day. For a component ' +
+        'already part of it, since corrects that date. Components that joined on different days take one call ' +
+        'per day. Find assets with search_assets; confirm with the person first.',
       inputSchema: {
         system_id: z.string().describe('The System\'s asset_id'),
         member_ids: z.array(z.string()).min(1).max(25).describe('asset_ids of the tools or parts that are part of it'),
+        since: MEMBERSHIP_DAY.optional().describe('The day it became part of the System, YYYY-MM-DD (Asia/Manila); leave out for today'),
         note: z.string().optional().describe('Anything worth saying about how it fits in, added to each observation'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ system_id, member_ids, note }) => {
-      console.log('link_assets called with:', JSON.stringify({ system_id, member_ids }));
+    async ({ system_id, member_ids, since, note }) => {
+      console.log('link_assets called with:', JSON.stringify({ system_id, member_ids, since }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
           content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow linking assets.' }],
           isError: true,
         };
+      }
+      if (since && since > manilaDateString(new Date())) {
+        return { content: [{ type: 'text', text: `${since} is in the future; give the day it actually became part of the System.` }], isError: true };
       }
       try {
         const { system, members, above, current } = await withDbClient(async (client) => {
@@ -1687,8 +1718,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              SELECT id FROM up`,
             [system_id, accessibleOrgIds]
           )).rows.map((r) => r.id);
-          const { components } = await findMemberships(client, system_id, accessibleOrgIds);
-          return { system, members, above, current: components.map((c) => c.asset_id) };
+          // Current memberships: the part_of observations not yet ended.
+          const current = (await client.query(
+            `SELECT m.entity_id::text AS member_id, s.id::text AS observation_id, s.organization_id, s.captured_at
+             FROM state_links p
+             JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+             JOIN states s ON s.id = p.state_id AND s.organization_id = ANY($2::uuid[])
+             WHERE p.entity_type = 'part_of' AND p.entity_id::text = $1
+               AND NOT EXISTS (SELECT 1 FROM state_links e WHERE e.entity_type = 'ends' AND e.entity_id = s.id)`,
+            [system_id, accessibleOrgIds]
+          )).rows;
+          return { system, members, above, current };
         });
         if (!system) return NOT_AN_ASSET(system_id);
         if (system.category !== 'System') {
@@ -1700,17 +1740,31 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const results = [];
         for (const member of members) {
           if (above.includes(member.id)) { results.push({ asset: member.name, result: `not linked: ${system.name} is part of it` }); continue; }
-          if (current.includes(member.id)) { results.push({ asset: member.name, result: 'already part of it' }); continue; }
+          const joined = current.find((c) => c.member_id === member.id);
+          if (joined) {
+            if (!since || manilaDateString(new Date(joined.captured_at)) === since) {
+              results.push({ asset: member.name, result: 'already part of it' });
+              continue;
+            }
+            try {
+              await updateObservation({ cognitoUserId, orgId: joined.organization_id, observationId: joined.observation_id, changes: { captured_at: dayStart(since) } });
+              results.push({ asset: member.name, result: `already part of it; now since ${since}` });
+            } catch (err) {
+              results.push({ asset: member.name, result: `date not changed: ${err.message}` });
+            }
+            continue;
+          }
           try {
             await createObservation({
               cognitoUserId,
               observation: {
                 state_text: `${member.name} is part of ${system.name}.${note?.trim() ? ` ${note.trim()}` : ''}`,
+                ...(since && { captured_at: dayStart(since) }),
                 photos: [],
                 links: [{ entity_type: member.type, entity_id: member.id }, { entity_type: 'part_of', entity_id: system.id }],
               },
             });
-            results.push({ asset: member.name, result: 'linked' });
+            results.push({ asset: member.name, result: since ? `linked, since ${since}` : 'linked' });
           } catch (err) {
             results.push({ asset: member.name, result: `not linked: ${err.message}` });
           }
@@ -1737,11 +1791,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         system_id: z.string().describe('The System\'s asset_id'),
         member_ids: z.array(z.string()).min(1).max(25).describe('asset_ids of the components to take out'),
         reason: z.string().optional().describe('Why it was taken out, e.g. "Replaced; it showed panel voltage at night"'),
+        until: MEMBERSHIP_DAY.optional().describe('The day it stopped being part of it, YYYY-MM-DD (Asia/Manila), to backdate; leave out for now'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ system_id, member_ids, reason }) => {
-      console.log('unlink_assets called with:', JSON.stringify({ system_id, member_ids }));
+    async ({ system_id, member_ids, reason, until }) => {
+      console.log('unlink_assets called with:', JSON.stringify({ system_id, member_ids, until }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1749,10 +1804,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
+      const today = manilaDateString(new Date());
+      if (until && until > today) {
+        return { content: [{ type: 'text', text: `${until} is in the future; take it out on the day it actually left.` }], isError: true };
+      }
       try {
         // Current memberships only: the part_of observations not yet ended.
         const links = await withDbClient(async (client) => (await client.query(
-          `SELECT s.id::text AS observation_id, m.entity_type AS type, m.entity_id::text AS member_id,
+          `SELECT s.id::text AS observation_id, s.captured_at, m.entity_type AS type, m.entity_id::text AS member_id,
                   COALESCE(t.name, pt.name) AS name, sys.name AS system
            FROM state_links p
            JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
@@ -1770,11 +1829,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const mine = links.filter((l) => l.member_id === id);
           if (mine.length === 0) { results.push({ asset_id: id, result: 'is not part of it' }); continue; }
           const { type, name, system } = mine[0];
+          const joinedOn = mine.map((l) => manilaDateString(new Date(l.captured_at))).sort().pop();
+          if (until && until < joinedOn) { results.push({ asset: name, result: `not taken out: it became part of it on ${joinedOn}, after ${until}` }); continue; }
           try {
             await createObservation({
               cognitoUserId,
               observation: {
                 state_text: `${name} removed from ${system}.${reason?.trim() ? ` ${reason.trim()}` : ''}`,
+                // A day before today ends at that day's close; today is now.
+                ...(until && until < today && { captured_at: dayEnd(until) }),
                 photos: [],
                 links: [
                   { entity_type: type, entity_id: id },
