@@ -497,3 +497,141 @@ describe('update_observation_links', () => {
     assert.strictEqual(invocations.length, 0);
   });
 });
+
+describe('search_claims asset_id', () => {
+  test('limits both modes to the asset\'s observations', async () => {
+    const client = await connect(['org-a']);
+    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01', asset_id: 'tool-1' } });
+    assert.match(queries[0].sql, /al\.entity_id::text = \$5/);
+    assert.strictEqual(queries[0].params[4], 'tool-1');
+    queries = [];
+    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01' } });
+    assert.strictEqual(queries[0].params[4], null);
+  });
+});
+
+describe('get_asset', () => {
+  test('a tool: details, area, accountable person, actions, edits and recent observations as claims', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{
+        type: 'tool', area: 'Tool Shed', accountable_person: 'Mae',
+        fields: { name: 'Inverter', description: 'Growatt 5kW', serial_number: null, parent_structure_id: 'shed-1', created_at: '2026-01-01T00:00:00Z', image_url: 'photos/inv.jpg' },
+      }];
+      if (sql.includes('FROM state_links sl')) return [
+        { observation_id: 'o-2', captured_at: '2026-11-02T00:00:00Z', captured_by: 'Mae', claim: 'Fan is loud', text_start: 'long note', has_photos: true, total: '12' },
+        { observation_id: 'o-1', captured_at: '2026-11-01T00:00:00Z', captured_by: 'Mae', claim: null, text_start: 'Checked wiring', has_photos: false, total: '12' },
+      ];
+      if (sql.includes('FROM actions a')) return [{ action_id: 'a-1', title: 'Clean fan', status: 'in_progress', updated_at: '2026-11-03T00:00:00Z' }];
+      if (sql.includes('FROM asset_history')) return [{ change_type: 'updated', field_changed: 'description', old_value: 'Growatt', new_value: 'Growatt 5kW', changed_at: '2026-11-03T00:00:00Z', changed_by: 'Mae' }];
+      return [];
+    };
+    const client = await connect(['org-a', 'org-b']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'tool-1' } })).content[0].text);
+    assert.deepStrictEqual(queries[0].params, ['tool-1', ['org-a', 'org-b']]);
+    assert.strictEqual(reply.type, 'tool');
+    assert.strictEqual(reply.description, 'Growatt 5kW');
+    assert.strictEqual('serial_number' in reply, false);
+    assert.strictEqual(reply.area, 'Tool Shed');
+    assert.strictEqual(reply.area_id, 'shed-1');
+    assert.strictEqual(reply.accountable_person, 'Mae');
+    assert.match(reply.photo, /^https:\/\/.*\/photos\/inv\.jpg$/);
+    assert.strictEqual(reply.actions[0].title, 'Clean fan');
+    assert.strictEqual(reply.recent_edits[0].field_changed, 'description');
+    assert.strictEqual(reply.observation_count, 12);
+    assert.strictEqual(reply.recent_observations[0].claim, 'Fan is loud');
+    assert.strictEqual('text_start' in reply.recent_observations[0], false);
+    assert.strictEqual(reply.recent_observations[1].text_start, 'Checked wiring');
+  });
+
+  test('a part shows quantities and recent stock changes', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{ type: 'part', fields: { name: 'Steel Wool', current_quantity: 3, minimum_quantity: 5, unit: 'kg', legacy_storage_vicinity: 'Shed' } }];
+      if (sql.includes('FROM parts_history')) return [{ quantity_change: '-2.000', new_quantity: '3.000', change_reason: 'Used', changed_at: '2026-11-03T00:00:00Z', changed_by: 'Mae' }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'part-1' } })).content[0].text);
+    assert.strictEqual(reply.current_quantity, 3);
+    assert.strictEqual(reply.storage_vicinity, 'Shed');
+    assert.deepStrictEqual(reply.recent_stock_changes[0].quantity_change, -2);
+    assert.strictEqual(reply.observation_count, 0);
+    assert.strictEqual(queries.some((q) => q.sql.includes('FROM actions a')), false);
+  });
+
+  test('an asset outside the caller orgs is not found', async () => {
+    rows = [];
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'get_asset', arguments: { asset_id: 'x' } });
+    assert.strictEqual(result.isError, true);
+  });
+});
+
+describe('create_asset and update_asset', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const db = (role, extra = {}) => (sql) => {
+    if (sql.includes('SELECT role')) return role ? [{ role }] : [];
+    if (sql.includes('category = ANY')) return extra.area ? [{ id: extra.area }] : [];
+    if (sql.includes('user_id IS NOT NULL')) return [{ user_id: 'user-mae', full_name: 'Mae Santos' }];
+    if (sql.includes('UNION ALL')) return extra.asset ? [extra.asset] : [];
+    return [];
+  };
+
+  test('creates a part in the primary org with its area and accountable person', async () => {
+    rows = db('admin', { area: 'shed-1' });
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_asset', arguments: {
+      type: 'part', name: 'Steel Wool', current_quantity: 4, unit: 'kg', area_id: 'shed-1', accountable_person: 'Mae',
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-core-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/parts');
+    assert.strictEqual(event.headers['X-Organization-Id'], undefined);
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      name: 'Steel Wool', unit: 'kg', parent_structure_id: 'shed-1', accountable_person_id: 'user-mae', current_quantity: 4,
+    });
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('SELECT role')).params, ['cognito-1', 'org-a']);
+  });
+
+  test('refused, with nothing created: wrong-type fields, not an area, a contributor choosing who is accountable, a viewer, read-only', async () => {
+    const attempts = [
+      [db('admin'), { type: 'tool', name: 'Drill', unit: 'kg' }],
+      [db('admin'), { type: 'part', name: 'Wool', serial_number: 'X1' }],
+      [db('admin'), { type: 'tool', name: 'Drill', current_quantity: 1 }],
+      [db('admin'), { type: 'tool', name: 'Drill', area_id: 'not-an-area' }],
+      [db('contributor'), { type: 'tool', name: 'Drill', accountable_person: 'Mae' }],
+      [db('viewer'), { type: 'tool', name: 'Drill' }],
+    ];
+    for (const [r, args] of attempts) {
+      rows = r;
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      assert.strictEqual((await client.callTool({ name: 'create_asset', arguments: args })).isError, true, JSON.stringify(args));
+    }
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_asset', arguments: { type: 'tool', name: 'Drill' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('update sends only the fields given, null clearing, in the asset org', async () => {
+    rows = db('contributor', { asset: { type: 'tool', id: 'tool-1', organization_id: 'org-b' } });
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1', description: 'Growatt 5kW', area_id: null } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ event }] = invocations;
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/tools/tool-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { description: 'Growatt 5kW', parent_structure_id: null });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).changed, ['description', 'area_id']);
+  });
+
+  test('nothing to change, or an asset outside the caller orgs, changes nothing', async () => {
+    rows = db('admin');
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1' } })).isError, true);
+    assert.strictEqual((await client.callTool({ name: 'update_asset', arguments: { asset_id: 'x', name: 'New' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+

@@ -74,6 +74,18 @@ export async function changeStock({ cognitoUserId, orgId, partId, change, reason
   return invokeApp('cwf-core-lambda', '/api/parts_history', { part_id: partId, quantity_change: change, change_reason: reason }, { cognitoUserId, orgId });
 }
 
+// A new tool or part, through the parts and tools service as the app's add
+// form does, in the primary org (none given).
+export async function createAsset({ cognitoUserId, type, asset }) {
+  return (await invokeApp('cwf-core-lambda', `/api/${type}s`, asset, { cognitoUserId })).data;
+}
+
+// Only the fields given change, in the asset's org (orgId). Tool edits are
+// logged in its history by the service.
+export async function updateAsset({ cognitoUserId, orgId, type, assetId, changes }) {
+  return (await invokeApp('cwf-core-lambda', `/api/${type}s/${assetId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: assetId })).data;
+}
+
 // The app stores policy as rich text (HTML); spoken plans arrive as plain text.
 export function policyToHtml(text) {
   const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
