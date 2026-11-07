@@ -6,6 +6,7 @@ import {
   createAction, updateAction, createObservation, updateObservation, policyToHtml,
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
+  createExperience, updateExperience, deleteExperience,
 } from './actions.js';
 
 const SIMILARITY_THRESHOLD = 0.45;
@@ -335,9 +336,105 @@ async function findMemberships(client, assetId, orgIds) {
   };
 }
 
+// Experiences: a write-up on one tool or part of initial states, actions
+// and final states (S → A → S'), each pointing at an existing observation or
+// action. Any leg may be empty. The write-up holds no text of its own.
+const LEGS = { initial_state: 'initial_states', action: 'actions', final_state: 'final_states' };
+const LEG_ORDER = `CASE ec.component_type WHEN 'initial_state' THEN 1 WHEN 'action' THEN 2 ELSE 3 END`;
+
+// Summaries of the experiences matching the filters, newest first, each
+// with a short label per component (claim, start of the note, or action
+// title), and how many match in all.
+async function findExperiences(client, { orgIds, assetId, observationIds, actionIds, from, to, limit }) {
+  const params = [orgIds];
+  const add = (v) => { params.push(v); return `$${params.length}`; };
+  const where = ['e.organization_id = ANY($1::uuid[])'];
+  if (assetId) where.push(`e.entity_id::text = ${add(assetId)}`);
+  if (observationIds?.length || actionIds?.length) {
+    where.push(`EXISTS (SELECT 1 FROM experience_components fc WHERE fc.experience_id = e.id
+      AND (fc.state_id::text = ANY(${add(observationIds || [])}::text[]) OR fc.action_id::text = ANY(${add(actionIds || [])}::text[])))`);
+  }
+  if (from) {
+    where.push(`e.created_at >= (${add(from)}::date::timestamp AT TIME ZONE 'Asia/Manila')
+      AND e.created_at < ((${add(to)}::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')`);
+  }
+  const experiences = (await client.query(
+    `SELECT e.id::text AS experience_id, e.entity_type AS type, e.entity_id::text AS asset_id,
+            COALESCE(t.name, p.name) AS asset, e.created_at, om.full_name AS written_by,
+            COUNT(*) OVER () AS total
+     FROM experiences e
+     LEFT JOIN tools t ON e.entity_type = 'tool' AND t.id = e.entity_id
+     LEFT JOIN parts p ON e.entity_type = 'part' AND p.id = e.entity_id
+     LEFT JOIN organization_members om ON om.id = e.created_by
+     WHERE ${where.join(' AND ')}
+     ORDER BY e.created_at DESC
+     LIMIT ${add(limit)}`,
+    params
+  )).rows;
+  if (experiences.length === 0) return { total: 0, experiences: [] };
+  const components = (await client.query(
+    `SELECT ec.experience_id::text AS experience_id, ec.component_type,
+            COALESCE(c.claim, LEFT(s.state_text, 150), a.title) AS label
+     FROM experience_components ec
+     LEFT JOIN states s ON s.id = ec.state_id
+     LEFT JOIN actions a ON a.id = ec.action_id
+     LEFT JOIN LATERAL (
+       SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+       WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+     ) c ON true
+     WHERE ec.experience_id::text = ANY($1::text[])
+     ORDER BY ${LEG_ORDER}, COALESCE(s.captured_at, a.completed_at, ec.created_at)`,
+    [experiences.map((e) => e.experience_id)]
+  )).rows;
+  return {
+    total: Number(experiences[0].total),
+    experiences: experiences.map(({ total, created_at, type, asset_id, asset, ...e }) => {
+      const mine = components.filter((c) => c.experience_id === e.experience_id);
+      return {
+        ...e,
+        asset: asset_id ? { asset_id, type, name: asset } : null,
+        written_at_manila: formatManilaTime(created_at),
+        ...Object.fromEntries(Object.entries(LEGS).map(([type, leg]) => [leg, mine.filter((c) => c.component_type === type).map((c) => c.label)])),
+      };
+    }),
+  };
+}
+
+// The observations and actions that exist in the caller's orgs, of those given.
+async function missingComponents(client, { observationIds, actionIds }, orgIds) {
+  const found = (await client.query(
+    `SELECT id::text AS id FROM states WHERE id::text = ANY($1::text[]) AND organization_id = ANY($3::uuid[])
+     UNION ALL
+     SELECT id::text FROM actions WHERE id::text = ANY($2::text[]) AND organization_id = ANY($3::uuid[])`,
+    [observationIds, actionIds, orgIds]
+  )).rows.map((r) => r.id);
+  return [...observationIds, ...actionIds].filter((id) => !found.includes(id));
+}
+
+const NOT_AN_EXPERIENCE = (id) => ({
+  content: [{ type: 'text', text: `No experience ${id} in your organizations — find it with search_experiences.` }],
+  isError: true,
+});
+
 const NOT_AN_ASSET = (id) => ({
   content: [{ type: 'text', text: `No tool or part ${id} in your organizations — find it with search_assets.` }],
   isError: true,
+});
+
+// When a photo was taken and where, from its own metadata (EXIF, the file,
+// or the phone when it was uploaded), as far as they are known.
+const PHOTO_METADATA = (photoUrlRef) => `LEFT JOIN LATERAL (
+  SELECT pme.captured_at AS taken_at, pme.gps_latitude, pme.gps_longitude
+  FROM photo_metadata_extractions pme WHERE pme.photo_url = ${photoUrlRef}
+  ORDER BY pme.updated_at DESC NULLS LAST LIMIT 1
+) pm ON true`;
+// Unlike every other time here, a photo's captured_at holds Manila clock
+// digits stored as if UTC (the app's convention for EXIF and file times; see
+// manilaLocalDigitsAsUtc in lambda/states), so it is shifted back to the
+// real instant before formatting.
+const photoTakenWhere = (p) => ({
+  ...(p.taken_at && { taken_at_manila: formatManilaTime(new Date(p.taken_at).getTime() - 8 * 3600 * 1000) }),
+  ...(p.gps_latitude != null && p.gps_longitude != null && { gps: `${Number(p.gps_latitude)},${Number(p.gps_longitude)}` }),
 });
 
 // accessibleOrgIds, callerName, cognitoUserId and canWrite come from the
@@ -505,7 +602,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'an observation_id from search_claims, search_actions or ' +
         'search_financial_records. Returns actual inline ' +
         'images, not links. Farm photo storage is a public S3 bucket, fetched ' +
-        'server-side and returned as image content.',
+        'server-side and returned as image content. Each photo comes with its photo_url ' +
+        'and, when known, when it was taken and its GPS position (latitude,longitude) — ' +
+        'the photo\'s own date can differ from the observation\'s, e.g. when it was uploaded later.',
       inputSchema: {
         observation_id: z.string().describe('An observation_id (state id) from a search result'),
       },
@@ -516,9 +615,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       try {
         const photos = await withDbClient(async (client) => {
           const res = await client.query(
-            `SELECT sp.photo_url, sp.photo_description
+            `SELECT sp.photo_url, sp.photo_description, pm.taken_at, pm.gps_latitude, pm.gps_longitude
              FROM state_photos sp
              JOIN states s ON s.id = sp.state_id
+             ${PHOTO_METADATA('sp.photo_url')}
              WHERE sp.state_id = $1
                AND s.organization_id = ANY($3::uuid[])
              ORDER BY sp.photo_order
@@ -544,9 +644,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             const mimeType = response.headers.get('content-type') || 'image/jpeg';
             const buffer = Buffer.from(await response.arrayBuffer());
             content.push({ type: 'image', data: buffer.toString('base64'), mimeType });
-            if (photo.photo_description) {
-              content.push({ type: 'text', text: photo.photo_description });
-            }
+            // The photo_url names it, e.g. to pick it for an experience.
+            const { taken_at_manila, gps } = photoTakenWhere(photo);
+            content.push({ type: 'text', text: [
+              `photo_url: ${photo.photo_url}`,
+              taken_at_manila && `taken: ${taken_at_manila}`,
+              gps && `gps: ${gps}`,
+              photo.photo_description,
+            ].filter(Boolean).join('\n') });
           } catch (fetchErr) {
             content.push({ type: 'text', text: `Failed to fetch photo: ${fetchErr.message}` });
           }
@@ -1282,7 +1387,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'the components it is (and was) made of, with dates, and the most recent observations as claims (short ' +
         'summaries) with how many there are in all. A System\'s observations include those of everything it is ' +
         'made of, at any depth, from while each was part of it, labelled with the component (from_components; ' +
-        'former components marked), so problems with a replaced component stay in view. For older or specific observations ' +
+        'former components marked), so problems with a replaced component stay in view. Its most recent ' +
+        'experiences (get_experience for one in full) and how many it has. For older or specific observations ' +
         'use search_claims with asset_id; for a full observation or its photos use get_observation_photos.',
       inputSchema: {
         asset_id: z.string().describe('The asset_id from search_assets'),
@@ -1360,7 +1466,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
                LIMIT 5`,
               [asset_id]
             )).rows;
-            return { asset, observations, stockChanges, memberships };
+            const experiences = await findExperiences(client, { orgIds: accessibleOrgIds, assetId: asset_id, limit: 3 });
+            return { asset, observations, stockChanges, memberships, experiences };
           }
           const actions = (await client.query(
             `SELECT a.id::text AS action_id, a.title, a.status, a.updated_at
@@ -1380,10 +1487,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [asset_id]
           )).rows;
           const metrics = await findToolMetrics(client, [asset_id], accessibleOrgIds);
-          return { asset, observations, actions, edits, metrics, memberships };
+          const experiences = await findExperiences(client, { orgIds: accessibleOrgIds, assetId: asset_id, limit: 3 });
+          return { asset, observations, actions, edits, metrics, memberships, experiences };
         });
         if (!found) return NOT_AN_ASSET(asset_id);
-        const { asset, observations, stockChanges, actions, edits, metrics, memberships: ms } = found;
+        const { asset, observations, stockChanges, actions, edits, metrics, memberships: ms, experiences } = found;
         const f = asset.fields;
         const keys = asset.type === 'tool'
           ? ['name', 'category', 'description', 'serial_number', 'status', 'storage_location', 'actual_location', 'last_maintenance', 'manual_url']
@@ -1411,6 +1519,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           ...(stockChanges?.length > 0 && { recent_stock_changes: stockChanges.map((c) => ({
             ...c, quantity_change: Number(c.quantity_change), new_quantity: Number(c.new_quantity), changed_at: formatManilaTime(c.changed_at),
           })) }),
+          ...(experiences.total > 0 && {
+            experience_count: experiences.total,
+            recent_experiences: experiences.experiences.map(({ asset, ...e }) => e),
+          }),
           observation_count: Number(observations[0]?.total || 0),
           recent_observations: observations.map((o) => ({
             observation_id: o.observation_id,
@@ -1680,6 +1792,376 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       } catch (err) {
         console.log('unlink_assets failed:', err.message);
         return { content: [{ type: 'text', text: `Could not unlink the assets: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'search_experiences',
+    {
+      title: 'Search experiences',
+      description:
+        'Find experiences: write-ups, on a tool or part or on nothing in particular, of initial states (how things were), actions (what ' +
+        'was done) and final states (how they turned out), each an existing observation or action. Filter by ' +
+        'asset_id, by when they were written up (relative or date_from/date_to), or by the observations and ' +
+        'actions in them. Experiences have no text of their own, so to find them by topic, search_claims or ' +
+        'search_actions first and pass the ids found. Newest first, each with a short label per component. ' +
+        'Open one in full with get_experience.',
+      inputSchema: {
+        asset_id: z.string().optional().describe('Only experiences on this tool or part'),
+        observation_ids: z.array(z.string()).max(50).optional().describe('Only experiences that include any of these observations'),
+        action_ids: z.array(z.string()).max(50).optional().describe('Only experiences that include any of these actions'),
+        relative: SEARCH_INPUTS.relative,
+        date_from: SEARCH_INPUTS.date_from,
+        date_to: SEARCH_INPUTS.date_to,
+        limit: z.number().int().min(1).max(50).optional().describe('Max results, default 10'),
+      },
+    },
+    async ({ asset_id, observation_ids, action_ids, relative, date_from, date_to, limit }) => {
+      console.log('search_experiences called with:', JSON.stringify({ asset_id, observation_ids, action_ids, relative, date_from, date_to, limit }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      const { resolvedFrom, resolvedTo } = resolveWindow('search_experiences', { relative, date_from, date_to });
+      try {
+        const found = await withDbClient((client) => findExperiences(client, {
+          orgIds: accessibleOrgIds, assetId: asset_id, observationIds: observation_ids, actionIds: action_ids,
+          from: resolvedFrom, to: resolvedTo, limit: limit || DEFAULT_LIMIT,
+        }));
+        console.log(`search_experiences: -> ${found.experiences.length} of ${found.total}`);
+        if (found.total === 0) return { content: [{ type: 'text', text: 'No experiences matched.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(found, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error searching experiences: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'get_experience',
+    {
+      title: 'Get an experience',
+      description:
+        'One experience in full, as its page in the app shows it: the tool or part it is on (if any), who wrote it ' +
+        'up, and each initial state, action and final state in order. Observations come with their note, ' +
+        'claim, readings and whether they have photos (get_observation_photos to see them); actions with ' +
+        'their title, type, status, completion date and claim (the account of what was done), plus the ' +
+        'person\'s own rewrite of that claim for this experience if there is one, and the photos on the ' +
+        'action\'s observations with whether each is included in this write-up (action_photos on ' +
+        'update_experience picks them). An experience need not be on an asset.',
+      inputSchema: {
+        experience_id: z.string().describe('The experience_id from search_experiences or get_asset'),
+      },
+    },
+    async ({ experience_id }) => {
+      console.log('get_experience called with:', JSON.stringify({ experience_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      try {
+        const found = await withDbClient(async (client) => {
+          const experience = (await client.query(
+            `SELECT e.id::text AS id, e.entity_type AS type, e.entity_id::text AS asset_id, COALESCE(t.name, p.name) AS asset,
+                    e.created_at, e.metadata, om.full_name AS written_by
+             FROM experiences e
+             LEFT JOIN tools t ON e.entity_type = 'tool' AND t.id = e.entity_id
+             LEFT JOIN parts p ON e.entity_type = 'part' AND p.id = e.entity_id
+             LEFT JOIN organization_members om ON om.id = e.created_by
+             WHERE e.id::text = $1 AND e.organization_id = ANY($2::uuid[])`,
+            [experience_id, accessibleOrgIds]
+          )).rows[0];
+          if (!experience) return null;
+          const components = (await client.query(
+            `SELECT ec.component_type, ec.state_id::text AS observation_id, ec.action_id::text AS action_id,
+                    s.captured_at, LEFT(s.state_text, 1000) AS text, sc.claim AS observation_claim,
+                    EXISTS(SELECT 1 FROM state_photos ph WHERE ph.state_id = s.id) AS has_photos,
+                    a.title, a.status, a.completed_at, a.scoring_data->>'action_type' AS action_type, ac.claim AS action_claim
+             FROM experience_components ec
+             LEFT JOIN states s ON s.id = ec.state_id
+             LEFT JOIN actions a ON a.id = ec.action_id
+             LEFT JOIN LATERAL (
+               SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+               WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+             ) sc ON true
+             LEFT JOIN LATERAL (
+               SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+               WHERE cp.action_id = a.id AND cp.perspective_type = 'CLAIM' LIMIT 1
+             ) ac ON true
+             WHERE ec.experience_id::text = $1
+             ORDER BY ${LEG_ORDER}, COALESCE(s.captured_at, a.completed_at, ec.created_at)`,
+            [experience_id]
+          )).rows;
+          // Each action's photos: those on observations linked to it. Which
+          // belong in this write-up is picked per experience (default none).
+          const actionIds = components.map((c) => c.action_id).filter(Boolean);
+          const actionPhotos = actionIds.length === 0 ? [] : (await client.query(
+            `SELECT sl.entity_id::text AS action_id, sp.state_id::text AS observation_id, sp.photo_url, sp.photo_description,
+                    pm.taken_at, pm.gps_latitude, pm.gps_longitude
+             FROM state_links sl
+             JOIN states s ON s.id = sl.state_id
+             JOIN state_photos sp ON sp.state_id = s.id
+             ${PHOTO_METADATA('sp.photo_url')}
+             WHERE sl.entity_type = 'action' AND sl.entity_id::text = ANY($1::text[])
+             ORDER BY s.captured_at, sp.photo_order`,
+            [actionIds]
+          )).rows;
+          const stateIds = components.map((c) => c.observation_id).filter(Boolean);
+          const readings = stateIds.length === 0 ? [] : (await client.query(
+            `SELECT ms.state_id::text AS observation_id, m.name, ms.value, m.unit
+             FROM metric_snapshots ms JOIN metrics m ON m.metric_id = ms.metric_id
+             WHERE ms.state_id::text = ANY($1::text[])`,
+            [stateIds]
+          )).rows;
+          return { experience, components, readings, actionPhotos };
+        });
+        if (!found) return NOT_AN_EXPERIENCE(experience_id);
+        const { experience: e, components, readings, actionPhotos } = found;
+        const edits = e.metadata?.action_claim_edits || {};
+        const included = e.metadata?.action_photo_inclusions || {};
+        const describe = (c) => c.action_id
+          ? {
+            action_id: c.action_id, title: c.title, ...(c.action_type && { type: c.action_type }), status: c.status,
+            ...(c.completed_at && { completed_at_manila: formatManilaTime(c.completed_at) }),
+            ...(c.action_claim && { claim: c.action_claim }),
+            ...(edits[c.action_id] && { claim_as_rewritten_here: edits[c.action_id] }),
+            ...(actionPhotos.some((ph) => ph.action_id === c.action_id) && {
+              photos: actionPhotos.filter((ph) => ph.action_id === c.action_id).map(({ action_id, photo_description, taken_at, gps_latitude, gps_longitude, ...ph }) => ({
+                ...ph,
+                ...(photo_description && { description: photo_description }),
+                ...photoTakenWhere({ taken_at, gps_latitude, gps_longitude }),
+                included: (included[c.action_id] || []).includes(ph.photo_url),
+              })),
+            }),
+          }
+          : {
+            observation_id: c.observation_id,
+            captured_at_manila: formatManilaTime(c.captured_at),
+            ...(c.text && { text: c.text }),
+            ...(c.observation_claim && { claim: c.observation_claim }),
+            ...(readings.some((r) => r.observation_id === c.observation_id) && {
+              readings: readings.filter((r) => r.observation_id === c.observation_id).map(({ observation_id, ...r }) => r),
+            }),
+            has_photos: c.has_photos,
+          };
+        console.log(`get_experience: ${e.id}, ${components.length} components`);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          experience_id: e.id,
+          asset: e.asset_id ? { asset_id: e.asset_id, type: e.type, name: e.asset } : null,
+          written_by: e.written_by,
+          written_at_manila: formatManilaTime(e.created_at),
+          link: `https://stargazer-farm.com/experiences/${e.id}`,
+          ...Object.fromEntries(Object.entries(LEGS).map(([type, leg]) => [leg, components.filter((c) => c.component_type === type).map(describe)])),
+        }, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error getting the experience: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  const LEG_INPUTS = {
+    initial_state_ids: z.array(z.string()).max(25).optional().describe('Observations of how things were before'),
+    action_ids: z.array(z.string()).max(25).optional().describe('Actions: what was done'),
+    final_state_ids: z.array(z.string()).max(25).optional().describe('Observations of how things turned out; none yet is fine for something still under way'),
+    action_photos: z.record(z.string(), z.array(z.string()).max(50)).optional().describe(
+      'action_id → the photo_urls, from photos on that action\'s observations, that belong in this write-up (get_observation_photos ' +
+      'shows each photo with its photo_url). Replaces that action\'s pick; an empty list includes none.'),
+  };
+
+  // Photo picks must be photos on the action's own observations.
+  async function photosNotOnActions(client, actionPhotos) {
+    const picks = Object.entries(actionPhotos || {}).flatMap(([actionId, urls]) => urls.map((url) => [actionId, url]));
+    if (picks.length === 0) return [];
+    const on = (await client.query(
+      `SELECT sl.entity_id::text AS action_id, sp.photo_url
+       FROM state_links sl JOIN state_photos sp ON sp.state_id = sl.state_id
+       WHERE sl.entity_type = 'action' AND sl.entity_id::text = ANY($1::text[])`,
+      [Object.keys(actionPhotos)]
+    )).rows;
+    return picks.filter(([actionId, url]) => !on.some((r) => r.action_id === actionId && r.photo_url === url)).map(([, url]) => url);
+  }
+
+  server.registerTool(
+    'create_experience',
+    {
+      title: 'Write up an experience',
+      description:
+        'Write up an experience: the initial states (how things were), the actions (what was done) and the ' +
+        'final states (how it turned out), as existing observations and actions. Find them with search_claims ' +
+        'and search_actions, and look at their photos with get_observation_photos to pick the ones that show ' +
+        'the change; an observation that doesn\'t exist yet can be recorded first with add_observation. It can be ' +
+        'on a tool or part, or on nothing in particular (e.g. a trial marked by a stake that isn\'t an asset). ' +
+        'Any leg may be empty. Read the write-up back to the person (each leg, and the photos picked) and only ' +
+        'call this once they say yes.',
+      inputSchema: {
+        asset_id: z.string().optional().describe('The tool or part it is about (search_assets), if any'),
+        ...LEG_INPUTS,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ asset_id, initial_state_ids = [], action_ids = [], final_state_ids = [], action_photos }) => {
+      console.log('create_experience called with:', JSON.stringify({ asset_id, initial_state_ids, action_ids, final_state_ids, action_photos }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow writing up experiences.' }],
+          isError: true,
+        };
+      }
+      try {
+        const { asset, missing, strayPhotos } = await withDbClient(async (client) => ({
+          asset: asset_id && (await client.query(
+            `SELECT 'tool' AS type, id::text AS id, name FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])
+             UNION ALL
+             SELECT 'part', id::text, name FROM parts WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+            [asset_id, accessibleOrgIds]
+          )).rows[0],
+          missing: await missingComponents(client, { observationIds: [...initial_state_ids, ...final_state_ids], actionIds: action_ids }, accessibleOrgIds),
+          strayPhotos: await photosNotOnActions(client, action_photos),
+        }));
+        if (asset_id && !asset) return NOT_AN_ASSET(asset_id);
+        if (missing.length > 0) {
+          return { content: [{ type: 'text', text: `Not found in your organizations: ${missing.join(', ')}. Nothing was written up.` }], isError: true };
+        }
+        const notInIt = Object.keys(action_photos || {}).filter((id) => !action_ids.includes(id));
+        if (notInIt.length > 0 || strayPhotos.length > 0) {
+          return { content: [{ type: 'text', text: `Photos can only be picked from the photos on an action in it${notInIt.length ? ` (not in it: ${notInIt.join(', ')})` : ''}${strayPhotos.length ? ` (not on that action: ${strayPhotos.join(', ')})` : ''}. Nothing was written up.` }], isError: true };
+        }
+        const created = await createExperience({
+          cognitoUserId,
+          experience: {
+            ...(asset && { entity_type: asset.type, entity_id: asset.id }),
+            initial_state_ids, action_ids, final_state_ids,
+            ...(action_photos && { action_photo_inclusions: action_photos }),
+          },
+        });
+        console.log('create_experience: created', created.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          experience_id: created.id, asset: asset?.name ?? null, link: `https://stargazer-farm.com/experiences/${created.id}`,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('create_experience failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not write up the experience: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_experience',
+    {
+      title: 'Edit an experience',
+      description:
+        'Change an experience, as its page in the app does. Each leg given replaces that leg (an empty list ' +
+        'clears it); legs left out stay as they are, so get_experience first and pass the full list you want. ' +
+        'action_claim_rewrites rewrites the account of what an action did for this experience only; the ' +
+        'action\'s own claim is kept. action_photos picks which of an action\'s photos belong in it. To change ' +
+        'an observation\'s note, use update_observation. Only whoever ' +
+        'wrote it up, or an admin, can edit it. Confirm the change with the person first.',
+      inputSchema: {
+        experience_id: z.string(),
+        ...LEG_INPUTS,
+        action_claim_rewrites: z.record(z.string(), z.string().min(1)).optional().describe('action_id → the person\'s account of what that action did, for this experience'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ experience_id, initial_state_ids, action_ids, final_state_ids, action_claim_rewrites, action_photos }) => {
+      console.log('update_experience called with:', JSON.stringify({ experience_id, initial_state_ids, action_ids, final_state_ids, rewrites: Object.keys(action_claim_rewrites || {}) }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing experiences.' }],
+          isError: true,
+        };
+      }
+      if ([initial_state_ids, action_ids, final_state_ids, action_claim_rewrites, action_photos].every((v) => v === undefined)) {
+        return { content: [{ type: 'text', text: 'Give a leg, a claim rewrite or photos to change.' }], isError: true };
+      }
+      try {
+        const { experience, missing, notAttached, strayPhotos } = await withDbClient(async (client) => {
+          const experience = (await client.query(
+            `SELECT e.id::text AS id, e.organization_id,
+                    ARRAY(SELECT ec.action_id::text FROM experience_components ec WHERE ec.experience_id = e.id AND ec.action_id IS NOT NULL) AS action_ids
+             FROM experiences e WHERE e.id::text = $1 AND e.organization_id = ANY($2::uuid[])`,
+            [experience_id, accessibleOrgIds]
+          )).rows[0];
+          if (!experience) return {};
+          const missing = await missingComponents(client, {
+            observationIds: [...(initial_state_ids || []), ...(final_state_ids || [])], actionIds: action_ids || [],
+          }, accessibleOrgIds);
+          // A rewrite is of an action in this experience, as it will be after this change.
+          const actionsAfter = action_ids || experience.action_ids;
+          const notAttached = [...Object.keys(action_claim_rewrites || {}), ...Object.keys(action_photos || {})]
+            .filter((id) => !actionsAfter.includes(id));
+          return { experience, missing, notAttached, strayPhotos: await photosNotOnActions(client, action_photos) };
+        });
+        if (!experience) return NOT_AN_EXPERIENCE(experience_id);
+        if (missing.length > 0) {
+          return { content: [{ type: 'text', text: `Not found in your organizations: ${missing.join(', ')}. Nothing was changed.` }], isError: true };
+        }
+        if (notAttached.length > 0) {
+          return { content: [{ type: 'text', text: `Not an action in this experience: ${[...new Set(notAttached)].join(', ')}. Nothing was changed.` }], isError: true };
+        }
+        if (strayPhotos.length > 0) {
+          return { content: [{ type: 'text', text: `Not a photo on that action's observations: ${strayPhotos.join(', ')}. Nothing was changed.` }], isError: true };
+        }
+        await updateExperience({
+          cognitoUserId,
+          orgId: experience.organization_id,
+          experienceId: experience.id,
+          changes: {
+            ...(initial_state_ids && { initial_state_ids }),
+            ...(action_ids && { action_ids }),
+            ...(final_state_ids && { final_state_ids }),
+            ...(action_claim_rewrites && { action_claim_edits: action_claim_rewrites }),
+            ...(action_photos && { action_photo_inclusions: action_photos }),
+          },
+        });
+        console.log('update_experience: updated', experience.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          experience_id: experience.id,
+          changed: [
+            ...['initial_state_ids', 'action_ids', 'final_state_ids'].filter((k) => ({ initial_state_ids, action_ids, final_state_ids })[k]),
+            ...(action_claim_rewrites ? ['action_claim_rewrites'] : []),
+            ...(action_photos ? ['action_photos'] : []),
+          ],
+          link: `https://stargazer-farm.com/experiences/${experience.id}`,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('update_experience failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not edit the experience: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'delete_experience',
+    {
+      title: 'Delete an experience',
+      description:
+        'Delete an experience write-up, as the app\'s delete does. Only the write-up goes: its observations ' +
+        'and actions stay. Only whoever wrote it up, or an admin, can delete it. This cannot be undone, so ' +
+        'tell the person which experience it is (asset, date, what it covers) and only call this once they say yes.',
+      inputSchema: {
+        experience_id: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ experience_id }) => {
+      console.log('delete_experience called with:', JSON.stringify({ experience_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow deleting experiences.' }],
+          isError: true,
+        };
+      }
+      try {
+        const experience = await withDbClient(async (client) => (await client.query(
+          `SELECT id::text AS id, organization_id FROM experiences WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [experience_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!experience) return NOT_AN_EXPERIENCE(experience_id);
+        await deleteExperience({ cognitoUserId, orgId: experience.organization_id, experienceId: experience.id });
+        console.log('delete_experience: deleted', experience.id);
+        return { content: [{ type: 'text', text: JSON.stringify({ experience_id: experience.id, deleted: true }, null, 2) }] };
+      } catch (err) {
+        console.log('delete_experience failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not delete the experience: ${err.message}` }], isError: true };
       }
     }
   );

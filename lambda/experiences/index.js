@@ -912,12 +912,14 @@ exports.handler = async (event) => {
         llm_generation_config_id,
       } = body;
 
-      // Only the entity is genuinely required. A final state is NOT — an
+      // No leg is required. A final state is NOT — an
       // experience with an initial state and an action but no observed
       // outcome yet is a normal in-progress experiment, and forcing one here
       // would make people invent an outcome to satisfy the API.
-      if (!entity_type || !entity_id) {
-        return error('entity_type and entity_id are required', 400);
+      // Nor is an asset: an experience can stand on observations and actions
+      // alone. When there is one, both its type and id are given.
+      if (!entity_type !== !entity_id) {
+        return error('entity_type and entity_id go together: give both or neither', 400);
       }
 
       // Singular forms are deprecated but still accepted (StockDetails.tsx).
@@ -927,7 +929,7 @@ exports.handler = async (event) => {
       const allActionIds = [...new Set([...(action_ids || []), ...(action_id ? [action_id] : [])])];
 
       // Validate entity_type
-      if (!['tool', 'part'].includes(entity_type)) {
+      if (entity_type && !['tool', 'part'].includes(entity_type)) {
         return error('entity_type must be "tool" or "part"', 400);
       }
 
@@ -954,7 +956,7 @@ exports.handler = async (event) => {
            (entity_type, entity_id, organization_id, created_by, created_at, metadata)
            VALUES ($1, $2, $3, $4, NOW(), $5)
            RETURNING *`,
-          [entity_type, entity_id, organizationId, orgMemberId, JSON.stringify(initialMetadata)]
+          [entity_type || null, entity_id || null, organizationId, orgMemberId, JSON.stringify(initialMetadata)]
         );
 
         const experience = experienceResult.rows[0];
