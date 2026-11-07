@@ -505,7 +505,10 @@ async function getOrCreateExtractionConfig(client) {
 // ─── Core processing logic for a single pending_perspectives record ───────────
 // `offersOnly`: only the offers reading, for an observation whose other
 // perspectives already exist (one shared after it was made).
-async function processPendingRecord(client, record, offersOnly = false) {
+// `claimsOnly`: only CLAIM/SIGNIFICANCE, for backfilling older observations
+// — no offers reading or org processors, which would credit or measure old
+// work as if it were new.
+async function processPendingRecord(client, record, offersOnly = false, claimsOnly = false) {
   // Mark as processing
   await client.query(`
     UPDATE pending_perspectives 
@@ -563,13 +566,14 @@ async function processPendingRecord(client, record, offersOnly = false) {
   // if nothing at all applies (nothing should have been queued in that case).
   const linksRes = await client.query('SELECT * FROM state_links WHERE state_id = $1', [state.id]);
   // Pages showing an offer on this observation's action refresh, so it shows as being read.
-  const offerActions = await offerActionIds(client, linksRes.rows, state).catch(err => {
+  const offerActions = claimsOnly ? [] : await offerActionIds(client, linksRes.rows, state).catch(err => {
     console.error('[RSP] offers: could not find offers for state', state.id, err.message);
     return [];
   });
   await broadcastOfferActions(offerActions, state.organization_id);
 
   const readOffers = async () => {
+    if (claimsOnly) return;
     try {
       const reading = await runOffersReading(client, {
         state, links: linksRes.rows, text: getCombinedStateText(state), invokeBedrock, embedText,
@@ -595,7 +599,7 @@ async function processPendingRecord(client, record, offersOnly = false) {
   }
 
   // Every observation gets CLAIM/SIGNIFICANCE, linked to anything or nothing.
-  const runsAzollaCoverage = await stateLinkedToProcessorEnabledOrg(client, state.id, linksRes.rows, 'azolla_coverage');
+  const runsAzollaCoverage = !claimsOnly && await stateLinkedToProcessorEnabledOrg(client, state.id, linksRes.rows, 'azolla_coverage');
 
   if (runsAzollaCoverage) {
     try {
@@ -928,6 +932,7 @@ exports.handler = async (event) => {
       for (const sqsRecord of event.Records) {
         const { stateId, perspective } = JSON.parse(sqsRecord.body);
         const offersOnly = perspective === 'OFFERS';
+        const claimsOnly = perspective === 'CLAIMS';
         // Find or create the pending_perspectives row for this state. An
         // offers-only job gets its own, so it never takes a full one's.
         let pendingRow = offersOnly ? null : (await client.query(
@@ -942,7 +947,7 @@ exports.handler = async (event) => {
           )).rows[0];
         }
         try {
-          await processPendingRecord(client, pendingRow, offersOnly);
+          await processPendingRecord(client, pendingRow, offersOnly, claimsOnly);
         } catch (err) {
           console.error(`[RSP] Failed processing state ${stateId}:`, err.message);
           await client.query(
