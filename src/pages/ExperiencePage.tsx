@@ -786,9 +786,11 @@ export default function ExperiencePage() {
       // state) rather than leaving the person staring at the same form. The
       // component unmounts on navigate, so there's no need to reset local
       // draft/lane state here. One without an asset has no tab to go back
-      // to: a saved one stays open, a new one goes back where it came from.
+      // to: it goes back where it came from (e.g. an action's Experiences),
+      // or, opened straight from a link, to the actions list — as ActionPage.
       if (entityId) navigate(`/combined-assets/${entityId}/details?tab=experiences`);
-      else if (isNew) navigate(-1);
+      else if (window.history.state && window.history.state.idx > 0) navigate(-1);
+      else navigate('/actions');
     } catch (err) {
       console.error('Failed to save experience:', err);
       const message = err instanceof Error && err.message ? err.message : 'Failed to save this experience.';
