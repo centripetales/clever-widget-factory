@@ -12,10 +12,14 @@ fi
 
 LAMBDA_DIR="$1"
 FUNCTION_NAME="$2"
-LAYER_ARN="${3:-arn:aws:lambda:us-west-2:131745734428:layer:cwf-common-nodejs:28}"
-TIMEOUT_SECONDS="${4:-30}"
+LAYER_ARG="$3"
+TIMEOUT_ARG="$4"
 REGION="us-west-2"
 ROLE_ARN="arn:aws:iam::131745734428:role/lambda-execution-role"
+
+# The shared layer: the version given, or the latest one.
+LAYER_ARN="${LAYER_ARG:-$(aws lambda list-layer-versions --layer-name cwf-common-nodejs --region "$REGION" \
+  --query 'LayerVersions[0].LayerVersionArn' --output text)}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/../../lambda/$LAMBDA_DIR"
@@ -26,6 +30,23 @@ if [ -f "$SCRIPT_DIR/../../.env.local" ]; then
   # Export all non-comment, non-empty lines that look like KEY=VALUE
   export $(grep -v '^#' "$SCRIPT_DIR/../../.env.local" | grep -v '^$' | grep '=' | xargs)
 fi
+
+# The function's environment: what it has now (none for a new function),
+# with the .env.local values that are set laid over it, as CLI JSON. Values
+# are read from the environment, never pasted into code.
+environment_json() {
+  python3 -c '
+import json, os, sys
+existing = json.load(sys.stdin) or {}
+for key in ["DB_PASSWORD", "DB_HOST", "DB_USER", "DB_NAME", "DB_PORT", "MAXWELL_AGENT_ID",
+            "MAXWELL_AGENT_ALIAS_ID", "MAXWELL_AGENT_ALIAS_ID_DEEP", "BEDROCK_REGION",
+            "SARI_SARI_AGENT_ID", "SARI_SARI_AGENT_ALIAS_ID", "ML_LAMBDA_NAME",
+            "WS_API_ENDPOINT", "PERSPECTIVES_QUEUE_URL"]:
+    if os.environ.get(key):
+        existing[key] = os.environ[key]
+print(json.dumps({"Variables": existing}))
+'
+}
 
 echo "📦 Installing dependencies..."
 npm install --production
@@ -58,86 +79,34 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" &
   aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$REGION"
   
   echo "⚙️  Updating configuration with layer and environment variables..."
-  # Fetch existing environment variables to preserve them (e.g. COGNITO_* vars)
-  EXISTING_VARS=$(aws lambda get-function-configuration \
-    --function-name "$FUNCTION_NAME" \
-    --region "$REGION" \
-    --query 'Environment.Variables' \
-    --output json 2>/dev/null || echo '{}')
-  
-  # Start with existing vars, then overlay .env.local vars
-  ENV_VARS=$(echo "$EXISTING_VARS" | python3 -c "
-import sys, json
-existing = json.load(sys.stdin) or {}
-# Overlay .env.local vars (only if set)
-overlay = {}
-$([ -n "$DB_PASSWORD" ] && echo "overlay['DB_PASSWORD'] = '$DB_PASSWORD'")
-$([ -n "$DB_HOST" ] && echo "overlay['DB_HOST'] = '$DB_HOST'")
-$([ -n "$DB_USER" ] && echo "overlay['DB_USER'] = '$DB_USER'")
-$([ -n "$DB_NAME" ] && echo "overlay['DB_NAME'] = '$DB_NAME'")
-$([ -n "$DB_PORT" ] && echo "overlay['DB_PORT'] = '$DB_PORT'")
-$([ -n "$MAXWELL_AGENT_ID" ] && echo "overlay['MAXWELL_AGENT_ID'] = '$MAXWELL_AGENT_ID'")
-$([ -n "$MAXWELL_AGENT_ALIAS_ID" ] && echo "overlay['MAXWELL_AGENT_ALIAS_ID'] = '$MAXWELL_AGENT_ALIAS_ID'")
-$([ -n "$MAXWELL_AGENT_ALIAS_ID_DEEP" ] && echo "overlay['MAXWELL_AGENT_ALIAS_ID_DEEP'] = '$MAXWELL_AGENT_ALIAS_ID_DEEP'")
-$([ -n "$BEDROCK_REGION" ] && echo "overlay['BEDROCK_REGION'] = '$BEDROCK_REGION'")
-$([ -n "$SARI_SARI_AGENT_ID" ] && echo "overlay['SARI_SARI_AGENT_ID'] = '$SARI_SARI_AGENT_ID'")
-$([ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && echo "overlay['SARI_SARI_AGENT_ALIAS_ID'] = '$SARI_SARI_AGENT_ALIAS_ID'")
-$([ -n "$ML_LAMBDA_NAME" ] && echo "overlay['ML_LAMBDA_NAME'] = '$ML_LAMBDA_NAME'")
-$([ -n "$WS_API_ENDPOINT" ] && echo "overlay['WS_API_ENDPOINT'] = '$WS_API_ENDPOINT'")
-$([ -n "$PERSPECTIVES_QUEUE_URL" ] && echo "overlay['PERSPECTIVES_QUEUE_URL'] = '$PERSPECTIVES_QUEUE_URL'")
-existing.update(overlay)
-# Output as KEY=VALUE format for AWS CLI
-print('{' + ','.join(f'{k}={v}' for k,v in existing.items()) + '}')
-" 2>/dev/null)
-  
-  # Fallback if python merge fails — use .env.local vars only
-  if [ -z "$ENV_VARS" ] || [ "$ENV_VARS" = "{}" ]; then
-    ENV_VARS="{"
-    [ -n "$DB_PASSWORD" ] && ENV_VARS="${ENV_VARS}DB_PASSWORD=$DB_PASSWORD,"
-    [ -n "$DB_HOST" ] && ENV_VARS="${ENV_VARS}DB_HOST=$DB_HOST,"
-    [ -n "$DB_USER" ] && ENV_VARS="${ENV_VARS}DB_USER=$DB_USER,"
-    [ -n "$DB_NAME" ] && ENV_VARS="${ENV_VARS}DB_NAME=$DB_NAME,"
-    [ -n "$DB_PORT" ] && ENV_VARS="${ENV_VARS}DB_PORT=$DB_PORT,"
-    [ -n "$MAXWELL_AGENT_ID" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ID=$MAXWELL_AGENT_ID,"
-    [ -n "$MAXWELL_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ALIAS_ID=$MAXWELL_AGENT_ALIAS_ID,"
-    [ -n "$MAXWELL_AGENT_ALIAS_ID_DEEP" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ALIAS_ID_DEEP=$MAXWELL_AGENT_ALIAS_ID_DEEP,"
-    [ -n "$BEDROCK_REGION" ] && ENV_VARS="${ENV_VARS}BEDROCK_REGION=$BEDROCK_REGION,"
-    [ -n "$SARI_SARI_AGENT_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ID=$SARI_SARI_AGENT_ID,"
-    [ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ALIAS_ID=$SARI_SARI_AGENT_ALIAS_ID,"
-    [ -n "$WS_API_ENDPOINT" ] && ENV_VARS="${ENV_VARS}WS_API_ENDPOINT=$WS_API_ENDPOINT,"
-    [ -n "$PERSPECTIVES_QUEUE_URL" ] && ENV_VARS="${ENV_VARS}PERSPECTIVES_QUEUE_URL=$PERSPECTIVES_QUEUE_URL,"
-    ENV_VARS="${ENV_VARS%,}}"
-    echo "⚠️  Could not merge existing env vars, using .env.local only"
-  else
-    echo "✅ Merged existing env vars with .env.local"
+  CONFIG=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" --region "$REGION" --output json)
+
+  # Keep its other layers (e.g. the Lambda Web Adapter); only the shared
+  # layer is set to $LAYER_ARN.
+  LAYERS=$(echo "$CONFIG" | python3 -c '
+import json, sys
+layers = [l["Arn"] for l in json.load(sys.stdin).get("Layers", []) if ":layer:cwf-common-nodejs:" not in l["Arn"]]
+print(" ".join(layers + [sys.argv[1]]))
+' "$LAYER_ARN")
+
+  # Its existing variables (e.g. COGNITO_*) are kept; stop rather than
+  # replace them if they can't be read.
+  ENV_JSON=$(echo "$CONFIG" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin).get("Environment", {}).get("Variables", {})))' | environment_json)
+  if [ -z "$ENV_JSON" ]; then
+    echo "❌ Could not read the function's environment variables; configuration left unchanged."
+    exit 1
   fi
-  
+
+  # Memory and timeout stay as they are unless a timeout is given.
   aws lambda update-function-configuration \
     --function-name "$FUNCTION_NAME" \
-    --layers "$LAYER_ARN" \
-    --timeout "$TIMEOUT_SECONDS" \
-    --memory-size 512 \
-    --environment "Variables=$ENV_VARS" \
+    --layers $LAYERS \
+    ${TIMEOUT_ARG:+--timeout "$TIMEOUT_ARG"} \
+    --environment "$ENV_JSON" \
     --region "$REGION" >/dev/null
 else
   echo "🆕 Creating new function..."
-  # Build environment variables JSON - include all common Lambda env vars
-  ENV_VARS="{"
-  [ -n "$DB_PASSWORD" ] && ENV_VARS="${ENV_VARS}DB_PASSWORD=$DB_PASSWORD,"
-  [ -n "$DB_HOST" ] && ENV_VARS="${ENV_VARS}DB_HOST=$DB_HOST,"
-  [ -n "$DB_USER" ] && ENV_VARS="${ENV_VARS}DB_USER=$DB_USER,"
-  [ -n "$DB_NAME" ] && ENV_VARS="${ENV_VARS}DB_NAME=$DB_NAME,"
-  [ -n "$DB_PORT" ] && ENV_VARS="${ENV_VARS}DB_PORT=$DB_PORT,"
-  [ -n "$MAXWELL_AGENT_ID" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ID=$MAXWELL_AGENT_ID,"
-  [ -n "$MAXWELL_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ALIAS_ID=$MAXWELL_AGENT_ALIAS_ID,"
-  [ -n "$MAXWELL_AGENT_ALIAS_ID_DEEP" ] && ENV_VARS="${ENV_VARS}MAXWELL_AGENT_ALIAS_ID_DEEP=$MAXWELL_AGENT_ALIAS_ID_DEEP,"
-  [ -n "$BEDROCK_REGION" ] && ENV_VARS="${ENV_VARS}BEDROCK_REGION=$BEDROCK_REGION,"
-  [ -n "$SARI_SARI_AGENT_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ID=$SARI_SARI_AGENT_ID,"
-  [ -n "$SARI_SARI_AGENT_ALIAS_ID" ] && ENV_VARS="${ENV_VARS}SARI_SARI_AGENT_ALIAS_ID=$SARI_SARI_AGENT_ALIAS_ID,"
-  [ -n "$ML_LAMBDA_NAME" ] && ENV_VARS="${ENV_VARS}ML_LAMBDA_NAME=$ML_LAMBDA_NAME,"
-  [ -n "$WS_API_ENDPOINT" ] && ENV_VARS="${ENV_VARS}WS_API_ENDPOINT=$WS_API_ENDPOINT,"
-  # Remove trailing comma and close JSON
-  ENV_VARS="${ENV_VARS%,}}"
+  ENV_JSON=$(echo '{}' | environment_json)
   
   aws lambda create-function \
     --function-name "$FUNCTION_NAME" \
@@ -146,9 +115,9 @@ else
     --handler index.handler \
     --zip-file fileb://function.zip \
     --layers "$LAYER_ARN" \
-    --timeout "$TIMEOUT_SECONDS" \
+    --timeout "${TIMEOUT_ARG:-30}" \
     --memory-size 512 \
-    --environment "Variables=$ENV_VARS" \
+    --environment "$ENV_JSON" \
     --region "$REGION" >/dev/null
 fi
 

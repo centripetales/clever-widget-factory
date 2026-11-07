@@ -245,6 +245,8 @@ async function listStates(event, authContext, headers) {
                   -- only the observations of the org that shared it
                   AND sh.organization_id = s.organization_id
                   AND sl_o.entity_type = 'organization'
+                  -- a share that has not been ended
+                  AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = sl_o.state_id)
                   -- shared with this org, or with an org it is a member of
                   AND sl_o.entity_id IN (
                     SELECT '${organizationId}'::uuid
@@ -261,6 +263,7 @@ async function listStates(event, authContext, headers) {
             SELECT 1 FROM state_links sl_e
             JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
             WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
+              AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = sl_o.state_id)
               AND sl_o.entity_id IN (
                 SELECT '${organizationId}'::uuid
                 UNION SELECT mo.organization_id FROM member_organizations mo
@@ -298,6 +301,7 @@ async function listStates(event, authContext, headers) {
           JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
           WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
             AND sl_o.entity_id != s.organization_id
+            AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = sl_o.state_id)
         ) as shared_with_partners,
         COALESCE(
           (SELECT json_agg(
@@ -439,6 +443,7 @@ async function getState(id, authContext, headers) {
           JOIN state_links sl_o ON sl_o.state_id = sl_e.state_id AND sl_o.entity_type = 'organization'
           WHERE sl_e.entity_type = 'state' AND sl_e.entity_id = s.id
             AND sl_o.entity_id != s.organization_id
+            AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = sl_o.state_id)
         ) as shared_with_partners,
         COALESCE(
           (SELECT json_agg(

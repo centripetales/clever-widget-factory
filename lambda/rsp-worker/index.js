@@ -258,6 +258,7 @@ async function stateLinkedToProcessorEnabledOrg(client, stateId, knownLinks, pro
      WHERE our_link.state_id = $1
        AND our_link.entity_type = ANY($2)
        AND o.ai_config -> 'processors' @> to_jsonb($3::text)
+       AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = share_org_link.state_id)
      LIMIT 1`,
     [stateId, SHAREABLE_LINK_TYPES, processorName]
   );

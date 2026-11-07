@@ -141,6 +141,7 @@ async function loadOffers(client, links, state) {
               UNION SELECT mo.member_organization_id FROM member_organizations mo WHERE mo.organization_id = sl_o.entity_id
             ) n
            WHERE sh.organization_id = $2
+             AND NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = sh.id)
              AND ((sl_e.entity_type = 'state' AND sl_e.entity_id = $1)
                OR EXISTS (SELECT 1 FROM state_links own
                            WHERE own.state_id = $1 AND own.entity_type = sl_e.entity_type AND own.entity_id = sl_e.entity_id)))

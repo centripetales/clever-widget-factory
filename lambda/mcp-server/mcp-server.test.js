@@ -497,3 +497,227 @@ describe('update_observation_links', () => {
     assert.strictEqual(invocations.length, 0);
   });
 });
+
+describe('search_claims asset_id', () => {
+  test('limits both modes to the asset\'s observations', async () => {
+    const client = await connect(['org-a']);
+    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01', asset_id: 'tool-1' } });
+    assert.match(queries[0].sql, /al\.entity_id::text = \$5/);
+    assert.strictEqual(queries[0].params[4], 'tool-1');
+    queries = [];
+    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01' } });
+    assert.strictEqual(queries[0].params[4], null);
+  });
+});
+
+describe('get_asset', () => {
+  test('a tool: details, area, accountable person, actions, edits and recent observations as claims', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{
+        type: 'tool', area: 'Tool Shed', accountable_person: 'Mae',
+        fields: { name: 'Inverter', description: 'Growatt 5kW', serial_number: null, parent_structure_id: 'shed-1', created_at: '2026-01-01T00:00:00Z', image_url: 'photos/inv.jpg' },
+      }];
+      if (sql.includes('FROM state_links sl')) return [
+        { observation_id: 'o-2', captured_at: '2026-11-02T00:00:00Z', captured_by: 'Mae', claim: 'Fan is loud', text_start: 'long note', has_photos: true, total: '12' },
+        { observation_id: 'o-1', captured_at: '2026-11-01T00:00:00Z', captured_by: 'Mae', claim: null, text_start: 'Checked wiring', has_photos: false, total: '12' },
+      ];
+      if (sql.includes('FROM actions a')) return [{ action_id: 'a-1', title: 'Clean fan', status: 'in_progress', updated_at: '2026-11-03T00:00:00Z' }];
+      if (sql.includes('FROM asset_history')) return [{ change_type: 'updated', field_changed: 'description', old_value: 'Growatt', new_value: 'Growatt 5kW', changed_at: '2026-11-03T00:00:00Z', changed_by: 'Mae' }];
+      return [];
+    };
+    const client = await connect(['org-a', 'org-b']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'tool-1' } })).content[0].text);
+    assert.deepStrictEqual(queries[0].params, ['tool-1', ['org-a', 'org-b']]);
+    assert.strictEqual(reply.type, 'tool');
+    assert.strictEqual(reply.description, 'Growatt 5kW');
+    assert.strictEqual('serial_number' in reply, false);
+    assert.strictEqual(reply.area, 'Tool Shed');
+    assert.strictEqual(reply.area_id, 'shed-1');
+    assert.strictEqual(reply.accountable_person, 'Mae');
+    assert.match(reply.photo, /^https:\/\/.*\/photos\/inv\.jpg$/);
+    assert.strictEqual(reply.actions[0].title, 'Clean fan');
+    assert.strictEqual(reply.recent_edits[0].field_changed, 'description');
+    assert.strictEqual(reply.observation_count, 12);
+    assert.strictEqual(reply.recent_observations[0].claim, 'Fan is loud');
+    assert.strictEqual('text_start' in reply.recent_observations[0], false);
+    assert.strictEqual(reply.recent_observations[1].text_start, 'Checked wiring');
+  });
+
+  test('a part shows quantities and recent stock changes', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{ type: 'part', fields: { name: 'Steel Wool', current_quantity: 3, minimum_quantity: 5, unit: 'kg', legacy_storage_vicinity: 'Shed' } }];
+      if (sql.includes('FROM parts_history')) return [{ quantity_change: '-2.000', new_quantity: '3.000', change_reason: 'Used', changed_at: '2026-11-03T00:00:00Z', changed_by: 'Mae' }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'part-1' } })).content[0].text);
+    assert.strictEqual(reply.current_quantity, 3);
+    assert.strictEqual(reply.storage_vicinity, 'Shed');
+    assert.deepStrictEqual(reply.recent_stock_changes[0].quantity_change, -2);
+    assert.strictEqual(reply.observation_count, 0);
+    assert.strictEqual(queries.some((q) => q.sql.includes('FROM actions a')), false);
+  });
+
+  test('an asset outside the caller orgs is not found', async () => {
+    rows = [];
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'get_asset', arguments: { asset_id: 'x' } });
+    assert.strictEqual(result.isError, true);
+  });
+});
+
+describe('create_asset and update_asset', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const db = (role, extra = {}) => (sql) => {
+    if (sql.includes('SELECT role')) return role ? [{ role }] : [];
+    if (sql.includes('category = ANY')) return extra.area ? [{ id: extra.area }] : [];
+    if (sql.includes('user_id IS NOT NULL')) return [{ user_id: 'user-mae', full_name: 'Mae Santos' }];
+    if (sql.includes('UNION ALL')) return extra.asset ? [extra.asset] : [];
+    return [];
+  };
+
+  test('creates a part in the primary org with its area and accountable person', async () => {
+    rows = db('admin', { area: 'shed-1' });
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_asset', arguments: {
+      type: 'part', name: 'Steel Wool', current_quantity: 4, unit: 'kg', area_id: 'shed-1', accountable_person: 'Mae',
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-core-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/parts');
+    assert.strictEqual(event.headers['X-Organization-Id'], undefined);
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      name: 'Steel Wool', unit: 'kg', parent_structure_id: 'shed-1', accountable_person_id: 'user-mae', current_quantity: 4,
+    });
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('SELECT role')).params, ['cognito-1', 'org-a']);
+  });
+
+  test('refused, with nothing created: wrong-type fields, not an area, a contributor choosing who is accountable, a viewer, read-only', async () => {
+    const attempts = [
+      [db('admin'), { type: 'tool', name: 'Drill', unit: 'kg' }],
+      [db('admin'), { type: 'part', name: 'Wool', serial_number: 'X1' }],
+      [db('admin'), { type: 'tool', name: 'Drill', current_quantity: 1 }],
+      [db('admin'), { type: 'tool', name: 'Drill', area_id: 'not-an-area' }],
+      [db('contributor'), { type: 'tool', name: 'Drill', accountable_person: 'Mae' }],
+      [db('viewer'), { type: 'tool', name: 'Drill' }],
+    ];
+    for (const [r, args] of attempts) {
+      rows = r;
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      assert.strictEqual((await client.callTool({ name: 'create_asset', arguments: args })).isError, true, JSON.stringify(args));
+    }
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_asset', arguments: { type: 'tool', name: 'Drill' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('update sends only the fields given, null clearing, in the asset org', async () => {
+    rows = db('contributor', { asset: { type: 'tool', id: 'tool-1', organization_id: 'org-b' } });
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1', description: 'Growatt 5kW', area_id: null } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ event }] = invocations;
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/tools/tool-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { description: 'Growatt 5kW', parent_structure_id: null });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).changed, ['description', 'area_id']);
+  });
+
+  test('nothing to change, or an asset outside the caller orgs, changes nothing', async () => {
+    rows = db('admin');
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1' } })).isError, true);
+    assert.strictEqual((await client.callTool({ name: 'update_asset', arguments: { asset_id: 'x', name: 'New' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('Systems', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('get_asset shows current and former Systems and components with dates, and rolls up their observations', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{ type: 'tool', fields: { name: 'Solar System', category: 'System' } }];
+      if (sql.includes("p.entity_type = 'part_of' AND p.entity_id::text = $1")) return [
+        { asset_id: 'inv-0', type: 'tool', name: 'Old Inverter', since: '2025-01-01T00:00:00Z', until: '2026-10-01T00:00:00Z' },
+        { asset_id: 'inv-1', type: 'tool', name: 'Hybrid Inverter', since: '2026-10-01T00:00:00Z', until: null },
+      ];
+      if (sql.includes("m.entity_id::text = $1")) return [{ asset_id: 'elec-1', name: 'Electrical System', since: '2025-01-01T00:00:00Z', until: null }];
+      if (sql.includes('WITH RECURSIVE members')) return [
+        { observation_id: 'o-1', captured_at: '2026-09-02T00:00:00Z', captured_by: 'Mae', claim: 'Panel voltage at night', from_components: ['Old Inverter (former component)'], has_photos: false, total: '3' },
+      ];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'solar-1' } })).content[0].text);
+    assert.deepStrictEqual(reply.part_of.map((p) => p.name), ['Electrical System']);
+    assert.strictEqual('formerly_part_of' in reply, false);
+    assert.deepStrictEqual(reply.components.map((c) => [c.name, 'until' in c]), [['Hybrid Inverter', false]]);
+    assert.strictEqual(reply.former_components[0].name, 'Old Inverter');
+    assert.match(reply.former_components[0].until, /Oct 1, 2026/);
+    assert.deepStrictEqual(reply.recent_observations[0].from_components, ['Old Inverter (former component)']);
+    assert.strictEqual(reply.observation_count, 3);
+    // Observations count only while each component was part of it.
+    const rollup = queries.find((q) => q.sql.includes('WITH RECURSIVE members')).sql;
+    assert.match(rollup, /s\.captured_at BETWEEN mb\.from_at AND mb\.to_at/);
+    assert.match(rollup, /e\.entity_type = 'ends'/);
+  });
+
+  const linkDb = ({ category = 'System', above = ['solar-1'], current = [] } = {}) => (sql) => {
+    if (sql.includes('SELECT id::text AS id, name, category FROM tools')) return [{ id: 'solar-1', name: 'Solar System', category }];
+    if (sql.includes('UNION ALL')) return [
+      { type: 'tool', id: 'inv-1', name: 'Hybrid Inverter' },
+      { type: 'part', id: 'bat-1', name: 'Battery' },
+      { type: 'tool', id: 'elec-1', name: 'Electrical System' },
+    ];
+    if (sql.includes('WITH RECURSIVE up')) return above.map((id) => ({ id }));
+    if (sql.includes("p.entity_type = 'part_of' AND p.entity_id::text = $1")) return current.map((asset_id) => ({ asset_id, since: '2026-01-01T00:00:00Z', until: null }));
+    return [];
+  };
+
+  test('link_assets records an observation per new component, linked to it and part_of the System', async () => {
+    rows = linkDb({ above: ['solar-1', 'elec-1'], current: ['bat-1'] });
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'link_assets', arguments: {
+      system_id: 'solar-1', member_ids: ['inv-1', 'bat-1', 'elec-1'], note: 'Installed 2025.',
+    } })).content[0].text);
+    assert.deepStrictEqual(reply.results.map((r) => r.result.split(':')[0]), ['linked', 'already part of it', 'not linked']);
+    assert.strictEqual(invocations.length, 1);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-states-lambda');
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      state_text: 'Hybrid Inverter is part of Solar System. Installed 2025.',
+      photos: [],
+      links: [{ entity_type: 'tool', entity_id: 'inv-1' }, { entity_type: 'part_of', entity_id: 'solar-1' }],
+    });
+  });
+
+  test('link_assets refuses an asset that is not a System, or components not found', async () => {
+    rows = linkDb({ category: 'Infrastructure' });
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.match((await client.callTool({ name: 'link_assets', arguments: { system_id: 'solar-1', member_ids: ['inv-1'] } })).content[0].text, /not a System/);
+    rows = linkDb();
+    assert.strictEqual((await client.callTool({ name: 'link_assets', arguments: { system_id: 'solar-1', member_ids: ['nope'] } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('unlink_assets ends the current membership with an observation on the component, deleting nothing', async () => {
+    rows = [{ observation_id: 'o-9', type: 'tool', member_id: 'inv-0', name: 'Old Inverter', system: 'Solar System' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'unlink_assets', arguments: {
+      system_id: 'solar-1', member_ids: ['inv-0', 'bat-1'], reason: 'It showed panel voltage at night.',
+    } })).content[0].text);
+    assert.deepStrictEqual(reply.results.map((r) => r.result), ['taken out', 'is not part of it']);
+    assert.match(queries[0].sql, /NOT EXISTS \(SELECT 1 FROM state_links e WHERE e\.entity_type = 'ends'/);
+    const [{ event }] = invocations;
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      state_text: 'Old Inverter removed from Solar System. It showed panel voltage at night.',
+      photos: [],
+      links: [{ entity_type: 'tool', entity_id: 'inv-0' }, { entity_type: 'ends', entity_id: 'o-9' }],
+    });
+  });
+});

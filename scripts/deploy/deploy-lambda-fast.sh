@@ -23,10 +23,29 @@ if [ ! -d "." ]; then
   exit 1
 fi
 
-echo "📦 Packaging code for $FUNCTION_NAME (excluding node_modules)..."
+# The cwf-common-nodejs layer provides pg (and the runtime the AWS SDK); a
+# function that needs any other package (express, jsonwebtoken, sharp...)
+# ships its own node_modules, or it fails to start.
+OWN_PACKAGES=""
+if [ -f package.json ]; then
+  OWN_PACKAGES=$(node -e "console.log(Object.keys(require('./package.json').dependencies || {}).filter((n) => n !== 'pg' && !n.startsWith('@aws-sdk/')).join(' '))")
+fi
+if [ -n "$OWN_PACKAGES" ]; then
+  for pkg in $OWN_PACKAGES; do
+    if [ ! -d "node_modules/$pkg" ]; then
+      echo "❌ $pkg is not installed in lambda/$LAMBDA_DIR — run npm install there first."
+      exit 1
+    fi
+  done
+  echo "📦 Packaging code for $FUNCTION_NAME with node_modules (needs: $OWN_PACKAGES)..."
+  EXCLUDE_MODULES=()
+else
+  echo "📦 Packaging code for $FUNCTION_NAME (excluding node_modules)..."
+  EXCLUDE_MODULES=(-x "*node_modules*")
+fi
 rm -f function.zip
 zip -r function.zip . \
-  -x "*node_modules*" \
+  "${EXCLUDE_MODULES[@]}" \
   -x "*.test.js" \
   -x "*.test.ts" \
   -x "deploy.sh" \

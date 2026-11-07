@@ -2,6 +2,12 @@ const { randomUUID } = require('crypto');
 
 const ENTITY_TABLES = { tool: 'tools', part: 'parts', action: 'actions', state: 'states' };
 
+// A share (or any observation that starts something) is ended by a later
+// observation linked to it as 'ends'; ended ones stay as history but no
+// longer count. stateRef is the SQL for the starting observation's id.
+const notEndedSql = (stateRef) =>
+  `NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = ${stateRef})`;
+
 // Shares routes. `auth` comes from the authorizer context, never the request:
 // { userId, organizationId, accessibleOrgIds, readAll }.
 // `queueReadings(stateIds, orgId)` queues observations for the perspectives worker.
@@ -105,6 +111,7 @@ async function handleShares({ httpMethod, path, body = {}, query = {}, auth, get
          JOIN state_links sl_org ON sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
          JOIN organizations o ON o.id = sl_org.entity_id::uuid
          WHERE s.organization_id::text != sl_org.entity_id::text
+           AND ${notEndedSql('s.id')}
          ${accessCondition}
          ORDER BY s.captured_at DESC`,
         params
@@ -116,22 +123,50 @@ async function handleShares({ httpMethod, path, body = {}, query = {}, auth, get
   }
 
   // DELETE /shares/{stateId} — unshare. Only a share state (one with an
-  // 'organization' link) owned by an org the caller can access.
+  // 'organization' link) owned by an org the caller can access. The share is
+  // kept and ended by an observation on what was shared, so its history shows
+  // when sharing stopped.
   if (httpMethod === 'DELETE' && path.match(/^\/shares\/[^/]+$/)) {
     const stateId = path.split('/')[2];
+    if (!auth.userId) return error(401, 'Authenticated user id is required');
     const client = await getDbClient();
     try {
       const share = await client.query(
-        `SELECT s.organization_id::text FROM states s
-         WHERE s.id::text = $1
-           AND EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'organization')`,
+        `SELECT s.organization_id::text, o.name AS target_org_name,
+                sl_entity.entity_type, sl_entity.entity_id::text
+         FROM states s
+         JOIN state_links sl_org ON sl_org.state_id = s.id AND sl_org.entity_type = 'organization'
+         JOIN organizations o ON o.id = sl_org.entity_id::uuid
+         LEFT JOIN state_links sl_entity ON sl_entity.state_id = s.id AND sl_entity.entity_type IN ('tool', 'part', 'action', 'state')
+         WHERE s.id::text = $1 AND ${notEndedSql('s.id')}`,
         [stateId]
       );
       if (!share.rows.length) return error(404, 'Share not found');
-      if (!canAccess(share.rows[0].organization_id)) return error(403, 'Access denied to this share');
-      await client.query('DELETE FROM state_links WHERE state_id = $1', [stateId]);
-      await client.query('DELETE FROM states WHERE id = $1', [stateId]);
-      return { statusCode: 200, data: { success: true } };
+      const { organization_id, target_org_name, entity_type, entity_id } = share.rows[0];
+      if (!canAccess(organization_id)) return error(403, 'Access denied to this share');
+      const endId = randomUUID();
+      await client.query('BEGIN');
+      try {
+        await client.query(
+          `INSERT INTO states (id, organization_id, state_text, captured_by, captured_at) VALUES ($1, $2, $3, $4, NOW())`,
+          [endId, organization_id, `Stopped sharing with ${target_org_name}`, auth.userId]
+        );
+        await client.query(
+          `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, 'ends', $2)`,
+          [endId, stateId]
+        );
+        if (entity_type) {
+          await client.query(
+            `INSERT INTO state_links (id, state_id, entity_type, entity_id) VALUES (gen_random_uuid(), $1, $2, $3)`,
+            [endId, entity_type, entity_id]
+          );
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      }
+      return { statusCode: 200, data: { success: true, state_id: endId } };
     } finally {
       client.release();
     }
@@ -155,6 +190,7 @@ async function handleShares({ httpMethod, path, body = {}, query = {}, auth, get
          JOIN state_links sl_entity ON sl_entity.state_id = s.id AND sl_entity.entity_type != 'organization'
          JOIN organizations o ON o.id = s.organization_id
          WHERE s.organization_id <> $1::uuid
+           AND ${notEndedSql('s.id')}
          ORDER BY s.captured_at DESC`,
         [orgId]
       );
@@ -167,4 +203,4 @@ async function handleShares({ httpMethod, path, body = {}, query = {}, auth, get
   return null;
 }
 
-module.exports = { handleShares };
+module.exports = { handleShares, notEndedSql };

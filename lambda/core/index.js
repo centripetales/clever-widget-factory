@@ -3,7 +3,7 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { getAuthorizerContext, buildOrganizationFilter, hasPermission, canAccessOrganization } = require('/opt/nodejs/authorizerContext');
 const { composePartEmbeddingSource, composeToolEmbeddingSource, composeIssueEmbeddingSource, composePolicyEmbeddingSource } = require('/opt/nodejs/embedding-composition');
 const { getDbClient } = require('/opt/nodejs/db');
-const { handleShares } = require('./shares');
+const { handleShares, notEndedSql } = require('./shares');
 const { changeStock } = require('./stockChange');
 const { escapeLiteral, formatSqlValue, buildUpdateClauses } = require('/opt/nodejs/sqlUtils');
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
@@ -444,6 +444,7 @@ exports.handler = async (event) => {
               JOIN state_links sl2 ON sl1.state_id = sl2.state_id
               WHERE sl1.entity_type = 'tool' AND sl2.entity_type = 'organization'
                 AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
+                AND ${notEndedSql('sl1.state_id')}
             )`
           : null;
         let orgCondition = orgFilter.condition
@@ -520,6 +521,7 @@ exports.handler = async (event) => {
                 AND sl2.entity_type = 'organization'
                 AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
                 AND s.organization_id::text IN (${sharedOrgsStr})
+                AND ${notEndedSql('sl1.state_id')}
             )
           )`);
         } else {
@@ -622,6 +624,7 @@ exports.handler = async (event) => {
             WHERE sl_entity.entity_type = 'tool'
               AND sl_entity.entity_id = tools.id
               AND s_share.organization_id = tools.organization_id
+              AND ${notEndedSql('s_share.id')}
               AND EXISTS (
                 SELECT 1 FROM state_links sl_org
                 WHERE sl_org.state_id = s_share.id
@@ -1006,6 +1009,7 @@ exports.handler = async (event) => {
                 AND sl2.entity_type = 'organization'
                 AND sl2.entity_id IN ${shareTargetOrgsSql(organizationId)}
                 AND s.organization_id::text IN (${sharedOrgsStr})
+                AND ${notEndedSql('sl1.state_id')}
             )
           )`;
         } else {
@@ -1061,6 +1065,7 @@ exports.handler = async (event) => {
             WHERE sl_entity.entity_type = 'part'
               AND sl_entity.entity_id = parts.id
               AND s_share.organization_id = parts.organization_id
+              AND ${notEndedSql('s_share.id')}
               AND EXISTS (
                 SELECT 1 FROM state_links sl_org
                 WHERE sl_org.state_id = s_share.id
