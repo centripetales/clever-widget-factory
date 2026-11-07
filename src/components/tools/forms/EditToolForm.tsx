@@ -12,6 +12,7 @@ import { TOOL_CATEGORY_OPTIONS } from "@/lib/constants";
 import { LocationFieldsGroup } from "@/components/shared/LocationFieldsGroup";
 import { FileAttachmentManager } from "@/components/shared/FileAttachmentManager";
 import { MetricsSection } from "@/components/tools/metrics/MetricsSection";
+import { SystemMemberships } from "@/components/tools/SystemMemberships";
 import { useParentStructures } from "@/hooks/tools/useParentStructures";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { useActionProfiles } from "@/hooks/useActionProfiles";
@@ -283,6 +284,10 @@ export const EditToolForm = ({ tool, isOpen, onClose, onSubmit, isLeadership = f
 
           {editData.serial_number && editData.serial_number.trim() && tool && (
             <MetricsSection toolId={tool.id} />
+          )}
+
+          {tool && (
+            <SystemMemberships toolId={tool.id} toolName={editData.name || tool.name} isSystem={editData.category === 'System'} />
           )}
 
           <FileAttachmentManager
