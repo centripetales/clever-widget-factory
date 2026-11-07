@@ -22,7 +22,7 @@ export function useExperiences(params?: ExperienceListParams) {
   return useQuery({
     queryKey: experiencesQueryKey(params),
     queryFn: () => listExperiences(params),
-    enabled: !!(params?.entity_type && params?.entity_id),
+    enabled: !!((params?.entity_type && params?.entity_id) || params?.action_id),
     // The global default (staleTime: 24h — see
     // queryConfig.ts) is tuned for offline-first field use, but it means a
     // persisted, hours-stale cache from a previous session silently wins on

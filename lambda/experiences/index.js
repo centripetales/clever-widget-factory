@@ -478,6 +478,8 @@ exports.handler = async (event) => {
     if (httpMethod === 'GET' && path === '/api/experiences') {
       const entity_type = queryStringParameters?.entity_type;
       const entity_id = queryStringParameters?.entity_id;
+      // Experiences that include this action (as one of their actions).
+      const action_id = queryStringParameters?.action_id;
       const limit = parseInt(queryStringParameters?.limit || '50', 10);
       const offset = parseInt(queryStringParameters?.offset || '0', 10);
 
@@ -507,6 +509,11 @@ exports.handler = async (event) => {
         params.push(entity_id);
         paramIndex++;
       }
+      if (action_id) {
+        query += ` AND EXISTS (SELECT 1 FROM experience_components fc WHERE fc.experience_id = e.id AND fc.action_id = $${paramIndex})`;
+        params.push(action_id);
+        paramIndex++;
+      }
 
       query += ` ORDER BY e.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
       params.push(limit, offset);
@@ -531,6 +538,11 @@ exports.handler = async (event) => {
       if (entity_id) {
         countQuery += ` AND e.entity_id = $${countParamIndex}`;
         countParams.push(entity_id);
+        countParamIndex++;
+      }
+      if (action_id) {
+        countQuery += ` AND EXISTS (SELECT 1 FROM experience_components fc WHERE fc.experience_id = e.id AND fc.action_id = $${countParamIndex})`;
+        countParams.push(action_id);
         countParamIndex++;
       }
 

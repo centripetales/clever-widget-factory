@@ -51,6 +51,7 @@ import { getThumbnailUrl } from '@/lib/imageUtils';
 import TiptapEditor from './TiptapEditor';
 import { StatesInline } from './StatesInline';
 import { RewardsSection } from './RewardsSection';
+import { ActionExperiences } from './ActionExperiences';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { stateService } from '@/services/stateService';
 import { AssetSelector } from './AssetSelector';
@@ -1387,6 +1388,7 @@ export function ActionForm({
                   }
                 />
                 <RewardsSection actionId={action.id} />
+                <ActionExperiences actionId={action.id} />
               </>
             ) : (
               <div className="space-y-2">

@@ -613,6 +613,9 @@ export async function listExperiences(
   if (params?.entity_id) {
     queryParams.append('entity_id', params.entity_id);
   }
+  if (params?.action_id) {
+    queryParams.append('action_id', params.action_id);
+  }
   if (params?.limit !== undefined) {
     queryParams.append('limit', params.limit.toString());
   }

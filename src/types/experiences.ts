@@ -170,6 +170,8 @@ export interface UpdateExperienceRequest {
 export interface ExperienceListParams {
   entity_type?: 'tool' | 'part';
   entity_id?: string;
+  /** Only experiences that include this action. */
+  action_id?: string;
   limit?: number;
   offset?: number;
 }
