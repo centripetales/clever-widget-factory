@@ -519,14 +519,31 @@ describe('update_observation_links', () => {
 });
 
 describe('search_claims asset_id', () => {
-  test('limits both modes to the asset\'s observations', async () => {
+  test('a System covers everything it is made of, from while each was part of it, in both modes', async () => {
     const client = await connect(['org-a']);
-    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01', asset_id: 'tool-1' } });
-    assert.match(queries[0].sql, /al\.entity_id::text = \$5/);
-    assert.strictEqual(queries[0].params[4], 'tool-1');
+    await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01', asset_id: 'goats-1' } });
+    assert.match(queries[0].sql, /WITH RECURSIVE members/);
+    assert.match(queries[0].sql, /SELECT \$5::text, '-infinity'/);
+    assert.match(queries[0].sql, /s\.captured_at BETWEEN mb\.from_at AND mb\.to_at/);
+    assert.strictEqual(queries[0].params[4], 'goats-1');
     queries = [];
     await client.callTool({ name: 'search_claims', arguments: { date_from: '2026-10-01' } });
     assert.strictEqual(queries[0].params[4], null);
+  });
+
+  test('observations without a claim are found by their own text and shown with it', async () => {
+    rows = [
+      { similarity: 0.61, state_id: 'o-1', claim_text: null, text_start: 'She mated with our new buck.', captured_at: '2026-09-19T02:00:00Z', has_photos: false },
+      { similarity: 0.55, state_id: 'o-2', claim_text: 'Doe showed signs of heat', text_start: 'restless', captured_at: '2026-10-01T02:00:00Z', has_photos: true },
+    ];
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'search_claims', arguments: { query: 'goat in heat', asset_id: 'goats-1' } })).content[0].text);
+    assert.strictEqual(reply[0].text, 'She mated with our new buck.');
+    assert.strictEqual('claim' in reply[0], false);
+    assert.strictEqual(reply[1].claim, 'Doe showed signs of heat');
+    assert.strictEqual('text' in reply[1], false);
+    assert.match(queries[0].sql, /entity_type IN \('claim_perspective', 'state'\)/);
+    assert.match(queries[0].sql, /NOT LIKE '\[%'/);
   });
 });
 
@@ -686,15 +703,17 @@ describe('Systems', () => {
     assert.match(rollup, /e\.entity_type = 'ends'/);
   });
 
-  const linkDb = ({ category = 'System', above = ['solar-1'], current = [] } = {}) => (sql) => {
+  const linkDb = ({ category = 'System', above = ['solar-1'], current = [], only } = {}) => (sql) => {
     if (sql.includes('SELECT id::text AS id, name, category FROM tools')) return [{ id: 'solar-1', name: 'Solar System', category }];
     if (sql.includes('UNION ALL')) return [
       { type: 'tool', id: 'inv-1', name: 'Hybrid Inverter' },
       { type: 'part', id: 'bat-1', name: 'Battery' },
       { type: 'tool', id: 'elec-1', name: 'Electrical System' },
-    ];
+    ].filter((m) => !only || only.includes(m.id));
     if (sql.includes('WITH RECURSIVE up')) return above.map((id) => ({ id }));
-    if (sql.includes("p.entity_type = 'part_of' AND p.entity_id::text = $1")) return current.map((asset_id) => ({ asset_id, since: '2026-01-01T00:00:00Z', until: null }));
+    if (sql.includes("p.entity_type = 'part_of' AND p.entity_id::text = $1")) return current.map((member_id) => ({
+      member_id, observation_id: `join-${member_id}`, organization_id: 'org-a', captured_at: '2026-01-01T00:00:00+08:00',
+    }));
     return [];
   };
 
@@ -715,6 +734,29 @@ describe('Systems', () => {
     });
   });
 
+  test('link_assets backdates new components, and re-dates ones already in it', async () => {
+    rows = linkDb({ above: ['solar-1'], current: ['bat-1'], only: ['inv-1', 'bat-1'] });
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'link_assets', arguments: {
+      system_id: 'solar-1', member_ids: ['inv-1', 'bat-1'], since: '2025-03-15',
+    } })).content[0].text);
+    assert.deepStrictEqual(reply.results.map((r) => r.result), ['linked, since 2025-03-15', 'already part of it; now since 2025-03-15']);
+    const [created, redated] = invocations;
+    assert.strictEqual(JSON.parse(created.event.body).captured_at, '2025-03-15T00:00:00+08:00');
+    assert.strictEqual(redated.event.httpMethod, 'PUT');
+    assert.strictEqual(redated.event.path, '/api/states/join-bat-1');
+    assert.deepStrictEqual(JSON.parse(redated.event.body), { captured_at: '2025-03-15T00:00:00+08:00' });
+  });
+
+  test('link_assets leaves a component alone when it already joined that day, and refuses a future date', async () => {
+    rows = linkDb({ above: ['solar-1'], current: ['bat-1'], only: ['bat-1'] });
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'link_assets', arguments: { system_id: 'solar-1', member_ids: ['bat-1'], since: '2026-01-01' } })).content[0].text);
+    assert.deepStrictEqual(reply.results.map((r) => r.result), ['already part of it']);
+    assert.strictEqual((await client.callTool({ name: 'link_assets', arguments: { system_id: 'solar-1', member_ids: ['inv-1'], since: '2999-01-01' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
   test('link_assets refuses an asset that is not a System, or components not found', async () => {
     rows = linkDb({ category: 'Infrastructure' });
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
@@ -722,6 +764,21 @@ describe('Systems', () => {
     rows = linkDb();
     assert.strictEqual((await client.callTool({ name: 'link_assets', arguments: { system_id: 'solar-1', member_ids: ['nope'] } })).isError, true);
     assert.strictEqual(invocations.length, 0);
+  });
+
+  test('unlink_assets backdates the end to the close of that day, but not before it joined', async () => {
+    rows = [
+      { observation_id: 'o-9', captured_at: '2025-03-15T00:00:00+08:00', type: 'tool', member_id: 'goat-1', name: 'Nanny', system: 'Goats' },
+      { observation_id: 'o-8', captured_at: '2025-06-01T00:00:00+08:00', type: 'tool', member_id: 'goat-2', name: 'Billy', system: 'Goats' },
+    ];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const reply = JSON.parse((await client.callTool({ name: 'unlink_assets', arguments: {
+      system_id: 'goats-1', member_ids: ['goat-1', 'goat-2'], until: '2025-05-01', reason: 'Sold',
+    } })).content[0].text);
+    assert.deepStrictEqual(reply.results.map((r) => r.result.split(':')[0]), ['taken out', 'not taken out']);
+    assert.strictEqual(invocations.length, 1);
+    assert.strictEqual(JSON.parse(invocations[0].event.body).captured_at, '2025-05-01T23:59:59+08:00');
+    assert.strictEqual((await client.callTool({ name: 'unlink_assets', arguments: { system_id: 'goats-1', member_ids: ['goat-1'], until: '2999-01-01' } })).isError, true);
   });
 
   test('unlink_assets ends the current membership with an observation on the component, deleting nothing', async () => {
