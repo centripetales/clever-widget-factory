@@ -95,22 +95,29 @@ describe('POST /shares', () => {
 
 describe('DELETE /shares/{stateId}', () => {
   const del = db => handleShares({ httpMethod: 'DELETE', path: '/shares/s1', auth: memberOfA, getDbClient: db.getDbClient });
+  const share = { organization_id: ORG_A, target_org_name: 'Partner Farm', entity_type: 'tool', entity_id: 't1' };
 
-  test('deletes a share owned by an accessible org', async () => {
-    const db = fakeDb([[/FROM states s/, [{ organization_id: ORG_A }]]]);
+  test('ends a share owned by an accessible org with an observation on what was shared, deleting nothing', async () => {
+    const db = fakeDb([[/FROM states s/, [share]]]);
     assert.strictEqual((await del(db)).statusCode, 200);
-    assert.strictEqual(writes(db.calls).length, 2);
+    const w = writes(db.calls);
+    assert.strictEqual(w.some(c => /^\s*DELETE/.test(c.sql)), false);
+    assert.deepStrictEqual(w[0].params.slice(1), [ORG_A, 'Stopped sharing with Partner Farm', USER]);
+    assert.match(w[1].sql, /'ends'/);
+    assert.strictEqual(w[1].params[1], 's1');
+    assert.deepStrictEqual(w[2].params.slice(1), ['tool', 't1']);
   });
 
-  test('only looks at states that carry an organization link', async () => {
+  test('only looks at shares, and not ones already ended', async () => {
     const db = fakeDb();
     assert.strictEqual((await del(db)).statusCode, 404);
-    assert.match(db.calls[0].sql, /sl\.entity_type = 'organization'/);
+    assert.match(db.calls[0].sql, /sl_org\.entity_type = 'organization'/);
+    assert.match(db.calls[0].sql, /ended\.entity_type = 'ends' AND ended\.entity_id = s\.id/);
     assert.strictEqual(writes(db.calls).length, 0);
   });
 
   test('refuses a share owned by another org', async () => {
-    const db = fakeDb([[/FROM states s/, [{ organization_id: ORG_C }]]]);
+    const db = fakeDb([[/FROM states s/, [{ ...share, organization_id: ORG_C }]]]);
     assert.strictEqual((await del(db)).statusCode, 403);
     assert.strictEqual(writes(db.calls).length, 0);
   });
@@ -129,6 +136,7 @@ describe('GET routes', () => {
     const result = await handleShares({ httpMethod: 'GET', path: '/shared-with-me', auth: memberOfA, getDbClient: db.getDbClient });
     assert.strictEqual(result.statusCode, 200);
     assert.deepStrictEqual(db.calls[0].params, [ORG_A]);
+    assert.match(db.calls[0].sql, /ended\.entity_type = 'ends'/);
   });
 
   test('listing an entity\'s shares is limited to the caller\'s orgs unless they read all', async () => {

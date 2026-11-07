@@ -394,10 +394,15 @@ export default function AddObservation() {
         state_text: hasText ? observationText : undefined,
         captured_at: capturedAtUTC,
         photos: finalPhotos,
-        links: linkedAssets.map((asset) => ({
-          entity_type: asset.type,
-          entity_id: asset.id
-        }))
+        links: [
+          ...linkedAssets.map((asset) => ({
+            entity_type: asset.type,
+            entity_id: asset.id
+          })),
+          // Links this screen doesn't show (sharing, part_of) are kept as they are.
+          ...(isEditMode ? (existingState?.links ?? []).filter((l: any) => !['tool', 'part', 'action'].includes(l.entity_type))
+            .map((l: any) => ({ entity_type: l.entity_type, entity_id: l.entity_id })) : [])
+        ]
       };
 
       let stateId: string;

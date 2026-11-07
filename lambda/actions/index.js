@@ -1012,6 +1012,7 @@ exports.handler = async (event) => {
               JOIN state_links sl_o ON sl_o.state_id = s.id
                 AND sl_o.entity_type = 'organization'
                 AND sl_o.entity_id::text = '${organizationId.replace(/'/g, "''")}'
+              WHERE NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = s.id)
             )
           )`);
         }
@@ -1053,6 +1054,7 @@ exports.handler = async (event) => {
               JOIN state_links sl_o ON sl_o.state_id = s.id
                 AND sl_o.entity_type = 'organization'
                 AND sl_o.entity_id::text = '${organizationId.replace(/'/g, "''")}'
+              WHERE NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = s.id)
             )
           )`);
           if (mineClause) clauses.push(mineClause);
@@ -1105,6 +1107,7 @@ exports.handler = async (event) => {
                 JOIN state_links sl_o ON sl_o.state_id = s.id
                   AND sl_o.entity_type = 'organization'
                   AND sl_o.entity_id::text != s.organization_id::text
+                WHERE NOT EXISTS (SELECT 1 FROM state_links ended WHERE ended.entity_type = 'ends' AND ended.entity_id = s.id)
               )
             ),
             false

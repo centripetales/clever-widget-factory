@@ -234,14 +234,15 @@ const NOT_A_MEMBER = {
 };
 
 // Assets (tools and parts) as the app's forms have them. Container,
-// Infrastructure and Field tools are areas other assets can be in.
-const TOOL_CATEGORIES = ['Hand Tools', 'Electric Tool', 'Other', 'Container', 'Infrastructure', 'Biological', 'Field'];
+// Infrastructure and Field tools are areas other assets can be in; a System
+// is made of other assets (and Systems), linked by part_of observations.
+const TOOL_CATEGORIES = ['Hand Tools', 'Electric Tool', 'Other', 'Container', 'Infrastructure', 'Biological', 'Field', 'System'];
 const AREA_CATEGORIES = ['Container', 'Infrastructure', 'Field'];
 const PART_ONLY = ['minimum_quantity', 'unit', 'cost_per_unit', 'sellable'];
 const TOOL_ONLY = ['category', 'serial_number'];
 const ASSET_FIELDS = {
   description: z.string().nullable().optional().describe('What it is: brand, model, size, condition'),
-  category: z.enum(TOOL_CATEGORIES).nullable().optional().describe('Tools only. Container, Infrastructure or Field makes it an area other assets can be in'),
+  category: z.enum(TOOL_CATEGORIES).nullable().optional().describe('Tools only. Container, Infrastructure or Field makes it an area other assets can be in; System makes it something other assets are part of (link_assets)'),
   serial_number: z.string().nullable().optional().describe('Tools only'),
   area_id: z.string().nullable().optional().describe('The area it is in: the asset_id of a Container, Infrastructure or Field tool (search_assets)'),
   storage_location: z.string().nullable().optional().describe('Where exactly within the area, e.g. "top shelf, left"'),
@@ -286,6 +287,52 @@ async function assetChanges({ type, fields, orgId, cognitoUserId }) {
     changes.accountable_person_id = accountable_person ? (await memberResolver(orgId, [accountable_person]))(accountable_person) : null;
   }
   return changes;
+}
+
+// The Systems an asset is part of, and the assets it is made of: each a
+// part_of observation linked to the System (part_of) and the member (tool or
+// part), from when it was recorded until a later observation ends it (an
+// 'ends' link to it). Ended ones are kept as former.
+const ENDED_AT = (startRef) => `LEFT JOIN LATERAL (
+  SELECT es.captured_at FROM state_links e JOIN states es ON es.id = e.state_id
+  WHERE e.entity_type = 'ends' AND e.entity_id = ${startRef}
+  ORDER BY es.captured_at LIMIT 1
+) ended ON true`;
+
+async function findMemberships(client, assetId, orgIds) {
+  const parents = (await client.query(
+    `SELECT DISTINCT t.id::text AS asset_id, t.name, js.captured_at AS since, ended.captured_at AS until
+     FROM state_links m
+     JOIN state_links p ON p.state_id = m.state_id AND p.entity_type = 'part_of'
+     JOIN states js ON js.id = m.state_id AND js.organization_id = ANY($2::uuid[])
+     JOIN tools t ON t.id = p.entity_id
+     ${ENDED_AT('js.id')}
+     WHERE m.entity_type IN ('tool', 'part') AND m.entity_id::text = $1
+     ORDER BY since`,
+    [assetId, orgIds]
+  )).rows;
+  const children = (await client.query(
+    `SELECT DISTINCT m.entity_id::text AS asset_id, m.entity_type AS type, COALESCE(t.name, pt.name) AS name,
+            js.captured_at AS since, ended.captured_at AS until
+     FROM state_links p
+     JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+     JOIN states js ON js.id = p.state_id AND js.organization_id = ANY($2::uuid[])
+     LEFT JOIN tools t ON m.entity_type = 'tool' AND t.id = m.entity_id
+     LEFT JOIN parts pt ON m.entity_type = 'part' AND pt.id = m.entity_id
+     ${ENDED_AT('js.id')}
+     WHERE p.entity_type = 'part_of' AND p.entity_id::text = $1
+     ORDER BY since`,
+    [assetId, orgIds]
+  )).rows;
+  const dated = ({ since, until, ...rest }) => ({
+    ...rest, since: formatManilaTime(since), ...(until && { until: formatManilaTime(until) }),
+  });
+  return {
+    partOf: parents.filter((r) => !r.until).map(dated),
+    formerlyPartOf: parents.filter((r) => r.until).map(dated),
+    components: children.filter((r) => !r.until).map(dated),
+    formerComponents: children.filter((r) => r.until).map(dated),
+  };
 }
 
 const NOT_AN_ASSET = (id) => ({
@@ -1231,8 +1278,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Everything about one tool or part, as its page in the app shows it: details (description, ' +
         'area and exact location, who is accountable, serial number or quantities, cost, supplier), ' +
-        'a tool\'s metrics and actions, recent edits or stock changes, and the most recent observations ' +
-        'as claims (short summaries) with how many there are in all. For older or specific observations ' +
+        'a tool\'s metrics and actions, recent edits or stock changes, the Systems it is (and was) part of and ' +
+        'the components it is (and was) made of, with dates, and the most recent observations as claims (short ' +
+        'summaries) with how many there are in all. A System\'s observations include those of everything it is ' +
+        'made of, at any depth, from while each was part of it, labelled with the component (from_components; ' +
+        'former components marked), so problems with a replaced component stay in view. For older or specific observations ' +
         'use search_claims with asset_id; for a full observation or its photos use get_observation_photos.',
       inputSchema: {
         asset_id: z.string().describe('The asset_id from search_assets'),
@@ -1258,24 +1308,47 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [asset_id, accessibleOrgIds]
           )).rows[0];
           if (!asset) return null;
+          const memberships = await findMemberships(client, asset_id, accessibleOrgIds);
+          // Its own observations and those of everything it is made of, at
+          // any depth, from while each was part of it, each once, labelled
+          // with the components they are on (former ones marked).
           const observations = (await client.query(
-            `SELECT s.id::text AS observation_id, s.captured_at, COALESCE(om.full_name, s.captured_by::text) AS captured_by,
+            `WITH RECURSIVE members(id, from_at, to_at, former) AS (
+               SELECT $1::text, '-infinity'::timestamptz, 'infinity'::timestamptz, false
+               UNION
+               SELECT m.entity_id::text, GREATEST(members.from_at, js.captured_at::timestamptz),
+                      LEAST(members.to_at, COALESCE(ended.captured_at::timestamptz, 'infinity'::timestamptz)),
+                      members.former OR ended.captured_at IS NOT NULL
+               FROM members
+               JOIN state_links p ON p.entity_type = 'part_of' AND p.entity_id::text = members.id
+               JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+               JOIN states js ON js.id = p.state_id AND js.organization_id = ANY($2::uuid[])
+               ${ENDED_AT('js.id')}
+             )
+             SELECT s.id::text AS observation_id, s.captured_at, COALESCE(om.full_name, s.captured_by::text) AS captured_by,
                     c.claim, LEFT(s.state_text, 300) AS text_start,
                     EXISTS(SELECT 1 FROM state_photos ph WHERE ph.state_id = s.id) AS has_photos,
+                    array_agg(DISTINCT COALESCE(t.name, pt.name) || CASE WHEN mb.former THEN ' (former component)' ELSE '' END)
+                      FILTER (WHERE mb.id <> $1) AS from_components,
                     COUNT(*) OVER () AS total
              FROM state_links sl
              JOIN states s ON s.id = sl.state_id
+             JOIN members mb ON mb.id = sl.entity_id::text AND s.captured_at BETWEEN mb.from_at AND mb.to_at
+             LEFT JOIN tools t ON sl.entity_type = 'tool' AND t.id = sl.entity_id
+             LEFT JOIN parts pt ON sl.entity_type = 'part' AND pt.id = sl.entity_id
              LEFT JOIN LATERAL (
                SELECT cp.content->>'content' AS claim FROM state_perspectives cp
                WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
              ) c ON true
              LEFT JOIN organization_members om
                ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id
-             WHERE sl.entity_type = $3 AND sl.entity_id::text = $1 AND s.organization_id = ANY($2::uuid[])
+             WHERE sl.entity_type IN ('tool', 'part')
+               AND s.organization_id = ANY($2::uuid[])
                AND COALESCE(s.state_text, '') NOT LIKE '{"type":"positive_sum.%'
+             GROUP BY s.id, c.claim, om.full_name
              ORDER BY s.captured_at DESC
              LIMIT 5`,
-            [asset_id, accessibleOrgIds, asset.type]
+            [asset_id, accessibleOrgIds]
           )).rows;
           if (asset.type === 'part') {
             const stockChanges = (await client.query(
@@ -1287,7 +1360,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
                LIMIT 5`,
               [asset_id]
             )).rows;
-            return { asset, observations, stockChanges };
+            return { asset, observations, stockChanges, memberships };
           }
           const actions = (await client.query(
             `SELECT a.id::text AS action_id, a.title, a.status, a.updated_at
@@ -1307,10 +1380,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [asset_id]
           )).rows;
           const metrics = await findToolMetrics(client, [asset_id], accessibleOrgIds);
-          return { asset, observations, actions, edits, metrics };
+          return { asset, observations, actions, edits, metrics, memberships };
         });
         if (!found) return NOT_AN_ASSET(asset_id);
-        const { asset, observations, stockChanges, actions, edits, metrics } = found;
+        const { asset, observations, stockChanges, actions, edits, metrics, memberships: ms } = found;
         const f = asset.fields;
         const keys = asset.type === 'tool'
           ? ['name', 'category', 'description', 'serial_number', 'status', 'storage_location', 'actual_location', 'last_maintenance', 'manual_url']
@@ -1328,6 +1401,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           ...(f.image_url && { photo: photoUrl(f.image_url) }),
           ...(f.created_at && { created_at_manila: formatManilaTime(f.created_at) }),
           link: ASSET_LINK(asset_id),
+          ...(ms.partOf.length > 0 && { part_of: ms.partOf }),
+          ...(ms.formerlyPartOf.length > 0 && { formerly_part_of: ms.formerlyPartOf }),
+          ...(ms.components.length > 0 && { components: ms.components }),
+          ...(ms.formerComponents.length > 0 && { former_components: ms.formerComponents }),
           ...(metrics?.length > 0 && { metrics: metrics.map(({ tool_id, ...m }) => m) }),
           ...(actions?.length > 0 && { actions: actions.map((a) => ({ ...a, updated_at: formatManilaTime(a.updated_at) })) }),
           ...(edits?.length > 0 && { recent_edits: edits.map((e) => ({ ...e, changed_at: formatManilaTime(e.changed_at) })) }),
@@ -1340,6 +1417,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             captured_at_manila: formatManilaTime(o.captured_at),
             captured_by: o.captured_by,
             ...(o.claim ? { claim: o.claim } : { text_start: o.text_start }),
+            ...(o.from_components && { from_components: o.from_components }),
             has_photos: o.has_photos,
           })),
         }, null, 2) }] };
@@ -1440,6 +1518,168 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       } catch (err) {
         console.log('update_asset failed:', err.message);
         return { content: [{ type: 'text', text: `Could not edit the asset: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'link_assets',
+    {
+      title: 'Make assets part of a System',
+      description:
+        'Make tools or parts components of a System (a tool whose category is System; set it with ' +
+        'update_asset), e.g. the inverter and batteries part of the Solar System. A System can be part of ' +
+        'another System. Each link is recorded as an observation on the component, linked to the System, ' +
+        'so it shows in both histories. Find assets with search_assets; confirm with the person first.',
+      inputSchema: {
+        system_id: z.string().describe('The System\'s asset_id'),
+        member_ids: z.array(z.string()).min(1).max(25).describe('asset_ids of the tools or parts that are part of it'),
+        note: z.string().optional().describe('Anything worth saying about how it fits in, added to each observation'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ system_id, member_ids, note }) => {
+      console.log('link_assets called with:', JSON.stringify({ system_id, member_ids }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow linking assets.' }],
+          isError: true,
+        };
+      }
+      try {
+        const { system, members, above, current } = await withDbClient(async (client) => {
+          const system = (await client.query(
+            `SELECT id::text AS id, name, category FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+            [system_id, accessibleOrgIds]
+          )).rows[0];
+          if (!system) return {};
+          const members = (await client.query(
+            `SELECT 'tool' AS type, id::text AS id, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
+             UNION ALL
+             SELECT 'part', id::text, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+            [member_ids, accessibleOrgIds]
+          )).rows;
+          // The System and every System it is part of, at any depth: none of
+          // these can become its component.
+          const above = (await client.query(
+            `WITH RECURSIVE up(id) AS (
+               SELECT $1::text
+               UNION
+               SELECT p.entity_id::text FROM up
+               JOIN state_links m ON m.entity_type IN ('tool', 'part') AND m.entity_id::text = up.id
+               JOIN state_links p ON p.state_id = m.state_id AND p.entity_type = 'part_of'
+               JOIN states s ON s.id = m.state_id AND s.organization_id = ANY($2::uuid[])
+               WHERE NOT EXISTS (SELECT 1 FROM state_links e WHERE e.entity_type = 'ends' AND e.entity_id = s.id)
+             )
+             SELECT id FROM up`,
+            [system_id, accessibleOrgIds]
+          )).rows.map((r) => r.id);
+          const { components } = await findMemberships(client, system_id, accessibleOrgIds);
+          return { system, members, above, current: components.map((c) => c.asset_id) };
+        });
+        if (!system) return NOT_AN_ASSET(system_id);
+        if (system.category !== 'System') {
+          return { content: [{ type: 'text', text: `${system.name} is not a System (its category is ${system.category || 'not set'}). Set its category to System with update_asset first.` }], isError: true };
+        }
+        const missing = member_ids.filter((id) => !members.some((m) => m.id === id));
+        if (missing.length > 0) return NOT_AN_ASSET(missing.join(', '));
+
+        const results = [];
+        for (const member of members) {
+          if (above.includes(member.id)) { results.push({ asset: member.name, result: `not linked: ${system.name} is part of it` }); continue; }
+          if (current.includes(member.id)) { results.push({ asset: member.name, result: 'already part of it' }); continue; }
+          try {
+            await createObservation({
+              cognitoUserId,
+              observation: {
+                state_text: `${member.name} is part of ${system.name}.${note?.trim() ? ` ${note.trim()}` : ''}`,
+                photos: [],
+                links: [{ entity_type: member.type, entity_id: member.id }, { entity_type: 'part_of', entity_id: system.id }],
+              },
+            });
+            results.push({ asset: member.name, result: 'linked' });
+          } catch (err) {
+            results.push({ asset: member.name, result: `not linked: ${err.message}` });
+          }
+        }
+        console.log('link_assets:', JSON.stringify(results));
+        return { content: [{ type: 'text', text: JSON.stringify({ system: system.name, results }, null, 2) }] };
+      } catch (err) {
+        console.log('link_assets failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not link the assets: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'unlink_assets',
+    {
+      title: 'Take assets out of a System',
+      description:
+        'Take components out of a System, e.g. when the inverter is replaced. Records an observation on ' +
+        'each component that it was removed (with the reason, if given), ending its membership; nothing is ' +
+        'deleted, so the System keeps showing what was observed while it was part of it, marked as a former ' +
+        'component. Confirm with the person first.',
+      inputSchema: {
+        system_id: z.string().describe('The System\'s asset_id'),
+        member_ids: z.array(z.string()).min(1).max(25).describe('asset_ids of the components to take out'),
+        reason: z.string().optional().describe('Why it was taken out, e.g. "Replaced; it showed panel voltage at night"'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ system_id, member_ids, reason }) => {
+      console.log('unlink_assets called with:', JSON.stringify({ system_id, member_ids }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow unlinking assets.' }],
+          isError: true,
+        };
+      }
+      try {
+        // Current memberships only: the part_of observations not yet ended.
+        const links = await withDbClient(async (client) => (await client.query(
+          `SELECT s.id::text AS observation_id, m.entity_type AS type, m.entity_id::text AS member_id,
+                  COALESCE(t.name, pt.name) AS name, sys.name AS system
+           FROM state_links p
+           JOIN state_links m ON m.state_id = p.state_id AND m.entity_type IN ('tool', 'part')
+           JOIN states s ON s.id = p.state_id
+           JOIN tools sys ON sys.id = p.entity_id
+           LEFT JOIN tools t ON m.entity_type = 'tool' AND t.id = m.entity_id
+           LEFT JOIN parts pt ON m.entity_type = 'part' AND pt.id = m.entity_id
+           WHERE p.entity_type = 'part_of' AND p.entity_id::text = $1
+             AND m.entity_id::text = ANY($2::text[]) AND s.organization_id = ANY($3::uuid[])
+             AND NOT EXISTS (SELECT 1 FROM state_links e WHERE e.entity_type = 'ends' AND e.entity_id = s.id)`,
+          [system_id, member_ids, accessibleOrgIds]
+        )).rows);
+        const results = [];
+        for (const id of member_ids) {
+          const mine = links.filter((l) => l.member_id === id);
+          if (mine.length === 0) { results.push({ asset_id: id, result: 'is not part of it' }); continue; }
+          const { type, name, system } = mine[0];
+          try {
+            await createObservation({
+              cognitoUserId,
+              observation: {
+                state_text: `${name} removed from ${system}.${reason?.trim() ? ` ${reason.trim()}` : ''}`,
+                photos: [],
+                links: [
+                  { entity_type: type, entity_id: id },
+                  ...mine.map((l) => ({ entity_type: 'ends', entity_id: l.observation_id })),
+                ],
+              },
+            });
+            results.push({ asset: name, result: 'taken out' });
+          } catch (err) {
+            results.push({ asset: name, result: `not taken out: ${err.message}` });
+          }
+        }
+        console.log('unlink_assets:', JSON.stringify(results));
+        return { content: [{ type: 'text', text: JSON.stringify({ results }, null, 2) }] };
+      } catch (err) {
+        console.log('unlink_assets failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not unlink the assets: ${err.message}` }], isError: true };
       }
     }
   );
