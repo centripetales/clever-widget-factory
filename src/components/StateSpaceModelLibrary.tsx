@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Search, Library } from 'lucide-react';
 import { useStateSpaceModels, useCreateModelAssociation } from '@/hooks/useStateSpaceModels';
+import { isExpectation } from '@/lib/expectationModels';
 import { useToast } from '@/hooks/use-toast';
 import { apiService } from '@/lib/apiService';
 import type { StateSpaceModelRecord } from '@/lib/stateSpaceApi';
@@ -37,7 +38,9 @@ export function StateSpaceModelLibrary({
   const [isSearching, setIsSearching] = useState(false);
   const [isAssociating, setIsAssociating] = useState(false);
 
-  const models = modelsResponse?.data ?? [];
+  // Expectation models (a tool's metrics over time, set with Claude) aren't
+  // state-space models this page can open; they show on the tool's page.
+  const models = (modelsResponse?.data ?? []).filter((m) => !isExpectation(m));
 
   // Reset state when dialog opens/closes
   useEffect(() => {

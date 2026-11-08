@@ -28,7 +28,7 @@ async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { m
   });
   const data = typeof reply.body === 'string' ? JSON.parse(reply.body) : reply.body;
   if (!(reply.statusCode >= 200 && reply.statusCode < 300)) {
-    throw new Error(data?.error || `${functionName} answered ${reply.statusCode}`);
+    throw new Error([data?.error || `${functionName} answered ${reply.statusCode}`, ...(data?.errors || [])].join('; '));
   }
   return data;
 }
@@ -100,6 +100,23 @@ export async function updateExperience({ cognitoUserId, orgId, experienceId, cha
 
 export async function deleteExperience({ cognitoUserId, orgId, experienceId }) {
   return invokeApp('cwf-experiences-lambda', `/api/experiences/${experienceId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', id: experienceId });
+}
+
+// Metrics are added through the metrics service, as on the tool's page. It
+// files them under the caller's primary org, whatever org is asked for.
+export async function createMetric({ cognitoUserId, toolId, metric }) {
+  return (await invokeApp('cwf-metrics-lambda', `/api/tools/${toolId}/metrics`, metric, { cognitoUserId }, { id: toolId })).metric;
+}
+
+// Expectation models are saved through the state-space service, which
+// validates them, one row per version, and linked to the asset they are about.
+export async function createModel({ cognitoUserId, orgId, definition }) {
+  return (await invokeApp('cwf-state-space-lambda', '/api/state-space-models', { model_definition: definition }, { cognitoUserId, orgId })).data;
+}
+
+export async function linkModel({ cognitoUserId, orgId, modelId, entityType, entityId }) {
+  return (await invokeApp('cwf-state-space-lambda', `/api/state-space-models/${modelId}/associations`,
+    { entity_type: entityType, entity_id: entityId }, { cognitoUserId, orgId }, { id: modelId })).data;
 }
 
 // The app stores policy as rich text (HTML); spoken plans arrive as plain text.

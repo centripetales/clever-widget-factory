@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    // src/lib/expectations.ts imports a file from lambda/mcp-server, whose
+    // own node_modules may also hold mathjs; bundle the app's copy only.
+    dedupe: ['mathjs'],
   },
   define: {
     global: 'globalThis',

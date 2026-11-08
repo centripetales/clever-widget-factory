@@ -50,6 +50,14 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   if (command.input.FunctionName === 'cwf-experiences-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-metrics-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ metric: {
+      metric_id: 'metric-new', name: body.name, unit: body.unit ?? null, value_type: body.value_type, min_value: body.min_value ?? null, max_value: body.max_value ?? null,
+    } }) })) };
+  }
+  if (command.input.FunctionName === 'cwf-state-space-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: event.pathParameters?.id ? 'association-1' : 'model-1' } }) })) };
+  }
   if (command.input.FunctionName === 'cwf-core-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'h-1' }, part: { id: body.part_id, current_quantity: '8.000' } }) })) };
   }
@@ -980,5 +988,189 @@ describe('experiences', () => {
     assert.strictEqual(reply.experience_count, 5);
     assert.strictEqual(reply.recent_experiences[0].experience_id, 'x-1');
     assert.strictEqual('asset' in reply.recent_experiences[0], false);
+  });
+});
+
+describe('expectation models', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const pond = { id: 'tool-1', name: 'Azolla Pond', organization_id: 'org-b', accountable_person_id: 'user-1', role: 'contributor', user_id: 'user-1' };
+  const coverageMetric = { metric_id: 'metric-1', tool_id: 'tool-1', name: 'Coverage %', unit: '%' };
+  const proposal = {
+    asset_id: 'tool-1', name: 'Azolla coverage', description: 'Covers the pond in about 3 weeks',
+    anchor: '2026-09-01', time_step_days: 1, horizon_days: 30,
+    variables: { coverage: { name: 'Coverage', unit: '%', distribution: 'normal', params: { mean: '100 / (1 + exp(-(t - 15) / 3))', sd: 5 }, min: 0, max: 100, metric_id: 'metric-1' } },
+    rationale: 'Logistic growth from the farm\'s earlier ponds',
+    evidence: { summary: '12 readings, Aug–Oct', observation_ids: ['obs-1'] },
+  };
+  // Answers set_model's checks in the order it asks them.
+  const answers = ({ tool = pond, observations = [{ id: 'obs-1' }], versions = [] } = {}) => (sql) =>
+    sql.includes('FROM tools t') ? [tool]
+      : sql.includes('FROM metrics') ? [coverageMetric]
+      : sql.includes('FROM states s JOIN state_links') ? observations
+      : sql.includes('FROM state_space_models') ? versions
+      : [];
+
+  test('set_model saves the next version through the state-space service and links it to the tool', async () => {
+    rows = answers({ versions: [{ version: '1' }] });
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'set_model', arguments: proposal });
+    assert.strictEqual(result.isError, undefined, result.content[0].text);
+    const [save, link] = invocations;
+    assert.strictEqual(save.functionName, 'cwf-state-space-lambda');
+    assert.strictEqual(save.event.path, '/api/state-space-models');
+    assert.strictEqual(save.event.headers['X-Organization-Id'], 'org-b');
+    const { model_definition: saved } = JSON.parse(save.event.body);
+    assert.strictEqual(saved.kind, 'expectation');
+    assert.deepStrictEqual(saved.model_metadata, { name: 'Azolla coverage', version: '2', author: 'Stefan Hamilton', description: 'Covers the pond in about 3 weeks' });
+    assert.deepStrictEqual(saved.evidence, { summary: '12 readings, Aug–Oct', observation_ids: ['obs-1'], experience_ids: [] });
+    assert.strictEqual(link.event.path, '/api/state-space-models/model-1/associations');
+    assert.deepStrictEqual(JSON.parse(link.event.body), { entity_type: 'tool', entity_id: 'tool-1' });
+    const reply = JSON.parse(result.content[0].text);
+    assert.strictEqual(reply.version, '2');
+    assert.strictEqual(reply.basis, 'farm readings');
+    assert.strictEqual(reply.expected.coverage[0].date, '2026-09-01');
+  });
+
+  test('set_model is refused without someone accountable, for others, for evidence from elsewhere, and for formulas that do not run', async () => {
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const cases = [
+      [answers({ tool: { ...pond, accountable_person_id: null } }), proposal, /No one is accountable/],
+      [answers({ tool: { ...pond, user_id: 'user-2' } }), proposal, /Only the person accountable/],
+      [answers({ observations: [] }), proposal, /Not evidence for this model: observation obs-1/],
+      [answers(), { ...proposal, variables: { coverage: { ...proposal.variables.coverage, metric_id: 'metric-9' } } }, /Not metrics of Azolla Pond: metric-9/],
+      [answers(), { ...proposal, variables: { coverage: { ...proposal.variables.coverage, params: { mean: 'grow(t)', sd: 5 } } } }, /can't be simulated/],
+    ];
+    for (const [answer, args, message] of cases) {
+      rows = answer;
+      const result = await client.callTool({ name: 'set_model', arguments: args });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, message);
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('leadership can set a model for a tool someone else is accountable for; a read-only connection cannot', async () => {
+    rows = answers({ tool: { ...pond, user_id: 'user-2', role: 'leadership' } });
+    const client = await connect(['org-b'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await client.callTool({ name: 'set_model', arguments: proposal })).isError, undefined);
+    invocations = [];
+    const reader = await connect(['org-b'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'set_model', arguments: proposal })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('get_model judges each reading by the version in force when it was taken', async () => {
+    const definition = (version, mean) => ({
+      kind: 'expectation', model_metadata: { name: 'Azolla coverage', version, author: 'Stefan Hamilton', description: 'd' },
+      anchor: '2026-09-01', time_step_days: 1, horizon_days: 30,
+      variables: { coverage: { name: 'Coverage', distribution: 'normal', params: { mean, sd: 5 }, metric_id: 'metric-1' } },
+      rationale: 'r', evidence: { summary: 's', observation_ids: [], experience_ids: [] },
+    });
+    rows = (sql) => sql.includes('FROM tools') ? [{ id: 'tool-1', name: 'Azolla Pond' }]
+      : sql.includes('FROM state_space_models') ? [
+        { id: 'm1', name: 'Azolla coverage', version: '1', model_definition: definition('1', 20), created_at: '2026-09-05T00:00:00Z' },
+        { id: 'm2', name: 'Azolla coverage', version: '2', model_definition: definition('2', 60), created_at: '2026-09-20T00:00:00Z' },
+      ]
+      : sql.includes('FROM metric_snapshots') ? [
+        { observation_id: 'o1', captured_at: '2026-09-02T00:00:00Z', value: '20', captured_by: 'Lester' },
+        { observation_id: 'o2', captured_at: '2026-09-25T00:00:00Z', value: '21', captured_by: 'Lester' },
+      ]
+      : [];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const result = await client.callTool({ name: 'get_model', arguments: { asset_id: 'tool-1' } });
+    const [model] = JSON.parse(result.content[0].text).models;
+    assert.strictEqual(model.version, '2');
+    assert.deepStrictEqual(model.versions.map((v) => v.version), ['1', '2']);
+    assert.strictEqual(model.basis, 'borrowed (no farm readings cited)');
+    const [before, after] = model.variables.coverage.readings;
+    assert.match(before.note, /evidence, not a test/);
+    assert.strictEqual(after.version, '2');
+    assert.strictEqual(after.position, 'below the middle 80%');
+    assert.ok(queries.every((q) => !q.sql.includes('organization_id') || JSON.stringify(q.params).includes('org-a')));
+  });
+
+  test('set_model saves inputs, and a formula can use them', async () => {
+    rows = answers();
+    const client = await connect(['org-b'], 'Stefan Hamilton', writer);
+    const inputs = { area: { label: 'Area', unit: 'm²', value: 8, min: 8, max: 40000 } };
+    const result = await client.callTool({ name: 'set_model', arguments: {
+      ...proposal, inputs,
+      variables: { ...proposal.variables, value: { name: 'Value/day', distribution: 'fixed', params: { value: 'coverage / 100 * area * 0.25' } } },
+    } });
+    assert.strictEqual(result.isError, undefined, result.content[0].text);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body).model_definition.inputs, inputs);
+  });
+
+  test('get_model without a tool lists the latest version of every model, within the caller orgs', async () => {
+    rows = (sql) => sql.includes('FROM state_space_models') ? [{
+      name: 'Azolla coverage', version: '2', created_at: '2026-11-08T08:05:00Z', tool_id: 'tool-1', tool: 'Azolla Pond',
+      model_definition: {
+        model_metadata: { description: 'Doubles about every 6 days' },
+        variables: { coverage: { name: 'Coverage %' } },
+        inputs: { area: { label: 'Area' } },
+      },
+    }] : [];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const reply = JSON.parse((await client.callTool({ name: 'get_model', arguments: {} })).content[0].text);
+    assert.deepStrictEqual(reply.models, [{
+      name: 'Azolla coverage', tool: 'Azolla Pond', tool_id: 'tool-1', version: '2', approved_at_manila: 'Nov 8, 2026, 4:05 PM PHT',
+      description: 'Doubles about every 6 days', variables: ['Coverage %'], inputs: ['Area'],
+    }]);
+    assert.deepStrictEqual(queries[0].params, [['org-a']]);
+  });
+
+  test('get_metric_history lists readings oldest first and the tool\'s actions, within the caller orgs', async () => {
+    rows = (sql) => sql.includes('FROM metrics m') ? [{ ...coverageMetric, tool_name: 'Azolla Pond', value_type: 'number', min_value: null }]
+      : sql.includes('FROM metric_snapshots') ? [{ observation_id: 'o1', captured_at: '2026-09-02T00:00:00Z', value: '20', captured_by: 'Lester', claim: 'Pond a fifth covered' }]
+      : sql.includes('FROM actions') ? [{ action_id: 'a1', title: 'Restock pond', status: 'completed', created_at: '2026-09-01T00:00:00Z', completed_at: null }]
+      : [];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const reply = JSON.parse((await client.callTool({ name: 'get_metric_history', arguments: { metric_id: 'metric-1' } })).content[0].text);
+    assert.deepStrictEqual(reply.metric, { metric_id: 'metric-1', name: 'Coverage %', tool: 'Azolla Pond', tool_id: 'tool-1', unit: '%', value_type: 'number' });
+    assert.strictEqual(reply.readings[0].claim, 'Pond a fifth covered');
+    assert.strictEqual(reply.actions[0].title, 'Restock pond');
+    assert.match(queries.find((q) => q.sql.includes('FROM metric_snapshots')).sql, /ORDER BY s\.captured_at$/m);
+    assert.ok(queries.every((q) => JSON.stringify(q.params).includes('org-a')));
+  });
+});
+
+describe('create_metric', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const container = { id: 'tool-2', name: "Stefan's Azolla Container", organization_id: 'org-a' };
+  const answers = ({ tool = container, role = 'contributor', metrics = [] } = {}) => (sql) =>
+    sql.includes('FROM tools t') ? [tool] : sql.includes('SELECT role') ? [{ role }] : sql.includes('FROM metrics') ? metrics : [];
+  const rootLength = { asset_id: 'tool-2', name: 'Root length', unit: 'cm', min_value: 0, details: 'Longest root of 5 fronds, measured with a ruler' };
+
+  test('adds the metric through the metrics service on the tool', async () => {
+    rows = answers();
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_metric', arguments: rootLength });
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-metrics-lambda');
+    assert.strictEqual(event.path, '/api/tools/tool-2/metrics');
+    assert.deepStrictEqual(event.pathParameters, { id: 'tool-2' });
+    assert.deepStrictEqual(JSON.parse(event.body), { name: 'Root length', unit: 'cm', value_type: 'number', min_value: 0, details: 'Longest root of 5 fronds, measured with a ruler' });
+    const reply = JSON.parse(result.content[0].text);
+    assert.strictEqual(reply.metric_id, 'metric-new');
+    assert.strictEqual(reply.min_value, 0);
+    assert.strictEqual('max_value' in reply, false);
+  });
+
+  test('is refused for a tool in another org, a name it already has, a viewer, or a read-only connection', async () => {
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const cases = [
+      [answers({ tool: { ...container, organization_id: 'org-b' } }), /another of your organizations/],
+      [answers({ metrics: [{ metric_id: 'metric-1', name: 'root length' }] }), /already has a metric "root length"/],
+      [answers({ role: 'viewer' }), /Only contributors/],
+    ];
+    for (const [answer, message] of cases) {
+      rows = answer;
+      const result = await client.callTool({ name: 'create_metric', arguments: rootLength });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, message);
+    }
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_metric', arguments: rootLength })).isError, true);
+    assert.strictEqual(invocations.length, 0);
   });
 });

@@ -196,6 +196,138 @@ function validateExpressions(model) {
 }
 
 
+// --- Expectation Models ---
+// What a metric is expected to do over time: random variables whose
+// parameters are formulas of t (days since the anchor date), of other
+// variables in the same step, and of a variable's own previous value
+// (<name>_prev, from its `initial` at t = 0).
+
+const DISTRIBUTION_PARAMS = {
+  fixed: ['value'],
+  normal: ['mean', 'sd'],
+  lognormal: ['mu', 'sigma'],
+  poisson: ['lambda'],
+  binomial: ['n', 'p'],
+  bernoulli: ['p'],
+};
+
+const expectationVariableSchema = z.object({
+  name: z.string().min(1),
+  unit: z.string().optional(),
+  distribution: z.enum(Object.keys(DISTRIBUTION_PARAMS)),
+  params: z.record(z.string(), z.union([z.number(), z.string()])),
+  initial: z.number().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  metric_id: z.string().optional(),
+});
+
+// A number the formulas use that people can try other values of in the app
+// (what-ifs, never saved); `value` is the agreed one readings are judged by.
+const expectationInputSchema = z.object({
+  label: z.string().min(1),
+  unit: z.string().optional(),
+  value: z.number(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number().positive().optional(),
+});
+
+const expectationModelSchema = z.object({
+  kind: z.literal('expectation'),
+  model_metadata: modelMetadataSchema,
+  anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a date, YYYY-MM-DD'),
+  time_step_days: z.number().positive(),
+  horizon_days: z.number().positive(),
+  variables: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/, 'lowercase letters, digits and _'), expectationVariableSchema)
+    .refine((v) => Object.keys(v).length > 0, 'at least one variable'),
+  inputs: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/, 'lowercase letters, digits and _'), expectationInputSchema).optional(),
+  rationale: z.string().min(1),
+  evidence: z.object({
+    summary: z.string().min(1),
+    observation_ids: z.array(z.string()).default([]),
+    experience_ids: z.array(z.string()).default([]),
+  }),
+});
+
+// Names an expression refers to, apart from the functions it calls.
+function referencedNames(expr) {
+  const names = [];
+  parse(expr).traverse((node, path, parent) => {
+    if (node.type === 'SymbolNode' && !(parent?.type === 'FunctionNode' && path === 'fn')) names.push(node.name);
+  });
+  return names;
+}
+
+function validateExpectationModel(jsonBody) {
+  const result = expectationModelSchema.safeParse(jsonBody);
+  if (!result.success) {
+    return {
+      success: false,
+      errors: result.error.issues.map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '(root)'}: ${issue.message}`),
+    };
+  }
+  const model = result.data;
+  const keys = Object.keys(model.variables);
+  const inputKeys = Object.keys(model.inputs ?? {});
+  const errors = [];
+  const uses = {};
+
+  for (const [key, input] of Object.entries(model.inputs ?? {})) {
+    if (keys.includes(key) || ['t', 'pi', 'e'].includes(key) || key.endsWith('_prev')) {
+      errors.push(`inputs.${key}: the name is taken (a variable, t, pi, e or a _prev name)`);
+    }
+    if (input.min > input.max) errors.push(`inputs.${key}: min is above max`);
+    else if (input.value < input.min || input.value > input.max) errors.push(`inputs.${key}: value is outside min–max`);
+  }
+
+  for (const [key, v] of Object.entries(model.variables)) {
+    const expected = DISTRIBUTION_PARAMS[v.distribution];
+    const given = Object.keys(v.params);
+    if (expected.some((p) => !given.includes(p)) || given.some((p) => !expected.includes(p))) {
+      errors.push(`variables.${key}: ${v.distribution} takes ${expected.join(', ')}`);
+    }
+    if (v.min !== undefined && v.max !== undefined && v.min > v.max) errors.push(`variables.${key}: min is above max`);
+    uses[key] = new Set();
+    for (const [param, expr] of Object.entries(v.params)) {
+      if (typeof expr === 'number') continue;
+      let names;
+      try {
+        names = referencedNames(expr);
+      } catch (e) {
+        errors.push(`variables.${key}.params.${param}: ${e instanceof Error ? e.message : 'Parse error'}`);
+        continue;
+      }
+      for (const n of names) {
+        const lagged = n.endsWith('_prev') ? n.slice(0, -'_prev'.length) : null;
+        if (n === 't' || n === 'pi' || n === 'e' || inputKeys.includes(n)) continue;
+        if (keys.includes(n)) uses[key].add(n);
+        else if (lagged && model.variables[lagged]?.initial !== undefined) continue;
+        else if (lagged && keys.includes(lagged)) errors.push(`variables.${key}.params.${param}: ${n} needs an initial value on ${lagged}`);
+        else errors.push(`variables.${key}.params.${param}: undefined variable "${n}"`);
+      }
+    }
+  }
+
+  // Within a step, variables can use each other only without a loop;
+  // feedback goes through time (<name>_prev).
+  const state = {};
+  const visit = (key, trail) => {
+    if (state[key] === 'done') return;
+    if (state[key] === 'visiting') {
+      errors.push(`variables depend on each other in a loop within a step: ${[...trail, key].join(' → ')}; use <name>_prev for feedback`);
+      return;
+    }
+    state[key] = 'visiting';
+    for (const dep of uses[key]) visit(dep, [...trail, key]);
+    state[key] = 'done';
+  };
+  for (const key of keys) if (!state[key]) visit(key, []);
+
+  return errors.length > 0 ? { success: false, errors: [...new Set(errors)] } : { success: true, model };
+}
+
+
 // --- Combined Validation Entry Point ---
 
 /**
@@ -209,6 +341,8 @@ function validateExpressions(model) {
  * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5
  */
 function validateStateSpaceModel(jsonBody) {
+  if (jsonBody?.kind === 'expectation') return validateExpectationModel(jsonBody);
+
   // Phase 1: Zod schema validation
   const result = nonlinearModelSchema.safeParse(jsonBody);
   if (!result.success) {
@@ -239,4 +373,5 @@ module.exports = {
   validateCrossReferences,
   validateExpressions,
   validateStateSpaceModel,
+  validateExpectationModel,
 };
