@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildToolExpectations } from '@/lib/expectationModels';
+import { buildToolExpectations, isExpectation } from '@/lib/expectationModels';
 import type { StateSpaceModelRecord } from '@/lib/stateSpaceApi';
 import type { ObservationHistoryEntry } from '@/hooks/tools/useToolHistory';
 
@@ -53,5 +53,12 @@ describe('buildToolExpectations', () => {
     expect(e.basis).toBe('borrowed');
     expect(e.variables[0].today).toBeNull();
     expect(buildToolExpectations([], [])).toEqual([]);
+  });
+});
+
+describe('isExpectation', () => {
+  it('tells expectation models from state-space models, so the action page library leaves them out', () => {
+    expect(isExpectation(record('1', 20, '2026-09-05T00:00:00Z'))).toBe(true);
+    expect(isExpectation({ ...record('1', 0, '2026-09-01T00:00:00Z'), model_definition: { model_metadata: {} } } as unknown as StateSpaceModelRecord)).toBe(false);
   });
 });
