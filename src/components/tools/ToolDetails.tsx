@@ -22,6 +22,9 @@ import { useEffect, useMemo, useState } from "react";
 import { getThumbnailUrl, getImageUrl, getOriginalUrl } from '@/lib/imageUtils';
 import { PhotoThumb } from "@/components/shared/PhotoThumb";
 import { GroupMetricsGrid } from "@/components/shared/GroupMetricsGrid";
+import { ExpectationsTab } from "@/components/tools/ExpectationsTab";
+import { useStateSpaceModelsByEntity } from "@/hooks/useStateSpaceModels";
+import { buildToolExpectations } from "@/lib/expectationModels";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useCognitoAuth";
 import { useOrganization } from "@/hooks/useOrganization";
@@ -150,6 +153,14 @@ export const ToolDetails = ({
   const isObservation = (record: HistoryEntry): record is ObservationHistoryEntry => {
     return (record as ObservationHistoryEntry).type === 'observation';
   };
+
+  // What this tool's metrics are expected to do (models set with Claude);
+  // the Expected tab appears once there is one.
+  const { data: modelsData } = useStateSpaceModelsByEntity('tool', tool.id);
+  const expectations = useMemo(
+    () => buildToolExpectations(modelsData?.data ?? [], toolHistory.filter(isObservation)),
+    [modelsData, toolHistory],
+  );
 
   const getToolCardStyle = (record: HistoryEntry) => {
     if (isObservation(record)) {
@@ -502,10 +513,13 @@ export const ToolDetails = ({
       <div>
         <div>
           <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
-            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${3 + shares.length}, 1fr)` }}>
+            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${3 + (expectations.length > 0 ? 1 : 0) + shares.length}, 1fr)` }}>
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
               <TabsTrigger value="experiences" className="w-full">Experiences</TabsTrigger>
+              {expectations.length > 0 && (
+                <TabsTrigger value="expected" className="w-full">Expected</TabsTrigger>
+              )}
               {shares.map((share) => (
                 <TabsTrigger key={share.target_org_id} value={`group-${share.target_org_id}`} className="w-full">
                   {/* This tab is really "the metrics chart, as seen by {org}"
@@ -644,6 +658,12 @@ export const ToolDetails = ({
                 disabled={tool.is_shared_inbound}
               />
             </TabsContent>
+
+            {expectations.length > 0 && (
+              <TabsContent value="expected" className="space-y-4">
+                <ExpectationsTab expectations={expectations} />
+              </TabsContent>
+            )}
 
             {shares.map((share) => (
               <TabsContent key={share.target_org_id} value={`group-${share.target_org_id}`} className="space-y-4">

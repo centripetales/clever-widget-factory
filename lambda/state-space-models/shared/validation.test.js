@@ -40,6 +40,34 @@ describe('expectation models', () => {
     ]);
   });
 
+  test('formulas can use the model\'s inputs; bad inputs are reported', () => {
+    const ok = validateStateSpaceModel({
+      ...expectation({ value: { name: 'Value/day', distribution: 'fixed', params: { value: 'area * yield' } } }),
+      inputs: {
+        area: { label: 'Area', unit: 'm²', value: 8, min: 8, max: 40000 },
+        yield: { label: 'Yield', value: 0.18, min: 0.05, max: 0.3, step: 0.01 },
+      },
+    });
+    assert.strictEqual(ok.success, true, JSON.stringify(ok.errors));
+    assert.strictEqual(ok.model.inputs.area.value, 8);
+
+    const bad = validateStateSpaceModel({
+      ...expectation({ value: { name: 'Value/day', distribution: 'fixed', params: { value: 'area' } } }),
+      inputs: {
+        area: { label: 'Area', value: 1, min: 8, max: 40000 },
+        value: { label: 'Clash', value: 1, min: 0, max: 2 },
+        t: { label: 'Time', value: 1, min: 2, max: 0 },
+      },
+    });
+    assert.strictEqual(bad.success, false);
+    assert.deepStrictEqual(bad.errors, [
+      'inputs.area: value is outside min–max',
+      'inputs.value: the name is taken (a variable, t, pi, e or a _prev name)',
+      'inputs.t: the name is taken (a variable, t, pi, e or a _prev name)',
+      'inputs.t: min is above max',
+    ]);
+  });
+
   test('variables using each other within a step are a loop', () => {
     const result = validateStateSpaceModel(expectation({
       a: { name: 'A', distribution: 'fixed', params: { value: 'b + 1' } },

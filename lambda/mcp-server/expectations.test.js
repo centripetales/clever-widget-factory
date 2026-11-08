@@ -11,6 +11,15 @@ const coverage = model({
 });
 
 describe('simulate', () => {
+  test('formulas use the agreed input values, or what-if values in their place', () => {
+    const pond = model(
+      { value: { name: 'Value/day', distribution: 'fixed', params: { value: 'area * 0.25' } } },
+      { inputs: { area: { label: 'Area', unit: 'm²', value: 8, min: 8, max: 40000 } } },
+    );
+    assert.strictEqual(summarize(simulate(pond).samples.value[0]).mean, 2);
+    assert.strictEqual(summarize(simulate(pond, { inputs: { area: 10000 } }).samples.value[0]).mean, 2500);
+  });
+
   test('the same model gives the same numbers every time', () => {
     const a = simulate(coverage);
     const b = simulate(coverage);

@@ -2486,7 +2486,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'the anchor), other variables in the same step, and <name>_prev (the variable\'s previous value, from ' +
         'its initial value at t = 0). Distributions: fixed(value), normal(mean, sd), lognormal(mu, sigma), ' +
         'poisson(lambda), binomial(n, p), bernoulli(p). min/max clamp the draws (e.g. 0–100 for a percentage). ' +
-        'Example: coverage ~ normal(mean: "100 / (1 + exp(-(t - 20) / 5))", sd: 8), min 0, max 100.',
+        'Example: coverage ~ normal(mean: "100 / (1 + exp(-(t - 20) / 5))", sd: 8), min 0, max 100.\n\n' +
+        'Inputs are numbers the formulas use by name (e.g. area, price) that people can try other values of in ' +
+        'the app\'s sliders, to see what could be; those what-ifs are never saved. Each has a label, unit, the ' +
+        'agreed value (readings are judged by it) and a min–max range for the slider. Agree the values and ' +
+        'ranges with the person like the rest of the model.',
       inputSchema: {
         asset_id: z.string().describe('The tool, from search_assets'),
         name: z.string().min(1).describe('What the model is of, e.g. "Azolla coverage". Saving the same name again is a new version of it'),
@@ -2504,6 +2508,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           max: z.number().optional(),
           metric_id: z.string().optional().describe('The tool\'s metric this variable is compared with'),
         })).describe('Keyed by a short lowercase name, e.g. coverage'),
+        inputs: z.record(z.string(), z.object({
+          label: z.string().min(1),
+          unit: z.string().optional(),
+          value: z.number().describe('The agreed value'),
+          min: z.number(),
+          max: z.number(),
+          step: z.number().positive().optional().describe('Slider step'),
+        })).optional().describe('Keyed by the short lowercase name the formulas use, e.g. area_m2'),
         rationale: z.string().min(1).describe('Why this distribution and these numbers, and how people\'s notes were handled'),
         evidence: z.object({
           summary: z.string().min(1).describe('What it rests on: which readings, how many, over what dates; outside sources named'),
@@ -2513,7 +2525,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ asset_id, name, description, anchor, time_step_days, horizon_days, variables, rationale, evidence }) => {
+    async ({ asset_id, name, description, anchor, time_step_days, horizon_days, variables, inputs, rationale, evidence }) => {
       console.log('set_model called with:', JSON.stringify({ asset_id, name, variables: Object.keys(variables) }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -2573,7 +2585,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const definition = {
           kind: 'expectation',
           model_metadata: { name, version, author: callerName || 'unknown', description },
-          anchor, time_step_days, horizon_days, variables, rationale,
+          anchor, time_step_days, horizon_days, variables, ...(inputs && { inputs }), rationale,
           evidence: { summary: evidence.summary, observation_ids: observationIds, experience_ids: experienceIds },
         };
         // A trial run catches formulas that parse but can't be evaluated.
@@ -2611,14 +2623,41 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'to do over time (mean and the middle 80%) and today, and every reading of a metric it is tied to, ' +
         'compared with the version in force when the reading was taken. tail_probability near 0 means a ' +
         'surprising reading; readings from before the first version are evidence, not tests. Interpret the ' +
-        'gaps when asked; whether something is worth sharing as an experience is the person\'s call.',
+        'gaps when asked; whether something is worth sharing as an experience is the person\'s call.\n\n' +
+        'Without asset_id, lists every expectation model (latest versions, which tool, in plain words), to ' +
+        'find ones worth reading before writing a model for a new place.',
       inputSchema: {
-        asset_id: z.string().describe('The tool, from search_assets'),
+        asset_id: z.string().optional().describe('The tool, from search_assets; leave out to list every model'),
       },
     },
     async ({ asset_id }) => {
       console.log('get_model called with:', JSON.stringify({ asset_id }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!asset_id) {
+        try {
+          const rows = await withDbClient(async (client) => (await client.query(
+            `SELECT DISTINCT ON (a.entity_id, m.name)
+                    m.name, m.version, m.model_definition, m.created_at, t.id::text AS tool_id, t.name AS tool
+             FROM state_space_models m
+             JOIN state_space_model_associations a ON a.model_id = m.id AND a.entity_type = 'tool'
+             JOIN tools t ON t.id = a.entity_id
+             WHERE m.organization_id = ANY($1::uuid[]) AND m.model_definition->>'kind' = 'expectation'
+             ORDER BY a.entity_id, m.name, m.created_at DESC`,
+            [accessibleOrgIds]
+          )).rows);
+          console.log(`get_model: listed ${rows.length} models`);
+          return { content: [{ type: 'text', text: JSON.stringify({ models: rows.map((m) => ({
+            name: m.name, tool: m.tool, tool_id: m.tool_id, version: m.version,
+            approved_at_manila: formatManilaTime(m.created_at),
+            description: m.model_definition.model_metadata.description,
+            variables: Object.values(m.model_definition.variables).map((v) => v.name),
+            ...(m.model_definition.inputs && { inputs: Object.values(m.model_definition.inputs).map((i) => i.label) }),
+          })) }, null, 2) }] };
+        } catch (err) {
+          console.log('get_model failed:', err.message);
+          return { content: [{ type: 'text', text: `Could not list the models: ${err.message}` }], isError: true };
+        }
+      }
       try {
         const found = await withDbClient(async (client) => {
           const tool = (await client.query(
@@ -2659,6 +2698,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             set_by: d.model_metadata.author,
             versions: runs.map((r) => ({ version: r.version, approved_at_manila: formatManilaTime(r.approved_at) })),
             anchor: d.anchor, time_step_days: d.time_step_days, horizon_days: d.horizon_days,
+            ...(d.inputs && { inputs: d.inputs }),
             basis: d.evidence.observation_ids.length > 0 ? 'farm readings' : 'borrowed (no farm readings cited)',
             rationale: d.rationale,
             evidence: d.evidence,

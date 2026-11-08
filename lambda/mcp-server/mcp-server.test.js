@@ -1089,6 +1089,36 @@ describe('expectation models', () => {
     assert.ok(queries.every((q) => !q.sql.includes('organization_id') || JSON.stringify(q.params).includes('org-a')));
   });
 
+  test('set_model saves inputs, and a formula can use them', async () => {
+    rows = answers();
+    const client = await connect(['org-b'], 'Stefan Hamilton', writer);
+    const inputs = { area: { label: 'Area', unit: 'm²', value: 8, min: 8, max: 40000 } };
+    const result = await client.callTool({ name: 'set_model', arguments: {
+      ...proposal, inputs,
+      variables: { ...proposal.variables, value: { name: 'Value/day', distribution: 'fixed', params: { value: 'coverage / 100 * area * 0.25' } } },
+    } });
+    assert.strictEqual(result.isError, undefined, result.content[0].text);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body).model_definition.inputs, inputs);
+  });
+
+  test('get_model without a tool lists the latest version of every model, within the caller orgs', async () => {
+    rows = (sql) => sql.includes('FROM state_space_models') ? [{
+      name: 'Azolla coverage', version: '2', created_at: '2026-11-08T08:05:00Z', tool_id: 'tool-1', tool: 'Azolla Pond',
+      model_definition: {
+        model_metadata: { description: 'Doubles about every 6 days' },
+        variables: { coverage: { name: 'Coverage %' } },
+        inputs: { area: { label: 'Area' } },
+      },
+    }] : [];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const reply = JSON.parse((await client.callTool({ name: 'get_model', arguments: {} })).content[0].text);
+    assert.deepStrictEqual(reply.models, [{
+      name: 'Azolla coverage', tool: 'Azolla Pond', tool_id: 'tool-1', version: '2', approved_at_manila: 'Nov 8, 2026, 4:05 PM PHT',
+      description: 'Doubles about every 6 days', variables: ['Coverage %'], inputs: ['Area'],
+    }]);
+    assert.deepStrictEqual(queries[0].params, [['org-a']]);
+  });
+
   test('get_metric_history lists readings oldest first and the tool\'s actions, within the caller orgs', async () => {
     rows = (sql) => sql.includes('FROM metrics m') ? [{ ...coverageMetric, tool_name: 'Azolla Pond', value_type: 'number', min_value: null }]
       : sql.includes('FROM metric_snapshots') ? [{ observation_id: 'o1', captured_at: '2026-09-02T00:00:00Z', value: '20', captured_by: 'Lester', claim: 'Pond a fifth covered' }]

@@ -222,6 +222,17 @@ const expectationVariableSchema = z.object({
   metric_id: z.string().optional(),
 });
 
+// A number the formulas use that people can try other values of in the app
+// (what-ifs, never saved); `value` is the agreed one readings are judged by.
+const expectationInputSchema = z.object({
+  label: z.string().min(1),
+  unit: z.string().optional(),
+  value: z.number(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number().positive().optional(),
+});
+
 const expectationModelSchema = z.object({
   kind: z.literal('expectation'),
   model_metadata: modelMetadataSchema,
@@ -230,6 +241,7 @@ const expectationModelSchema = z.object({
   horizon_days: z.number().positive(),
   variables: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/, 'lowercase letters, digits and _'), expectationVariableSchema)
     .refine((v) => Object.keys(v).length > 0, 'at least one variable'),
+  inputs: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/, 'lowercase letters, digits and _'), expectationInputSchema).optional(),
   rationale: z.string().min(1),
   evidence: z.object({
     summary: z.string().min(1),
@@ -257,8 +269,17 @@ function validateExpectationModel(jsonBody) {
   }
   const model = result.data;
   const keys = Object.keys(model.variables);
+  const inputKeys = Object.keys(model.inputs ?? {});
   const errors = [];
   const uses = {};
+
+  for (const [key, input] of Object.entries(model.inputs ?? {})) {
+    if (keys.includes(key) || ['t', 'pi', 'e'].includes(key) || key.endsWith('_prev')) {
+      errors.push(`inputs.${key}: the name is taken (a variable, t, pi, e or a _prev name)`);
+    }
+    if (input.min > input.max) errors.push(`inputs.${key}: min is above max`);
+    else if (input.value < input.min || input.value > input.max) errors.push(`inputs.${key}: value is outside min–max`);
+  }
 
   for (const [key, v] of Object.entries(model.variables)) {
     const expected = DISTRIBUTION_PARAMS[v.distribution];
@@ -279,7 +300,7 @@ function validateExpectationModel(jsonBody) {
       }
       for (const n of names) {
         const lagged = n.endsWith('_prev') ? n.slice(0, -'_prev'.length) : null;
-        if (n === 't' || n === 'pi' || n === 'e') continue;
+        if (n === 't' || n === 'pi' || n === 'e' || inputKeys.includes(n)) continue;
         if (keys.includes(n)) uses[key].add(n);
         else if (lagged && model.variables[lagged]?.initial !== undefined) continue;
         else if (lagged && keys.includes(lagged)) errors.push(`variables.${key}.params.${param}: ${n} needs an initial value on ${lagged}`);

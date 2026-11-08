@@ -70,9 +70,15 @@ function stepOrder(variables) {
   return ordered;
 }
 
+// The values a model's formulas use for its inputs: the agreed ones, with
+// any what-if values (`overrides`) in their place.
+export function inputValues(model, overrides = {}) {
+  return Object.fromEntries(Object.entries(model.inputs ?? {}).map(([k, input]) => [k, overrides[k] ?? input.value]));
+}
+
 // Draws of every variable at every step: samples[key][step] is one array of
-// `runs` values.
-export function simulate(model, { seed = 1 } = {}) {
+// `runs` values. `inputs` are what-if values for the model's inputs.
+export function simulate(model, { seed = 1, inputs = {} } = {}) {
   const keys = Object.keys(model.variables);
   const steps = Math.floor(model.horizon_days / model.time_step_days) + 1;
   const runs = Math.max(100, Math.min(500, Math.floor(MAX_DRAWS / (steps * keys.length))));
@@ -81,11 +87,12 @@ export function simulate(model, { seed = 1 } = {}) {
   const params = Object.fromEntries(keys.map((k) => [k, Object.entries(model.variables[k].params)
     .map(([name, p]) => [name, typeof p === 'number' ? () => p : ((c) => (scope) => c.evaluate(scope))(compile(p))])]));
   const samples = Object.fromEntries(keys.map((k) => [k, Array.from({ length: steps }, () => new Float64Array(runs))]));
+  const given = inputValues(model, inputs);
 
   for (let r = 0; r < runs; r++) {
     const prev = Object.fromEntries(keys.map((k) => [`${k}_prev`, model.variables[k].initial]));
     for (let s = 0; s < steps; s++) {
-      const scope = { t: s * model.time_step_days, ...prev };
+      const scope = { ...given, t: s * model.time_step_days, ...prev };
       for (const k of order) {
         const v = model.variables[k];
         const args = Object.fromEntries(params[k].map(([name, f]) => [name, Number(f(scope))]));
