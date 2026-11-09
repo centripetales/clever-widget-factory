@@ -332,7 +332,7 @@ async function assetChanges({ type, fields, orgId, cognitoUserId }) {
   const changes = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
   if (area_id) {
     const area = await withDbClient(async (client) => (await client.query(
-      `SELECT id FROM tools WHERE id::text = $1 AND organization_id = $2 AND category = ANY($3::text[]) AND COALESCE(status, '') <> 'removed'`,
+      `SELECT id FROM tools WHERE id::text = $1 AND organization_id = $2 AND category = ANY($3::text[]) AND status::text IS DISTINCT FROM 'removed'`,
       [area_id, orgId, AREA_CATEGORIES]
     )).rows[0]);
     if (!area) throw new Error(`${area_id} is not an area in this organization (a Container, Infrastructure or Field tool).`);
