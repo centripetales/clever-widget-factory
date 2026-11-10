@@ -48,7 +48,7 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
   if (command.input.FunctionName === 'cwf-financial-records-lambda') {
-    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: 'new-record', description: body.description } }) })) };
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: 'new-record', description: body.description, transaction_date: body.transaction_date, amount: body.amount, payment_method: body.payment_method }) })) };
   }
   if (command.input.FunctionName === 'cwf-experiences-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };

@@ -74,16 +74,17 @@ export async function changeStock({ cognitoUserId, orgId, partId, change, reason
   return invokeApp('cwf-core-lambda', '/api/parts_history', { part_id: partId, quantity_change: change, change_reason: reason }, { cognitoUserId, orgId });
 }
 
-// An expense, through the financial records service as the app's form does:
+// An expense, through the financial records service as the app's form does (it
+// answers with the record itself, not wrapped in `data`):
 // it keeps Cash balances and search data in step, in the primary org.
 export async function createFinancialRecord({ cognitoUserId, record }) {
-  return (await invokeApp('cwf-financial-records-lambda', '/api/financial-records', record, { cognitoUserId })).data;
+  return invokeApp('cwf-financial-records-lambda', '/api/financial-records', record, { cognitoUserId });
 }
 
 // Only the fields given change, in the record's org (orgId). The service
 // decides who may edit it (who recorded it, or an admin) and re-balances Cash.
 export async function updateFinancialRecord({ cognitoUserId, orgId, recordId, changes }) {
-  return (await invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: recordId })).data;
+  return invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: recordId });
 }
 
 export async function deleteFinancialRecord({ cognitoUserId, orgId, recordId }) {
