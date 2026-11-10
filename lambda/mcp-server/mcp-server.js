@@ -1093,7 +1093,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         return { content: [{ type: 'text', text: JSON.stringify({
           financial_record_id: record.id,
           link: `https://stargazer-farm.com/financial-records/${record.id}`,
-          transaction_date: updated.transaction_date,
+          transaction_date: String(updated.transaction_date).slice(0, 10),
           amount_php: Math.abs(Number(updated.amount)),
           payment_method: updated.payment_method,
           description: updated.description,
