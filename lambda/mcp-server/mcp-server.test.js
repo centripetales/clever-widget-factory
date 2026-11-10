@@ -47,6 +47,9 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-financial-records-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: 'new-record', description: body.description } }) })) };
+  }
   if (command.input.FunctionName === 'cwf-experiences-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };
   }
@@ -231,6 +234,109 @@ describe('create_action', () => {
     const result = await client.callTool({ name: 'create_action', arguments: { title: 'X' } });
     assert.strictEqual(result.isError, true);
     assert.match(result.content[0].text, /reconnect/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('create_financial_record', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('goes through the app\'s financial records service as the caller', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_financial_record', arguments: {
+      transaction_date: '2026-11-09', amount_php: 350.5, payment_method: 'GCash', description: 'Rice bran',
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/financial-records');
+    assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      transaction_date: '2026-11-09', amount: 350.5, payment_method: 'GCash', description: 'Rice bran',
+    });
+    assert.match(result.content[0].text, /https:\/\/stargazer-farm\.com\/financial-records\/new-record/);
+  });
+
+  test('a read-only connection cannot submit', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1', canWrite: false });
+    const result = await client.callTool({ name: 'create_financial_record', arguments: {
+      transaction_date: '2026-11-09', amount_php: 10, payment_method: 'Cash', description: 'X',
+    } });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /reconnect/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('update_financial_record and delete_financial_record', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('an edit sends only the given fields, in the record\'s org', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1', amount_php: 400 } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(queries[0].params, ['fr-1', ['org-a', 'org-b']]);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.pathParameters.id, 'fr-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { amount: 400 });
+    assert.match(result.content[0].text, /stargazer-farm\.com\/financial-records\/fr-1/);
+  });
+
+  test('an edit with nothing to change is refused', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('delete without confirm shows the record and deletes nothing', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a', transaction_date: '2026-11-09', amount: '350.50', payment_method: 'GCash', description: 'Rice bran' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'delete_financial_record', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(invocations.length, 0);
+    const shown = JSON.parse(result.content[0].text);
+    assert.strictEqual(shown.deleted, false);
+    assert.deepStrictEqual(shown.will_delete, {
+      financial_record_id: 'fr-1', transaction_date: '2026-11-09', amount_php: 350.5, direction: 'out', payment_method: 'GCash', description: 'Rice bran',
+    });
+  });
+
+  test('delete with confirm goes through the app\'s delete in the record\'s org', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'delete_financial_record', arguments: { financial_record_id: 'fr-1', confirm: true } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'DELETE');
+    assert.strictEqual(event.pathParameters.id, 'fr-1');
+    assert.match(result.content[0].text, /"deleted": true/);
+  });
+
+  test('a record outside the caller\'s orgs is not found, and nothing is invoked', async () => {
+    rows = [];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    for (const name of ['update_financial_record', 'delete_financial_record']) {
+      const result = await client.callTool({ name, arguments: { financial_record_id: 'fr-x', amount_php: 1 } });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, /No financial record/);
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('a read-only connection can neither edit nor delete', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1', canWrite: false });
+    for (const name of ['update_financial_record', 'delete_financial_record']) {
+      const result = await client.callTool({ name, arguments: { financial_record_id: 'fr-1', amount_php: 1 } });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, /reconnect/);
+    }
     assert.strictEqual(invocations.length, 0);
   });
 });

@@ -7,7 +7,7 @@ import {
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
-  createModel, linkModel, createMetric,
+  createModel, linkModel, createMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -970,6 +970,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const amount = Number(r.amount);
           return {
             financial_record_id: r.id,
+            link: `https://stargazer-farm.com/financial-records/${r.id}`,
             similarity: isDateMode ? undefined : Number(r.similarity.toFixed(3)),
             transaction_date: r.transaction_date,
             direction: amount < 0 ? 'in' : 'out',
@@ -983,6 +984,174 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         return { content: [{ type: 'text', text: JSON.stringify(formatted, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching financial records: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_financial_record',
+    {
+      title: 'Submit an expense',
+      description:
+        'Record an expense (money paid out) in CWF. Receipt photos cannot be attached. ' +
+        'Before calling this, read the expense back to the person (date, amount, payment ' +
+        'method, description) and only call it once they say yes.',
+      inputSchema: {
+        transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
+        amount_php: z.number().positive().describe('Amount paid, in pesos, as a positive number'),
+        payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).describe('How it was paid'),
+        description: z.string().min(1).describe('What it was for, e.g. "Rice bran for the azolla ponds"'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ transaction_date, amount_php, payment_method, description }) => {
+      console.log('create_financial_record called with:', JSON.stringify({ transaction_date, amount_php, payment_method }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow submitting expenses.' }],
+          isError: true,
+        };
+      }
+
+      try {
+        const created = await createFinancialRecord({
+          cognitoUserId,
+          record: { transaction_date, amount: amount_php, payment_method, description },
+        });
+        console.log('create_financial_record: created', created.id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            financial_record_id: created.id,
+            link: `https://stargazer-farm.com/financial-records/${created.id}`,
+            transaction_date,
+            amount_php,
+            payment_method,
+            description: created.description,
+          }, null, 2) }],
+        };
+      } catch (err) {
+        console.log('create_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not submit the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  const NOT_A_FINANCIAL_RECORD = (id) => ({
+    content: [{ type: 'text', text: `No financial record ${id} in your organizations — check the id with search_financial_records.` }],
+    isError: true,
+  });
+  const findFinancialRecord = (id) => withDbClient(async (client) => (await client.query(
+    `SELECT fr.id::text AS id, fr.organization_id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
+       (SELECT ds.state_text FROM state_links sl JOIN states ds ON ds.id = sl.state_id
+         WHERE sl.entity_id = fr.id AND sl.entity_type = 'financial_record'
+         ORDER BY ds.created_at, ds.id LIMIT 1) AS description
+     FROM financial_records fr WHERE fr.id::text = $1 AND fr.organization_id = ANY($2::uuid[])`,
+    [id, accessibleOrgIds]
+  )).rows[0]);
+
+  server.registerTool(
+    'update_financial_record',
+    {
+      title: 'Edit an expense',
+      description:
+        'Change an expense recorded in CWF. Only the fields given change. Only whoever recorded it, ' +
+        'or an admin, can edit it. Find the financial_record_id with search_financial_records. ' +
+        'Before calling this, read back what will change (old and new values) and only call it once the person says yes.',
+      inputSchema: {
+        financial_record_id: z.string(),
+        transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
+        amount_php: z.number().positive().optional().describe('Amount paid, in pesos, as a positive number'),
+        payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).optional(),
+        description: z.string().min(1).optional().describe('What it was for'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ financial_record_id, transaction_date, amount_php, payment_method, description }) => {
+      console.log('update_financial_record called with:', JSON.stringify({ financial_record_id, transaction_date, amount_php, payment_method }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing expenses.' }],
+          isError: true,
+        };
+      }
+      const changes = {
+        ...(transaction_date !== undefined && { transaction_date }),
+        ...(amount_php !== undefined && { amount: amount_php }),
+        ...(payment_method !== undefined && { payment_method }),
+        ...(description !== undefined && { description }),
+      };
+      if (Object.keys(changes).length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give at least one of transaction_date, amount_php, payment_method, description.' }], isError: true };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        const updated = await updateFinancialRecord({ cognitoUserId, orgId: record.organization_id, recordId: record.id, changes });
+        console.log('update_financial_record: updated', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          financial_record_id: record.id,
+          link: `https://stargazer-farm.com/financial-records/${record.id}`,
+          transaction_date: updated.transaction_date,
+          amount_php: Math.abs(Number(updated.amount)),
+          payment_method: updated.payment_method,
+          description: updated.description,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('update_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not edit the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'delete_financial_record',
+    {
+      title: 'Delete an expense',
+      description:
+        'Delete a financial record, with its description, as the app\'s delete does. Only whoever recorded it, ' +
+        'or an admin, can delete it. This cannot be undone, so it takes two calls: the first, without ' +
+        'confirm, deletes nothing and returns the record; show it to the person and, only once they say ' +
+        'yes, call again with confirm: true.',
+      inputSchema: {
+        financial_record_id: z.string(),
+        confirm: z.boolean().optional().describe('true only after the person has said yes to deleting the record the first call returned'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ financial_record_id, confirm }) => {
+      console.log('delete_financial_record called with:', JSON.stringify({ financial_record_id, confirm }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow deleting expenses.' }],
+          isError: true,
+        };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        if (confirm !== true) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            deleted: false,
+            will_delete: {
+              financial_record_id: record.id,
+              transaction_date: record.transaction_date,
+              amount_php: Math.abs(Number(record.amount)),
+              direction: Number(record.amount) < 0 ? 'in' : 'out',
+              payment_method: record.payment_method,
+              description: record.description,
+            },
+            next: 'Nothing has been deleted. Show this record to the person; only if they say yes, call again with confirm: true.',
+          }, null, 2) }] };
+        }
+        await deleteFinancialRecord({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
+        console.log('delete_financial_record: deleted', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify({ financial_record_id: record.id, deleted: true }, null, 2) }] };
+      } catch (err) {
+        console.log('delete_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not delete the expense: ${err.message}` }], isError: true };
       }
     }
   );
