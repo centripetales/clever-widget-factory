@@ -993,12 +993,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Submit an expense',
       description:
-        'Record an expense (money paid out) in CWF. Receipt photos cannot be attached. ' +
+        'Record an expense (money paid out) or a sale/addition (money in, as a negative amount) in CWF. Receipt photos cannot be attached. ' +
         'Before calling this, read the expense back to the person (date, amount, payment ' +
         'method, description) and only call it once they say yes.',
       inputSchema: {
         transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
-        amount_php: z.number().positive().describe('Amount paid, in pesos, as a positive number'),
+        amount_php: z.number().refine((n) => n !== 0, 'Amount cannot be zero').describe('Amount in pesos: positive for money paid out, negative for money coming in (a sale or addition)'),
         payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).describe('How it was paid'),
         description: z.string().min(1).describe('What it was for, e.g. "Rice bran for the azolla ponds"'),
       },
@@ -1061,7 +1061,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       inputSchema: {
         financial_record_id: z.string(),
         transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
-        amount_php: z.number().positive().optional().describe('Amount paid, in pesos, as a positive number'),
+        amount_php: z.number().refine((n) => n !== 0, 'Amount cannot be zero').optional().describe('Amount in pesos: positive for money paid out, negative for money coming in (a sale or addition)'),
         payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).optional(),
         description: z.string().min(1).optional().describe('What it was for'),
       },
@@ -1094,7 +1094,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           financial_record_id: record.id,
           link: `https://stargazer-farm.com/financial-records/${record.id}`,
           transaction_date: String(updated.transaction_date).slice(0, 10),
-          amount_php: Math.abs(Number(updated.amount)),
+          amount_php: Number(updated.amount),
           payment_method: updated.payment_method,
           description: updated.description,
         }, null, 2) }] };
