@@ -18,6 +18,29 @@ const S3_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
 // Some photo_url values are bare S3 keys; resolve them as the app's getImageUrl does.
 const photoUrl = (u) => /^https?:\/\//.test(u) ? u : `${S3_BUCKET_URL}/${u.replace(/^\//, '')}`;
 
+// Photos can only be attached from our own bucket (a key, or a URL under it):
+// the server fetches them, and the app's image pipeline expects them there.
+// Returns the keys to store, or an error result naming what was refused.
+async function bucketPhotoKeys(urls) {
+  const keys = urls.map((u) => {
+    const key = u.startsWith(`${S3_BUCKET_URL}/`) ? u.slice(S3_BUCKET_URL.length + 1) : u;
+    return /^\w[\w.\-/ %()]*$/.test(key) && !key.includes('..') ? key : null;
+  });
+  const outside = urls.filter((_, i) => keys[i] === null);
+  if (outside.length > 0) {
+    return { error: { content: [{ type: 'text', text: `Photos must be in the CWF photo bucket (a key, or a URL under ${S3_BUCKET_URL}). Not accepted: ${outside.join(', ')}. Nothing was saved.` }], isError: true } };
+  }
+  const missing = [];
+  for (const key of keys) {
+    const res = await fetch(photoUrl(key), { method: 'HEAD' }).catch(() => null);
+    if (!res?.ok) missing.push(key);
+  }
+  if (missing.length > 0) {
+    return { error: { content: [{ type: 'text', text: `No photo found in the bucket for: ${missing.join(', ')}. Nothing was saved.` }], isError: true } };
+  }
+  return { keys };
+}
+
 // The DB stores captured_at as a UTC instant. Returning that raw and letting
 // the model guess at a timezone is exactly the bug this project already got
 // bitten by once this session (UTC read as if it were Asia/Manila local
@@ -261,6 +284,9 @@ const notFound = (missing) => ({
 const MEMBERSHIP_DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a date, YYYY-MM-DD');
 const dayStart = (day) => `${day}T00:00:00+08:00`;
 const dayEnd = (day) => `${day}T23:59:59+08:00`;
+
+const PHOTO_URLS = z.array(z.string()).max(50)
+  .describe('Photos already in the CWF photo bucket: S3 keys, or URLs under the bucket. Other links are refused.');
 
 const CAPTURED_AT = z.string().datetime({ offset: true })
   .describe('When it was observed, ISO 8601 with offset, e.g. 2026-11-02T08:30:00+08:00. Leave out for now.');
@@ -1348,8 +1374,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Record an observation in the person\'s own words, and get a link to add photos to it. It ' +
         'can stand on its own or be linked to an action and/or assets (tools and parts), like the ' +
         'app\'s observation screen. Find actions with search_actions and assets with search_assets. ' +
-        'Claude cannot pass photos from the chat to CWF, so when the person wants photos, create the ' +
-        'observation here and give them the photo link: it opens the observation in the CWF app, ' +
+        'Claude cannot pass photos from the chat to CWF: for photos already in the CWF photo bucket ' +
+        'give their keys or bucket URLs in photo_urls; otherwise create the observation here and give ' +
+        'the person the photo link: it opens the observation in the CWF app, ' +
         'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
         'when the observation is of such a tool, ask for the readings and give them in metrics.',
       inputSchema: {
@@ -1357,11 +1384,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         links: z.array(LINK).optional().describe('What it is about: an action and/or tools and parts. Leave out for a standalone observation.'),
         metrics: METRIC_VALUES.optional(),
         captured_at: CAPTURED_AT.optional(),
+        photo_urls: PHOTO_URLS.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ text, links = [], metrics = [], captured_at }) => {
-      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, metrics, captured_at }));
+    async ({ text, links = [], metrics = [], captured_at, photo_urls = [] }) => {
+      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, metrics, captured_at, photo_urls }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1369,6 +1397,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
+      const photoCheck = await bucketPhotoKeys(photo_urls);
+      if (photoCheck.error) return photoCheck.error;
 
       try {
         const { targets, known } = await withDbClient(async (client) => ({
@@ -1388,7 +1418,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           observation: {
             state_text: text?.trim() || null,
             ...(captured_at && { captured_at }),
-            photos: [],
+            photos: photoCheck.keys.map((photo_url, i) => ({ photo_url, photo_order: i })),
             links: targets.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })),
           },
         });
@@ -1422,21 +1452,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'person and only call this once they say yes. The same people can edit it as in the app ' +
         '(whoever recorded it, or an admin). Use update_observation_links for links. metrics sets ' +
         'readings for the metrics of a tool it is linked to (search_assets lists them); other ' +
-        'readings are kept, and a blank value removes one.',
+        'readings are kept, and a blank value removes one. photo_urls adds photos already in the ' +
+        'CWF photo bucket; the observation\'s existing photos are kept.',
       inputSchema: {
         observation_id: z.string().describe('The observation to change'),
         text: z.string().optional().describe('New text, in the person\'s own words'),
         captured_at: CAPTURED_AT.optional(),
         metrics: METRIC_VALUES.optional(),
+        photo_urls: PHOTO_URLS.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ observation_id, text, captured_at, metrics = [] }) => {
+    async ({ observation_id, text, captured_at, metrics = [], photo_urls = [] }) => {
       const changes = {
         ...(text !== undefined && { state_text: text.trim() || null }),
         ...(captured_at !== undefined && { captured_at }),
       };
-      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes), metrics }));
+      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes), metrics, photo_urls }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1444,12 +1476,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
-      if (Object.keys(changes).length === 0 && metrics.length === 0) {
-        return { content: [{ type: 'text', text: 'Nothing to change — give text, captured_at or metrics.' }], isError: true };
+      if (Object.keys(changes).length === 0 && metrics.length === 0 && photo_urls.length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give text, captured_at, metrics or photo_urls.' }], isError: true };
       }
+      const photoCheck = await bucketPhotoKeys(photo_urls);
+      if (photoCheck.error) return photoCheck.error;
 
       try {
-        const { observation, known, existing } = await withDbClient(async (client) => {
+        const { observation, known, existing, currentPhotos } = await withDbClient(async (client) => {
           const observation = (await client.query(
             `SELECT s.id::text AS id, s.organization_id,
                     COALESCE(array_agg(sl.entity_id::text) FILTER (WHERE sl.entity_type = 'tool'), '{}') AS tool_ids
@@ -1458,9 +1492,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              GROUP BY s.id`,
             [observation_id, accessibleOrgIds]
           )).rows[0];
-          if (!observation || metrics.length === 0) return { observation, known: [], existing: [] };
+          if (!observation) return { observation };
+          const currentPhotos = photo_urls.length === 0 ? [] : (await client.query(
+            `SELECT photo_url, photo_description FROM state_photos WHERE state_id = $1::uuid ORDER BY photo_order`,
+            [observation.id]
+          )).rows;
+          if (metrics.length === 0) return { observation, known: [], existing: [], currentPhotos };
           return {
             observation,
+            currentPhotos,
             known: await findToolMetrics(client, observation.tool_ids, accessibleOrgIds),
             existing: (await client.query(
               `SELECT snapshot_id::text AS snapshot_id, metric_id::text AS metric_id FROM metric_snapshots WHERE state_id = $1::uuid`,
@@ -1473,6 +1513,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         }
         const unknown = metrics.filter((m) => !known.some((k) => k.metric_id === m.metric_id)).map((m) => m.metric_id);
         if (unknown.length > 0) return unknownMetrics(unknown);
+        // The states service replaces an observation's photos with the list it is sent,
+        // so send the current ones (as they are) followed by the new ones.
+        if (photo_urls.length > 0) {
+          const added = photoCheck.keys.filter((k) => !currentPhotos.some((p) => p.photo_url === k));
+          changes.photos = [...currentPhotos, ...added.map((photo_url) => ({ photo_url, photo_description: null }))]
+            .map((p, i) => ({ ...p, photo_order: i }));
+        }
         // Sent even with only metrics to change: the states service decides who may edit it.
         await updateObservation({ cognitoUserId, orgId: observation.organization_id, observationId: observation.id, changes });
         const metricResults = await saveMetrics({

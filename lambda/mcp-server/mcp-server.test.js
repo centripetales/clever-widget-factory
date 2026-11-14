@@ -483,6 +483,22 @@ describe('add_observation', () => {
     assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { state_text: 'Rain overnight.', captured_at: '2026-11-02T06:00:00+08:00', photos: [], links: [] });
   });
 
+  test('photo_urls in the bucket (key or URL) are attached; other links or missing files are refused', async () => {
+    const bucket = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
+    const restore = mock.method(globalThis, 'fetch', async (url) => new Response(null, { status: url.endsWith('gone.jpg') ? 404 : 200 }));
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'add_observation', arguments: { text: 'Stakes.', photo_urls: ['a/one.jpg', `${bucket}/a/two.jpg`] } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body).photos, [
+      { photo_url: 'a/one.jpg', photo_order: 0 }, { photo_url: 'a/two.jpg', photo_order: 1 },
+    ]);
+    for (const bad of ['https://example.com/x.jpg', '../secret.jpg', 'a/gone.jpg']) {
+      const refused = await client.callTool({ name: 'add_observation', arguments: { text: 'x', photo_urls: [bad] } });
+      assert.strictEqual(refused.isError, true);
+    }
+    assert.strictEqual(invocations.length, 1);
+    restore.mock.restore();
+  });
+
   test('links outside the caller orgs are refused and nothing is created', async () => {
     rows = [{ entity_type: 'tool', entity_id: 'tool-1', name: 'Azolla pond' }];
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
@@ -575,6 +591,20 @@ describe('update_observation', () => {
     assert.strictEqual(event.pathParameters.id, 'obs-1');
     assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.deepStrictEqual(JSON.parse(event.body), { state_text: 'Fixed typo.' });
+  });
+
+  test('photo_urls are added after the photos it already has', async () => {
+    const restore = mock.method(globalThis, 'fetch', async () => new Response(null, { status: 200 }));
+    rows = (sql) => sql.includes('state_photos')
+      ? [{ photo_url: 'a/old.jpg', photo_description: 'Old' }]
+      : [{ id: 'obs-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1', photo_urls: ['a/old.jpg', 'a/new.jpg'] } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { photos: [
+      { photo_url: 'a/old.jpg', photo_description: 'Old', photo_order: 0 },
+      { photo_url: 'a/new.jpg', photo_description: null, photo_order: 1 },
+    ] });
+    restore.mock.restore();
   });
 
   test('nothing to change or an unknown observation change nothing', async () => {
