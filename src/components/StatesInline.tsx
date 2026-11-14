@@ -847,6 +847,9 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
                 <div className="flex justify-between items-start mb-2">
                   <div className="text-sm text-muted-foreground flex items-center gap-2">
                     <span>{state.captured_by_name || 'Unknown'} • {format(new Date(state.captured_at), 'MMM d, yyyy h:mm a')}</span>
+                    {entity_type === 'action' && state.links?.some(l => l.entity_type === 'existing_state' && l.entity_id === entity_id) && (
+                      <Badge variant="outline" className="py-0 px-1.5 text-[10px]">Existing state</Badge>
+                    )}
                     {entity_type !== 'action' && state.shared_with_partners && (
                       <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50 py-0 px-1.5 text-[10px]">
                         Shared

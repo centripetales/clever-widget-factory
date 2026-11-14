@@ -47,6 +47,9 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-financial-records-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: 'new-record', description: body.description, transaction_date: body.transaction_date, amount: body.amount, payment_method: body.payment_method }) })) };
+  }
   if (command.input.FunctionName === 'cwf-experiences-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };
   }
@@ -184,6 +187,18 @@ describe('search_actions list mode', () => {
   });
 });
 
+describe('search_actions existing states', () => {
+  test('each action gives its existing_state_ids', async () => {
+    rows = [{ id: 'a1', title: 'Crimp cogon', status: 'completed', created_at: '2026-10-01T00:00:00Z', observation_ids: ['o-1', 'o-2'], existing_state_ids: ['o-1'] },
+      { id: 'a2', title: 'Older action', status: 'completed', created_at: '2026-09-01T00:00:00Z', observation_ids: [], existing_state_ids: null }];
+    const client = await connect(['org-a']);
+    const [first, second] = JSON.parse((await client.callTool({ name: 'search_actions', arguments: { status: ['completed'] } })).content[0].text);
+    assert.match(queries[0].sql, /es\.entity_type = 'existing_state'/);
+    assert.deepStrictEqual(first.existing_state_ids, ['o-1']);
+    assert.deepStrictEqual(second.existing_state_ids, []);
+  });
+});
+
 describe('caller', () => {
   test('Claude is told who it is talking to', async () => {
     const client = await connect(['org-a'], 'Stefan Hamilton');
@@ -210,11 +225,49 @@ describe('create_action', () => {
     assert.strictEqual(event.requestContext.authorizer.organization_id, 'org-a');
     const body = JSON.parse(event.body);
     assert.strictEqual(body.status, 'not_started');
-    assert.strictEqual(body.description, 'Bins leak');
+    assert.strictEqual(body.description, undefined);
     assert.strictEqual(body.policy, '<p>Dry the bins.</p><p>Apply two coats.</p>');
     assert.strictEqual(body.assigned_to, 'u-lester');
     assert.deepStrictEqual(body.participants, ['u-mae']);
     assert.match(result.content[0].text, /actions\/new-action/);
+  });
+
+  test('the existing state is also saved as an observation linked to the action as its existing state, with a photo link', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_action', arguments: { title: 'Crimp cogon', existing_state: 'Cogon thick below the terraces' } });
+    const [, observation] = invocations;
+    assert.strictEqual(observation.functionName, 'cwf-states-lambda');
+    assert.deepStrictEqual(JSON.parse(observation.event.body), {
+      state_text: 'Cogon thick below the terraces', photos: [],
+      links: [{ entity_type: 'action', entity_id: 'new-action' }, { entity_type: 'existing_state', entity_id: 'new-action' }],
+    });
+    const reply = JSON.parse(result.content[0].text);
+    assert.strictEqual(reply.existing_state_id, 'new-observation');
+    assert.strictEqual(reply.add_photos_link, 'https://stargazer-farm.com/observations/edit/new-observation');
+    await client.callTool({ name: 'create_action', arguments: { title: 'No existing state' } });
+    assert.strictEqual(invocations.length, 3);
+  });
+
+  test('asset_id puts the action and its existing state on the tool; an unknown asset creates nothing', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    rows = (sql) => (sql.includes('FROM tools WHERE') ? [{ id: 'tool-c3' }] : []);
+    await client.callTool({ name: 'create_action', arguments: { title: 'Crimp cogon', existing_state: 'Cogon thick', asset_id: 'tool-c3' } });
+    const [action, observation] = invocations;
+    assert.strictEqual(JSON.parse(action.event.body).asset_id, 'tool-c3');
+    assert.deepStrictEqual(JSON.parse(observation.event.body).links[2], { entity_type: 'tool', entity_id: 'tool-c3' });
+    rows = [];
+    assert.strictEqual((await client.callTool({ name: 'create_action', arguments: { title: 'X', asset_id: 'nope' } })).isError, true);
+    assert.strictEqual(invocations.length, 2);
+  });
+
+  test('completed_at creates work already done as completed on that day; a future day is refused', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'create_action', arguments: { title: 'Cleaned the TESDA filter', completed_at: '2026-03-12' } });
+    const body = JSON.parse(invocations[0].event.body);
+    assert.strictEqual(body.status, 'completed');
+    assert.strictEqual(body.completed_at, '2026-03-12T04:00:00.000Z');
+    assert.strictEqual((await client.callTool({ name: 'create_action', arguments: { title: 'X', completed_at: '2999-01-01' } })).isError, true);
+    assert.strictEqual(invocations.length, 1);
   });
 
   test('an ambiguous name is sent back to ask, and nothing is created', async () => {
@@ -231,6 +284,109 @@ describe('create_action', () => {
     const result = await client.callTool({ name: 'create_action', arguments: { title: 'X' } });
     assert.strictEqual(result.isError, true);
     assert.match(result.content[0].text, /reconnect/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('create_financial_record', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('goes through the app\'s financial records service as the caller', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_financial_record', arguments: {
+      transaction_date: '2026-11-09', amount_php: 350.5, payment_method: 'GCash', description: 'Rice bran',
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/financial-records');
+    assert.strictEqual(event.requestContext.authorizer.cognito_user_id, 'cognito-1');
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      transaction_date: '2026-11-09', amount: 350.5, payment_method: 'GCash', description: 'Rice bran',
+    });
+    assert.match(result.content[0].text, /https:\/\/stargazer-farm\.com\/financial-records\/new-record/);
+  });
+
+  test('a read-only connection cannot submit', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1', canWrite: false });
+    const result = await client.callTool({ name: 'create_financial_record', arguments: {
+      transaction_date: '2026-11-09', amount_php: 10, payment_method: 'Cash', description: 'X',
+    } });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /reconnect/);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('update_financial_record and delete_financial_record', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('an edit sends only the given fields, in the record\'s org', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1', amount_php: 400 } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(queries[0].params, ['fr-1', ['org-a', 'org-b']]);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.pathParameters.id, 'fr-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { amount: 400 });
+    assert.match(result.content[0].text, /stargazer-farm\.com\/financial-records\/fr-1/);
+  });
+
+  test('an edit with nothing to change is refused', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('delete without confirm shows the record and deletes nothing', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a', transaction_date: '2026-11-09', amount: '350.50', payment_method: 'GCash', description: 'Rice bran' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'delete_financial_record', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(invocations.length, 0);
+    const shown = JSON.parse(result.content[0].text);
+    assert.strictEqual(shown.deleted, false);
+    assert.deepStrictEqual(shown.will_delete, {
+      financial_record_id: 'fr-1', transaction_date: '2026-11-09', amount_php: 350.5, direction: 'out', payment_method: 'GCash', description: 'Rice bran',
+    });
+  });
+
+  test('delete with confirm goes through the app\'s delete in the record\'s org', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'delete_financial_record', arguments: { financial_record_id: 'fr-1', confirm: true } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'DELETE');
+    assert.strictEqual(event.pathParameters.id, 'fr-1');
+    assert.match(result.content[0].text, /"deleted": true/);
+  });
+
+  test('a record outside the caller\'s orgs is not found, and nothing is invoked', async () => {
+    rows = [];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    for (const name of ['update_financial_record', 'delete_financial_record']) {
+      const result = await client.callTool({ name, arguments: { financial_record_id: 'fr-x', amount_php: 1 } });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, /No financial record/);
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('a read-only connection can neither edit nor delete', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1', canWrite: false });
+    for (const name of ['update_financial_record', 'delete_financial_record']) {
+      const result = await client.callTool({ name, arguments: { financial_record_id: 'fr-1', amount_php: 1 } });
+      assert.strictEqual(result.isError, true);
+      assert.match(result.content[0].text, /reconnect/);
+    }
     assert.strictEqual(invocations.length, 0);
   });
 });
@@ -352,6 +508,24 @@ describe('adjust_stock', () => {
 describe('add_observation', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
 
+  test('an existing_state link is saved with the action link; a missing action is refused', async () => {
+    rows = [{ entity_type: 'action', entity_id: 'action-1', name: 'Crimp cogon' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'add_observation', arguments: {
+      text: 'Cogon thick below the terraces.', links: [{ entity_type: 'existing_state', entity_id: 'action-1' }],
+    } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body).links, [
+      { entity_type: 'action', entity_id: 'action-1' }, { entity_type: 'existing_state', entity_id: 'action-1' },
+    ]);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).linked_to, ['action: Crimp cogon', 'existing_state of: Crimp cogon']);
+    rows = [];
+    const refused = await client.callTool({ name: 'add_observation', arguments: {
+      text: 'x', links: [{ entity_type: 'existing_state', entity_id: 'nope' }],
+    } });
+    assert.strictEqual(refused.isError, true);
+    assert.strictEqual(invocations.length, 1);
+  });
+
   test('creates the observation on the action through the app, in the primary org, and returns the photo link', async () => {
     rows = [{ entity_type: 'action', entity_id: 'action-1', name: 'Mount the inverter' }];
     const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
@@ -375,6 +549,22 @@ describe('add_observation', () => {
     await client.callTool({ name: 'add_observation', arguments: { text: 'Rain overnight.', captured_at: '2026-11-02T06:00:00+08:00' } });
     assert.strictEqual(queries.length, 0);
     assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { state_text: 'Rain overnight.', captured_at: '2026-11-02T06:00:00+08:00', photos: [], links: [] });
+  });
+
+  test('photo_urls in the bucket (key or URL) are attached; other links or missing files are refused', async () => {
+    const bucket = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
+    const restore = mock.method(globalThis, 'fetch', async (url) => new Response(null, { status: url.endsWith('gone.jpg') ? 404 : 200 }));
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'add_observation', arguments: { text: 'Stakes.', photo_urls: ['a/one.jpg', `${bucket}/a/two.jpg`] } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body).photos, [
+      { photo_url: 'a/one.jpg', photo_order: 0 }, { photo_url: 'a/two.jpg', photo_order: 1 },
+    ]);
+    for (const bad of ['https://example.com/x.jpg', '../secret.jpg', 'a/gone.jpg']) {
+      const refused = await client.callTool({ name: 'add_observation', arguments: { text: 'x', photo_urls: [bad] } });
+      assert.strictEqual(refused.isError, true);
+    }
+    assert.strictEqual(invocations.length, 1);
+    restore.mock.restore();
   });
 
   test('links outside the caller orgs are refused and nothing is created', async () => {
@@ -469,6 +659,20 @@ describe('update_observation', () => {
     assert.strictEqual(event.pathParameters.id, 'obs-1');
     assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.deepStrictEqual(JSON.parse(event.body), { state_text: 'Fixed typo.' });
+  });
+
+  test('photo_urls are added after the photos it already has', async () => {
+    const restore = mock.method(globalThis, 'fetch', async () => new Response(null, { status: 200 }));
+    rows = (sql) => sql.includes('state_photos')
+      ? [{ photo_url: 'a/old.jpg', photo_description: 'Old' }]
+      : [{ id: 'obs-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1', photo_urls: ['a/old.jpg', 'a/new.jpg'] } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { photos: [
+      { photo_url: 'a/old.jpg', photo_description: 'Old', photo_order: 0 },
+      { photo_url: 'a/new.jpg', photo_description: null, photo_order: 1 },
+    ] });
+    restore.mock.restore();
   });
 
   test('nothing to change or an unknown observation change nothing', async () => {
@@ -613,6 +817,20 @@ describe('get_asset', () => {
 
 describe('create_asset and update_asset', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('update_asset concluded sets the status; it is refused for a part', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    rows = db('contributor', { asset: { type: 'tool', id: 'tool-1', organization_id: 'org-a' } });
+    const result = await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1', concluded: true } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { status: 'concluded' });
+    await client.callTool({ name: 'update_asset', arguments: { asset_id: 'tool-1', concluded: false } });
+    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { status: 'available' });
+    rows = db('contributor', { asset: { type: 'part', id: 'part-1', organization_id: 'org-a' } });
+    const refused = await client.callTool({ name: 'update_asset', arguments: { asset_id: 'part-1', concluded: true } });
+    assert.strictEqual(refused.isError, true);
+    assert.strictEqual(invocations.length, 2);
+  });
   const db = (role, extra = {}) => (sql) => {
     if (sql.includes('SELECT role')) return role ? [{ role }] : [];
     if (sql.includes('category = ANY')) return extra.area ? [{ id: extra.area }] : [];
@@ -669,6 +887,27 @@ describe('create_asset and update_asset', () => {
     assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.deepStrictEqual(JSON.parse(event.body), { description: 'Growatt 5kW', parent_structure_id: null });
     assert.deepStrictEqual(JSON.parse(result.content[0].text).changed, ['description', 'area_id']);
+  });
+
+  test('remove_asset sets a tool to removed in its org; refused for a part, a non-admin, or an unknown asset', async () => {
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    rows = db('admin', { asset: { type: 'tool', id: 'tool-1', organization_id: 'org-b', name: 'Wrench', serial_number: 'SF071925WR01' } });
+    const result = await client.callTool({ name: 'remove_asset', arguments: { asset_id: 'tool-1' } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-core-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/tools/tool-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { status: 'removed' });
+    assert.strictEqual(JSON.parse(result.content[0].text).removed, true);
+    rows = db('admin', { asset: { type: 'part', id: 'part-1', organization_id: 'org-a', name: 'Nylon' } });
+    assert.strictEqual((await client.callTool({ name: 'remove_asset', arguments: { asset_id: 'part-1' } })).isError, true);
+    rows = db('contributor', { asset: { type: 'tool', id: 'tool-1', organization_id: 'org-a', name: 'Wrench' } });
+    assert.match((await client.callTool({ name: 'remove_asset', arguments: { asset_id: 'tool-1' } })).content[0].text, /Only admins/);
+    rows = db('admin');
+    assert.strictEqual((await client.callTool({ name: 'remove_asset', arguments: { asset_id: 'nope' } })).isError, true);
+    assert.strictEqual(invocations.length, 1);
   });
 
   test('nothing to change, or an asset outside the caller orgs, changes nothing', async () => {
@@ -809,6 +1048,45 @@ describe('Systems', () => {
 
 describe('experiences', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('create_experience from_action_id builds the legs from the existing state and later observations, open or closed; refused without one', async () => {
+    const fromDb = (status, observations) => (sql) => {
+      if (sql.includes('FROM actions a')) return [{ id: 'a-1', status, asset_id: null }];
+      if (sql.includes('AS is_existing_state')) return observations;
+      if (sql.includes('FROM states WHERE')) return [{ id: 'o-1' }, { id: 'o-2' }, { id: 'o-3' }, { id: 'a-1' }];
+      return [];
+    };
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    rows = fromDb('completed', [
+      { id: 'o-0', captured_at: '2026-10-01T00:00:00Z', is_existing_state: false },
+      { id: 'o-1', captured_at: '2026-10-02T00:00:00Z', is_existing_state: true },
+      { id: 'o-2', captured_at: '2026-10-09T00:00:00Z', is_existing_state: false },
+      { id: 'o-3', captured_at: '2026-10-16T00:00:00Z', is_existing_state: false },
+    ]);
+    const result = await client.callTool({ name: 'create_experience', arguments: { from_action_id: 'a-1' } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), {
+      initial_state_ids: ['o-1'], action_ids: ['a-1'], final_state_ids: ['o-2', 'o-3'],
+    });
+    rows = fromDb('not_started', [{ id: 'o-1', captured_at: '2026-10-02T00:00:00Z', is_existing_state: true }]);
+    assert.strictEqual((await client.callTool({ name: 'create_experience', arguments: { from_action_id: 'a-1' } })).isError, undefined);
+    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { initial_state_ids: ['o-1'], action_ids: ['a-1'], final_state_ids: [] });
+    rows = fromDb('completed', [{ id: 'o-2', captured_at: '2026-10-09T00:00:00Z', is_existing_state: false }]);
+    assert.strictEqual((await client.callTool({ name: 'create_experience', arguments: { from_action_id: 'a-1' } })).isError, true);
+    assert.strictEqual(invocations.length, 2);
+  });
+
+  test('get_experience gives each action\'s existing_state_ids', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-2', type: null, asset_id: null, asset: null, created_at: '2026-11-01T00:00:00Z', metadata: {}, written_by: 'Stefan' }];
+      if (sql.includes('FROM experience_components ec')) return [{ component_type: 'action', action_id: 'a-1', title: 'Crimp cogon', status: 'completed' }];
+      if (sql.includes("es.entity_type = 'existing_state'")) return [{ action_id: 'a-1', observation_id: 'o-1' }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_experience', arguments: { experience_id: 'x-2' } })).content[0].text);
+    assert.deepStrictEqual(reply.actions[0].existing_state_ids, ['o-1']);
+  });
 
   test('search_experiences filters by asset, components and date, with a label per component', async () => {
     rows = (sql) => {
@@ -963,6 +1241,31 @@ describe('experiences', () => {
       { observation_id: 'o-5', photo_url: 'photos/stake.jpg', description: 'Stake at row 3', taken_at_manila: 'Oct 5, 2026, 9:30 AM PHT', gps: '10.123456,123.654321', included: true },
       { observation_id: 'o-5', photo_url: 'photos/bag.jpg', included: false },
     ]);
+  });
+
+  test('get_experience lists the assets linked directly, once each, and the days it covers', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM experiences e')) return [{ id: 'x-3', type: 'tool', asset_id: 'field-c3', asset: 'Cogon patch C3', created_at: '2026-11-01T00:00:00Z', metadata: {}, written_by: 'Stefan' }];
+      if (sql.includes('FROM experience_components ec')) return [
+        { component_type: 'initial_state', observation_id: 'o-1', captured_at: '2026-10-02T02:00:00Z', text: 'Cogon thick' },
+        { component_type: 'action', action_id: 'a-1', title: 'Crimp cogon', status: 'completed', completed_at: '2026-10-03T04:00:00Z' },
+        { component_type: 'final_state', observation_id: 'o-3', captured_at: '2026-10-20T02:00:00Z', text: 'Roots soft' },
+      ];
+      if (sql.includes('FROM actions ac')) return [
+        { how: 'action asset', type: 'tool', id: 'field-c3', name: 'Cogon patch C3' },
+        { how: 'tool used by an action', type: 'tool', id: 'crimper-1', name: 'Roller crimper' },
+        { how: 'observation', type: 'part', id: 'manure-1', name: 'Chicken manure' },
+      ];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_experience', arguments: { experience_id: 'x-3' } })).content[0].text);
+    assert.deepStrictEqual(reply.linked_assets, [
+      { asset_id: 'field-c3', type: 'tool', name: 'Cogon patch C3', linked_as: ['experience asset', 'action asset'] },
+      { asset_id: 'crimper-1', type: 'tool', name: 'Roller crimper', linked_as: ['tool used by an action'] },
+      { asset_id: 'manure-1', type: 'part', name: 'Chicken manure', linked_as: ['observation'] },
+    ]);
+    assert.deepStrictEqual(reply.span, { from: '2026-10-02', to: '2026-10-20' });
   });
 
   test('update_experience replaces an action\'s photo pick', async () => {

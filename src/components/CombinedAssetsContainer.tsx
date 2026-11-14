@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
-import { apiService, getApiData } from '@/lib/apiService';
+import { apiService, getApiData, errorMessage } from '@/lib/apiService';
 import { partsOrdersQueryKey, toolsQueryKey, partsQueryKey } from '@/lib/queryKeys';
 import { offlineQueryConfig } from '@/lib/queryConfig';
 import { useAssetMutations } from '@/hooks/useAssetMutations';
@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CombinedAssetFilters } from "./CombinedAssetFilters";
 import { CombinedAssetGrid } from "./CombinedAssetGrid";
+import { CONCLUDED_INFO } from "./CombinedAssetCard";
 import { CombinedAssetDialog } from "./CombinedAssetDialog";
 import { ToolRemovalDialog } from "./tools/ToolRemovalDialog";
 import { EditToolForm } from "./tools/forms/EditToolForm";
@@ -86,6 +87,7 @@ export const CombinedAssetsContainer = () => {
   const [searchDescriptions, setSearchDescriptions] = useState(searchDescriptionsParam);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showRemovalDialog, setShowRemovalDialog] = useState(false);
+  const [concludeTarget, setConcludeTarget] = useState<CombinedAsset | null>(null);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [isMaxwellOpen, setIsMaxwellOpen] = useState(false);
@@ -326,7 +328,7 @@ export const CombinedAssetsContainer = () => {
 
       // Removed tools show only when asked for. The regular list is already
       // filtered in useCombinedAssets; semantic search results are not.
-      if (asset.status === 'removed' && !showRemovedItems) return false;
+      if ((asset.status === 'removed' || asset.status === 'concluded') && !showRemovedItems) return false;
 
       // Type filters
       if (showOnlyAssets && asset.type !== 'asset') return false;
@@ -468,6 +470,23 @@ export const CombinedAssetsContainer = () => {
     setSelectedAssetId(asset.id);
     setShowRemovalDialog(true);
   }, []);
+
+  const handleConclude = useCallback((asset: CombinedAsset) => {
+    setConcludeTarget(asset);
+  }, []);
+
+  const handleConfirmConclude = async () => {
+    if (!concludeTarget) return;
+    const concluding = concludeTarget.status !== 'concluded';
+    try {
+      await updateTool.mutateAsync({ id: concludeTarget.id, data: { status: concluding ? 'concluded' : 'available' } });
+      toast({ title: "Success", description: concluding ? 'Asset concluded' : 'Asset is available again' });
+    } catch (error) {
+      console.error('Error concluding asset:', error);
+      toast({ title: "Error", description: errorMessage(error, "Failed to update asset"), variant: "destructive" });
+    }
+    setConcludeTarget(null);
+  };
 
   const handleAskMaxwell = useCallback((asset: CombinedAsset) => {
     setMaxwellDialogAsset(asset);
@@ -615,7 +634,7 @@ export const CombinedAssetsContainer = () => {
       console.error('Error updating item:', error);
       toast({
         title: "Error",
-        description: `Failed to update ${selectedAsset.type === 'asset' ? 'asset' : 'stock item'}. Please try again.`,
+        description: errorMessage(error, `Failed to update ${selectedAsset.type === 'asset' ? 'asset' : 'stock item'}. Please try again.`),
         variant: "destructive"
       });
     }
@@ -775,6 +794,7 @@ export const CombinedAssetsContainer = () => {
             onView={handleShowAssetDetails}
             onEdit={handleEdit}
             onRemove={handleRemove}
+            onConclude={handleConclude}
             onAddObservation={handleAddObservation}
             onAddQuantity={handleAddQuantity}
             onUseQuantity={handleUseQuantity}
@@ -812,6 +832,23 @@ export const CombinedAssetsContainer = () => {
           onConfirm={handleConfirmRemoval}
         />
       )}
+
+      <AlertDialog open={!!concludeTarget} onOpenChange={(open) => { if (!open) setConcludeTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {concludeTarget?.status === 'concluded' ? 'Make available again' : 'Conclude'} "{concludeTarget?.name}"?
+            </AlertDialogTitle>
+            <AlertDialogDescription>{CONCLUDED_INFO}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmConclude}>
+              {concludeTarget?.status === 'concluded' ? 'Make available' : 'Conclude'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {selectedAsset && selectedAsset.type === 'stock' && (
         <AlertDialog

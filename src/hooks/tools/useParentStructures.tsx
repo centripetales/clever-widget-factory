@@ -40,7 +40,7 @@ export const useParentStructures = () => {
     return toolsData
       .filter((tool: Tool) => {
         const isInfrastructureOrContainer = tool.category === 'Infrastructure' || tool.category === 'Container' || tool.category === 'Field';
-        const isNotRemoved = tool.status !== 'removed';
+        const isNotRemoved = tool.status !== 'removed' && tool.status !== 'concluded';
         return isInfrastructureOrContainer && isNotRemoved;
       })
       .sort((a, b) => {

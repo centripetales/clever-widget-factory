@@ -14,6 +14,8 @@ import { useToast } from "@/hooks/use-toast";
 import { actionsQueryKey, completedActionsQueryKey, allActionsQueryKey, actionQueryKey } from "@/lib/queryKeys";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
 import { useOrganization } from "@/hooks/useOrganization";
+import { useCreateExperience } from "@/hooks/useExperiences";
+import { loadExperienceFromAction } from "@/lib/experienceFromAction";
 
 interface ActionListItemCardProps {
   action: BaseAction;
@@ -57,10 +59,19 @@ export function ActionListItemCard({
   // asset_id matches either a tool or a part with nothing on the action
   // itself to distinguish them — tools account for the overwhelming
   // majority, same simplification already made in UnifiedActionDialog.
-  const handleDraftExperienceClick = (e: React.MouseEvent) => {
+  // A completed action with an existing state becomes an experience straight
+  // away; otherwise the experience page opens with the action preselected.
+  const createExperience = useCreateExperience();
+  const handleCreateExperienceClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!action.asset_id) return;
-    navigate(`/experiences/new?entity_type=tool&entity_id=${action.asset_id}&draft_action_id=${action.id}`);
+    const request = await loadExperienceFromAction(action);
+    if (request) {
+      const result = await createExperience.mutateAsync(request);
+      navigate(`/experiences/${result.data.id}`);
+      return;
+    }
+    navigate(`/experiences/new?entity_type=tool&entity_id=${action.asset_id}&action_id=${action.id}`);
   };
 
   const handleScoreClick = (e: React.MouseEvent) => {
@@ -132,9 +143,11 @@ export function ActionListItemCard({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleDraftExperienceClick}
+                  onClick={handleCreateExperienceClick}
+                  disabled={createExperience.isPending}
                   className="h-7 w-7 p-0 hover:text-purple-600 hover:bg-purple-50 bg-white dark:bg-zinc-900"
-                  title="Draft Experience"
+                  title="Create experience"
+                  aria-label="Create experience"
                 >
                   <Route className="h-4 w-4" />
                 </Button>

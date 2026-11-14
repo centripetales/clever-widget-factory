@@ -38,6 +38,7 @@ export const getStatusColor = (status: string) => {
     case 'available': return 'bg-green-100 text-green-800';
     case 'checked_out': return 'bg-yellow-100 text-yellow-800';
     case 'removed': return 'bg-gray-100 text-gray-800';
+    case 'concluded': return 'bg-emerald-50 text-emerald-800';
     default: return 'bg-gray-100 text-gray-800';
   }
 };
@@ -47,6 +48,7 @@ export const getStatusLabel = (status: string) => {
     case 'available': return 'Available';
     case 'checked_out': return 'Checked Out';
     case 'removed': return 'Removed';
+    case 'concluded': return 'Concluded';
     default: return status;
   }
 };

@@ -7,7 +7,7 @@ import {
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
-  createModel, linkModel, createMetric,
+  createModel, linkModel, createMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -17,6 +17,29 @@ const MAX_PHOTOS_PER_REQUEST = 5;
 const S3_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
 // Some photo_url values are bare S3 keys; resolve them as the app's getImageUrl does.
 const photoUrl = (u) => /^https?:\/\//.test(u) ? u : `${S3_BUCKET_URL}/${u.replace(/^\//, '')}`;
+
+// Photos can only be attached from our own bucket (a key, or a URL under it):
+// the server fetches them, and the app's image pipeline expects them there.
+// Returns the keys to store, or an error result naming what was refused.
+async function bucketPhotoKeys(urls) {
+  const keys = urls.map((u) => {
+    const key = u.startsWith(`${S3_BUCKET_URL}/`) ? u.slice(S3_BUCKET_URL.length + 1) : u;
+    return /^\w[\w.\-/ %()]*$/.test(key) && !key.includes('..') ? key : null;
+  });
+  const outside = urls.filter((_, i) => keys[i] === null);
+  if (outside.length > 0) {
+    return { error: { content: [{ type: 'text', text: `Photos must be in the CWF photo bucket (a key, or a URL under ${S3_BUCKET_URL}). Not accepted: ${outside.join(', ')}. Nothing was saved.` }], isError: true } };
+  }
+  const missing = [];
+  for (const key of keys) {
+    const res = await fetch(photoUrl(key), { method: 'HEAD' }).catch(() => null);
+    if (!res?.ok) missing.push(key);
+  }
+  if (missing.length > 0) {
+    return { error: { content: [{ type: 'text', text: `No photo found in the bucket for: ${missing.join(', ')}. Nothing was saved.` }], isError: true } };
+  }
+  return { keys };
+}
 
 // The DB stores captured_at as a UTC instant. Returning that raw and letting
 // the model guess at a timezone is exactly the bug this project already got
@@ -146,9 +169,22 @@ const VISIBLE_ACTION = (orgs) => `(a.organization_id = ANY(${orgs}::uuid[]) OR (
 // What an observation can be linked to through the connector — the same as
 // the observation screen's Link Asset (assets) and linked action.
 const LINK = z.object({
-  entity_type: z.enum(['action', 'tool', 'part']),
+  entity_type: z.enum(['action', 'tool', 'part', 'existing_state']).describe(
+    'existing_state: this observation is the action\'s existing state (how things were when it was taken); ' +
+    'entity_id is the action'),
   entity_id: z.string(),
 });
+
+// An existing_state link points at an action and always comes with the
+// ordinary action link. Returns the links to look up (existing_state as the
+// action it points at) and the links to save.
+function withExistingStates(links) {
+  const lookup = links.map((l) => (l.entity_type === 'existing_state' ? { ...l, entity_type: 'action' } : l))
+    .filter((l, i, all) => all.findIndex((o) => sameLink(o, l)) === i);
+  const existing = links.filter((l) => l.entity_type === 'existing_state')
+    .map(({ entity_type, entity_id }) => ({ entity_type, entity_id }));
+  return { lookup, existing };
+}
 
 // The links that exist in the caller's orgs, with names for the reply.
 async function findLinkTargets(client, links, orgIds) {
@@ -262,6 +298,9 @@ const MEMBERSHIP_DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a date, YYYY-MM-
 const dayStart = (day) => `${day}T00:00:00+08:00`;
 const dayEnd = (day) => `${day}T23:59:59+08:00`;
 
+const PHOTO_URLS = z.array(z.string()).max(50)
+  .describe('Photos already in the CWF photo bucket: S3 keys, or URLs under the bucket. Other links are refused.');
+
 const CAPTURED_AT = z.string().datetime({ offset: true })
   .describe('When it was observed, ISO 8601 with offset, e.g. 2026-11-02T08:30:00+08:00. Leave out for now.');
 
@@ -299,7 +338,7 @@ const TOOL_ONLY = ['category', 'serial_number'];
 const ASSET_FIELDS = {
   description: z.string().nullable().optional().describe('What it is: brand, model, size, condition'),
   category: z.enum(TOOL_CATEGORIES).nullable().optional().describe('Tools only. Container, Infrastructure or Field makes it an area other assets can be in; System makes it something other assets are part of (link_assets)'),
-  serial_number: z.string().nullable().optional().describe('Tools only'),
+  serial_number: z.string().nullable().optional().describe('Tools only. What is written on it or its marker (a stake, a number painted on a tree); unique among tools in use'),
   area_id: z.string().nullable().optional().describe('The area it is in: the asset_id of a Container, Infrastructure or Field tool (search_assets)'),
   storage_location: z.string().nullable().optional().describe('Where exactly within the area, e.g. "top shelf, left"'),
   accountable_person: z.string().nullable().optional().describe('Name of the person accountable for it; only leadership and admins can set it, as in the app'),
@@ -332,7 +371,7 @@ async function assetChanges({ type, fields, orgId, cognitoUserId }) {
   const changes = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
   if (area_id) {
     const area = await withDbClient(async (client) => (await client.query(
-      `SELECT id FROM tools WHERE id::text = $1 AND organization_id = $2 AND category = ANY($3::text[]) AND COALESCE(status, '') <> 'removed'`,
+      `SELECT id FROM tools WHERE id::text = $1 AND organization_id = $2 AND category = ANY($3::text[]) AND status::text NOT IN ('removed', 'concluded')`,
       [area_id, orgId, AREA_CATEGORIES]
     )).rows[0]);
     if (!area) throw new Error(`${area_id} is not an area in this organization (a Container, Infrastructure or Field tool).`);
@@ -752,7 +791,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Search farm actions — work that was planned or done: title, status, who it is ' +
         'assigned to and who took part, the asset it is on, when it was created and ' +
         'completed, and its latest observation (date and claim) to show where it stands. ' +
-        'Each result lists observation_ids; pass one to get_observation_photos to see its photos.\n\n' +
+        'Each result lists observation_ids; pass one to get_observation_photos to see its photos. ' +
+        'existing_state_ids are the observations that are its existing state (how things were when it was taken).\n\n' +
         'Three ways to search — pick one:\n' +
         '1. List: give only `status` and/or `person` to get every matching action, most recently ' +
         'active first, e.g. status ["not_started","in_progress"] for what is open when planning a day. ' +
@@ -795,7 +835,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         (SELECT string_agg(om.full_name, ', ') FROM organization_members om
           WHERE om.user_id::text = ANY(a.participants::text[]) AND om.organization_id = a.organization_id) AS participant_names,
         (SELECT array_agg(sl.state_id ORDER BY s.captured_at) FROM state_links sl JOIN states s ON s.id = sl.state_id
-          WHERE sl.entity_type = 'action' AND sl.entity_id = a.id) AS observation_ids`;
+          WHERE sl.entity_type = 'action' AND sl.entity_id = a.id) AS observation_ids,
+        (SELECT array_agg(es.state_id) FROM state_links es
+          WHERE es.entity_type = 'existing_state' AND es.entity_id = a.id) AS existing_state_ids`;
       const joins = `
         LEFT JOIN tools t ON t.id = a.asset_id
         LEFT JOIN LATERAL (
@@ -885,6 +927,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             ? { at_manila: formatManilaTime(r.latest_observation_at), claim: r.latest_observation_claim }
             : null,
           observation_ids: r.observation_ids || [],
+          existing_state_ids: r.existing_state_ids || [],
         }));
         return { content: [{ type: 'text', text: JSON.stringify(formatted, null, 2) }] };
       } catch (err) {
@@ -970,6 +1013,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const amount = Number(r.amount);
           return {
             financial_record_id: r.id,
+            link: `https://stargazer-farm.com/financial-records/${r.id}`,
             similarity: isDateMode ? undefined : Number(r.similarity.toFixed(3)),
             transaction_date: r.transaction_date,
             direction: amount < 0 ? 'in' : 'out',
@@ -988,16 +1032,187 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'create_financial_record',
+    {
+      title: 'Submit an expense',
+      description:
+        'Record an expense (money paid out) or a sale/addition (money in, as a negative amount) in CWF. Receipt photos cannot be attached. ' +
+        'Before calling this, read the expense back to the person (date, amount, payment ' +
+        'method, description) and only call it once they say yes.',
+      inputSchema: {
+        transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
+        amount_php: z.number().refine((n) => n !== 0, 'Amount cannot be zero').describe('Amount in pesos: positive for money paid out, negative for money coming in (a sale or addition)'),
+        payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).describe('How it was paid'),
+        description: z.string().min(1).describe('What it was for, e.g. "Rice bran for the azolla ponds"'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ transaction_date, amount_php, payment_method, description }) => {
+      console.log('create_financial_record called with:', JSON.stringify({ transaction_date, amount_php, payment_method }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow submitting expenses.' }],
+          isError: true,
+        };
+      }
+
+      try {
+        const created = await createFinancialRecord({
+          cognitoUserId,
+          record: { transaction_date, amount: amount_php, payment_method, description },
+        });
+        console.log('create_financial_record: created', created.id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            financial_record_id: created.id,
+            link: `https://stargazer-farm.com/financial-records/${created.id}`,
+            transaction_date,
+            amount_php,
+            payment_method,
+            description: created.description,
+          }, null, 2) }],
+        };
+      } catch (err) {
+        console.log('create_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not submit the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  const NOT_A_FINANCIAL_RECORD = (id) => ({
+    content: [{ type: 'text', text: `No financial record ${id} in your organizations — check the id with search_financial_records.` }],
+    isError: true,
+  });
+  const findFinancialRecord = (id) => withDbClient(async (client) => (await client.query(
+    `SELECT fr.id::text AS id, fr.organization_id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
+       (SELECT ds.state_text FROM state_links sl JOIN states ds ON ds.id = sl.state_id
+         WHERE sl.entity_id = fr.id AND sl.entity_type = 'financial_record'
+         ORDER BY ds.created_at, ds.id LIMIT 1) AS description
+     FROM financial_records fr WHERE fr.id::text = $1 AND fr.organization_id = ANY($2::uuid[])`,
+    [id, accessibleOrgIds]
+  )).rows[0]);
+
+  server.registerTool(
+    'update_financial_record',
+    {
+      title: 'Edit an expense',
+      description:
+        'Change an expense recorded in CWF. Only the fields given change. Only whoever recorded it, ' +
+        'or an admin, can edit it. Find the financial_record_id with search_financial_records. ' +
+        'Before calling this, read back what will change (old and new values) and only call it once the person says yes.',
+      inputSchema: {
+        financial_record_id: z.string(),
+        transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Date paid, YYYY-MM-DD in farm time (Asia/Manila)'),
+        amount_php: z.number().refine((n) => n !== 0, 'Amount cannot be zero').optional().describe('Amount in pesos: positive for money paid out, negative for money coming in (a sale or addition)'),
+        payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).optional(),
+        description: z.string().min(1).optional().describe('What it was for'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ financial_record_id, transaction_date, amount_php, payment_method, description }) => {
+      console.log('update_financial_record called with:', JSON.stringify({ financial_record_id, transaction_date, amount_php, payment_method }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing expenses.' }],
+          isError: true,
+        };
+      }
+      const changes = {
+        ...(transaction_date !== undefined && { transaction_date }),
+        ...(amount_php !== undefined && { amount: amount_php }),
+        ...(payment_method !== undefined && { payment_method }),
+        ...(description !== undefined && { description }),
+      };
+      if (Object.keys(changes).length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give at least one of transaction_date, amount_php, payment_method, description.' }], isError: true };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        const updated = await updateFinancialRecord({ cognitoUserId, orgId: record.organization_id, recordId: record.id, changes });
+        console.log('update_financial_record: updated', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          financial_record_id: record.id,
+          link: `https://stargazer-farm.com/financial-records/${record.id}`,
+          transaction_date: String(updated.transaction_date).slice(0, 10),
+          amount_php: Number(updated.amount),
+          payment_method: updated.payment_method,
+          description: updated.description,
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('update_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not edit the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'delete_financial_record',
+    {
+      title: 'Delete an expense',
+      description:
+        'Delete a financial record, with its description, as the app\'s delete does. Only whoever recorded it, ' +
+        'or an admin, can delete it. This cannot be undone, so it takes two calls: the first, without ' +
+        'confirm, deletes nothing and returns the record; show it to the person and, only once they say ' +
+        'yes, call again with confirm: true.',
+      inputSchema: {
+        financial_record_id: z.string(),
+        confirm: z.boolean().optional().describe('true only after the person has said yes to deleting the record the first call returned'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ financial_record_id, confirm }) => {
+      console.log('delete_financial_record called with:', JSON.stringify({ financial_record_id, confirm }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow deleting expenses.' }],
+          isError: true,
+        };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        if (confirm !== true) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            deleted: false,
+            will_delete: {
+              financial_record_id: record.id,
+              transaction_date: record.transaction_date,
+              amount_php: Math.abs(Number(record.amount)),
+              direction: Number(record.amount) < 0 ? 'in' : 'out',
+              payment_method: record.payment_method,
+              description: record.description,
+            },
+            next: 'Nothing has been deleted. Show this record to the person; only if they say yes, call again with confirm: true.',
+          }, null, 2) }] };
+        }
+        await deleteFinancialRecord({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
+        console.log('delete_financial_record: deleted', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify({ financial_record_id: record.id, deleted: true }, null, 2) }] };
+      } catch (err) {
+        console.log('delete_financial_record failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not delete the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
     'create_action',
     {
       title: 'Create an action',
       description:
-        'Create a new action (planned work) in CWF, as not started. Draft all of these from what ' +
-        'the person said, using search_actions / search_claims for context where it helps: ' +
-        'title, existing_state (where things are now), expected_state (where we want to get to) ' +
-        'and policy (how to do it). They are optional, but fill them by default. ' +
-        'Before calling this, read the draft back to the person (title, existing state, expected ' +
-        'state, policy, who it is assigned to) and only call it once they say yes.',
+        'Create a new action in CWF. It is open until it is completed (update_action). Give a title ' +
+        'and existing_state (where things are now) from what the person said, and asset_id when they ' +
+        'name the asset it is on, and completed_at when it records work already done. Add expected_state ' +
+        '(where we want to get to), policy (how to do it) ' +
+        'and people only when the person gives them or asks for them. When it is just a title and ' +
+        'existing state in the person\'s own words, create it straight away; otherwise read the draft ' +
+        'back and only call this once they say yes. The reply gives a link for photos of the existing ' +
+        'state: pass it on. Later observations go on the action with add_observation, and ' +
+        'create_experience with from_action_id shares it as an experience at any time.',
       inputSchema: {
         title: z.string().min(1).describe('Short name for the work, e.g. "Waterproof the bamboo treatment bins"'),
         existing_state: z.string().optional().describe('Where things are now'),
@@ -1005,10 +1220,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         policy: z.string().optional().describe('How to do it; plain text, blank lines between paragraphs'),
         assigned_to: z.string().optional().describe('Name of the person it is assigned to'),
         participants: z.array(z.string()).optional().describe('Names of other people taking part'),
+        asset_id: z.string().optional().describe('The tool the action is on (search_assets), if any'),
+        completed_at: MEMBERSHIP_DAY.optional().describe(
+          'For work already done (e.g. recorded only in observations): the day it was done, YYYY-MM-DD ' +
+          '(Asia/Manila). Creates the action already completed on that day.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ title, existing_state, expected_state, policy, assigned_to, participants }) => {
+    async ({ title, existing_state, expected_state, policy, assigned_to, participants, asset_id, completed_at }) => {
       console.log('create_action called with:', JSON.stringify({ title, assigned_to, participants }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -1018,7 +1237,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         };
       }
 
+      if (completed_at && completed_at > manilaDateString(new Date())) {
+        return { content: [{ type: 'text', text: `${completed_at} is in the future; give the day the work was done.` }], isError: true };
+      }
       try {
+        if (asset_id) {
+          const tool = await withDbClient(async (client) => (await client.query(
+            `SELECT id FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+            [asset_id, accessibleOrgIds]
+          )).rows[0]);
+          if (!tool) return NOT_AN_ASSET(asset_id);
+        }
         // Names become the member user_ids the app stores, within the org
         // the action is created in (the first one, as the app does).
         const resolve = await memberResolver(accessibleOrgIds[0], [assigned_to, ...(participants || [])]);
@@ -1027,23 +1256,49 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           cognitoUserId,
           action: {
             title,
-            description: existing_state || null,
             expected_state: expected_state || null,
             policy: policy ? policyToHtml(policy) : null,
-            status: 'not_started',
+            // Midday in Manila, so the day shows as given in every timezone the app uses.
+            ...(completed_at
+              ? { status: 'completed', completed_at: new Date(`${completed_at}T12:00:00+08:00`).toISOString() }
+              : { status: 'not_started' }),
             assigned_to: assigned_to ? resolve(assigned_to) : null,
             participants: (participants || []).map(resolve),
             required_tools: [],
             attachments: [],
+            ...(asset_id && { asset_id }),
           },
         });
         console.log('create_action: created', created.id);
+        // The existing state is also an observation on the action (and its
+        // asset), as in the app.
+        let existingStateId = null;
+        if (existing_state?.trim()) {
+          const observation = await createObservation({
+            cognitoUserId,
+            observation: {
+              state_text: existing_state.trim(),
+              photos: [],
+              links: [
+                { entity_type: 'action', entity_id: created.id },
+                { entity_type: 'existing_state', entity_id: created.id },
+                ...(asset_id ? [{ entity_type: 'tool', entity_id: asset_id }] : []),
+              ],
+            },
+          });
+          existingStateId = observation.id;
+          console.log('create_action: existing state', observation.id);
+        }
         return {
           content: [{ type: 'text', text: JSON.stringify({
             action_id: created.id,
             title: created.title,
             status: created.status,
             link: `https://stargazer-farm.com/actions/${created.id}`,
+            ...(existingStateId && {
+              existing_state_id: existingStateId,
+              add_photos_link: `https://stargazer-farm.com/observations/edit/${existingStateId}`,
+            }),
           }, null, 2) }],
         };
       } catch (err) {
@@ -1179,20 +1434,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Record an observation in the person\'s own words, and get a link to add photos to it. It ' +
         'can stand on its own or be linked to an action and/or assets (tools and parts), like the ' +
         'app\'s observation screen. Find actions with search_actions and assets with search_assets. ' +
-        'Claude cannot pass photos from the chat to CWF, so when the person wants photos, create the ' +
-        'observation here and give them the photo link: it opens the observation in the CWF app, ' +
+        'Claude cannot pass photos from the chat to CWF: for photos already in the CWF photo bucket ' +
+        'give their keys or bucket URLs in photo_urls; otherwise create the observation here and give ' +
+        'the person the photo link: it opens the observation in the CWF app, ' +
         'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
-        'when the observation is of such a tool, ask for the readings and give them in metrics.',
+        'when the observation is of such a tool, ask for the readings and give them in metrics. ' +
+        'When it is how things were when an action was taken, also link it to that action as existing_state.',
       inputSchema: {
         text: z.string().optional().describe('What the person observed, in their own words. Can be left out if they only want to add photos.'),
         links: z.array(LINK).optional().describe('What it is about: an action and/or tools and parts. Leave out for a standalone observation.'),
         metrics: METRIC_VALUES.optional(),
         captured_at: CAPTURED_AT.optional(),
+        photo_urls: PHOTO_URLS.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ text, links = [], metrics = [], captured_at }) => {
-      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, metrics, captured_at }));
+    async ({ text, links = [], metrics = [], captured_at, photo_urls = [] }) => {
+      console.log('add_observation called with:', JSON.stringify({ hasText: Boolean(text), links, metrics, captured_at, photo_urls }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1200,14 +1458,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
+      const { lookup, existing } = withExistingStates(links);
+      const photoCheck = await bucketPhotoKeys(photo_urls);
+      if (photoCheck.error) return photoCheck.error;
 
       try {
         const { targets, known } = await withDbClient(async (client) => ({
-          targets: await findLinkTargets(client, links, accessibleOrgIds),
+          targets: await findLinkTargets(client, lookup, accessibleOrgIds),
           known: metrics.length === 0 ? [] : await findToolMetrics(
             client, links.filter((l) => l.entity_type === 'tool').map((l) => l.entity_id), accessibleOrgIds),
         }));
-        const missing = links.filter((l) => !targets.some((t) => sameLink(t, l)));
+        const missing = lookup.filter((l) => !targets.some((t) => sameLink(t, l)));
         if (missing.length > 0) return notFound(missing);
         const unknown = metrics.filter((m) => !known.some((k) => k.metric_id === m.metric_id)).map((m) => m.metric_id);
         if (unknown.length > 0) return unknownMetrics(unknown);
@@ -1219,8 +1480,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           observation: {
             state_text: text?.trim() || null,
             ...(captured_at && { captured_at }),
-            photos: [],
-            links: targets.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })),
+            photos: photoCheck.keys.map((photo_url, i) => ({ photo_url, photo_order: i })),
+            links: [...targets.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })), ...existing],
           },
         });
         console.log('add_observation: created', created.id);
@@ -1230,7 +1491,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         return {
           content: [{ type: 'text', text: JSON.stringify({
             observation_id: created.id,
-            linked_to: targets.map((t) => `${t.entity_type}: ${t.name}`),
+            linked_to: [
+              ...targets.map((t) => `${t.entity_type}: ${t.name}`),
+              ...existing.map((l) => `existing_state of: ${targets.find((t) => t.entity_type === 'action' && String(t.entity_id) === String(l.entity_id))?.name}`),
+            ],
             ...(metricResults.length > 0 && { metrics: metricResults }),
             add_photos_link: `https://stargazer-farm.com/observations/edit/${created.id}`,
             ...(action && { action_link: `https://stargazer-farm.com/actions/${action.entity_id}` }),
@@ -1253,21 +1517,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'person and only call this once they say yes. The same people can edit it as in the app ' +
         '(whoever recorded it, or an admin). Use update_observation_links for links. metrics sets ' +
         'readings for the metrics of a tool it is linked to (search_assets lists them); other ' +
-        'readings are kept, and a blank value removes one.',
+        'readings are kept, and a blank value removes one. photo_urls adds photos already in the ' +
+        'CWF photo bucket; the observation\'s existing photos are kept.',
       inputSchema: {
         observation_id: z.string().describe('The observation to change'),
         text: z.string().optional().describe('New text, in the person\'s own words'),
         captured_at: CAPTURED_AT.optional(),
         metrics: METRIC_VALUES.optional(),
+        photo_urls: PHOTO_URLS.optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ observation_id, text, captured_at, metrics = [] }) => {
+    async ({ observation_id, text, captured_at, metrics = [], photo_urls = [] }) => {
       const changes = {
         ...(text !== undefined && { state_text: text.trim() || null }),
         ...(captured_at !== undefined && { captured_at }),
       };
-      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes), metrics }));
+      console.log('update_observation called with:', JSON.stringify({ observation_id, fields: Object.keys(changes), metrics, photo_urls }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1275,12 +1541,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
-      if (Object.keys(changes).length === 0 && metrics.length === 0) {
-        return { content: [{ type: 'text', text: 'Nothing to change — give text, captured_at or metrics.' }], isError: true };
+      if (Object.keys(changes).length === 0 && metrics.length === 0 && photo_urls.length === 0) {
+        return { content: [{ type: 'text', text: 'Nothing to change — give text, captured_at, metrics or photo_urls.' }], isError: true };
       }
+      const photoCheck = await bucketPhotoKeys(photo_urls);
+      if (photoCheck.error) return photoCheck.error;
 
       try {
-        const { observation, known, existing } = await withDbClient(async (client) => {
+        const { observation, known, existing, currentPhotos } = await withDbClient(async (client) => {
           const observation = (await client.query(
             `SELECT s.id::text AS id, s.organization_id,
                     COALESCE(array_agg(sl.entity_id::text) FILTER (WHERE sl.entity_type = 'tool'), '{}') AS tool_ids
@@ -1289,9 +1557,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              GROUP BY s.id`,
             [observation_id, accessibleOrgIds]
           )).rows[0];
-          if (!observation || metrics.length === 0) return { observation, known: [], existing: [] };
+          if (!observation) return { observation };
+          const currentPhotos = photo_urls.length === 0 ? [] : (await client.query(
+            `SELECT photo_url, photo_description FROM state_photos WHERE state_id = $1::uuid ORDER BY photo_order`,
+            [observation.id]
+          )).rows;
+          if (metrics.length === 0) return { observation, known: [], existing: [], currentPhotos };
           return {
             observation,
+            currentPhotos,
             known: await findToolMetrics(client, observation.tool_ids, accessibleOrgIds),
             existing: (await client.query(
               `SELECT snapshot_id::text AS snapshot_id, metric_id::text AS metric_id FROM metric_snapshots WHERE state_id = $1::uuid`,
@@ -1304,6 +1578,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         }
         const unknown = metrics.filter((m) => !known.some((k) => k.metric_id === m.metric_id)).map((m) => m.metric_id);
         if (unknown.length > 0) return unknownMetrics(unknown);
+        // The states service replaces an observation's photos with the list it is sent,
+        // so send the current ones (as they are) followed by the new ones.
+        if (photo_urls.length > 0) {
+          const added = photoCheck.keys.filter((k) => !currentPhotos.some((p) => p.photo_url === k));
+          changes.photos = [...currentPhotos, ...added.map((photo_url) => ({ photo_url, photo_description: null }))]
+            .map((p, i) => ({ ...p, photo_order: i }));
+        }
         // Sent even with only metrics to change: the states service decides who may edit it.
         await updateObservation({ cognitoUserId, orgId: observation.organization_id, observationId: observation.id, changes });
         const metricResults = await saveMetrics({
@@ -1370,17 +1651,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const results = await withDbClient(async (client) => {
           // Name matches first, then the closest by meaning.
           const byName = (await client.query(
-            `SELECT 'tool' AS type, id::text AS id, name, category FROM tools
+            `SELECT 'tool' AS type, id::text AS id, name, category, status::text AS status FROM tools
                WHERE organization_id = ANY($1::uuid[]) AND name ILIKE '%' || $2 || '%'
              UNION ALL
-             SELECT 'part', id::text, name, category FROM parts
+             SELECT 'part', id::text, name, category, NULL::text FROM parts
                WHERE organization_id = ANY($1::uuid[]) AND name ILIKE '%' || $2 || '%'
              LIMIT $3`,
             [accessibleOrgIds, query, effectiveLimit]
           )).rows;
           const vector = `[${(await generateEmbedding(query)).join(',')}]`;
           const byMeaning = (await client.query(
-            `SELECT ue.entity_type AS type, ue.entity_id::text AS id, COALESCE(t.name, p.name) AS name, COALESCE(t.category, p.category) AS category
+            `SELECT ue.entity_type AS type, ue.entity_id::text AS id, COALESCE(t.name, p.name) AS name, COALESCE(t.category, p.category) AS category, t.status::text AS status
              FROM unified_embeddings ue
              LEFT JOIN tools t ON ue.entity_type = 'tool' AND t.id = ue.entity_id
              LEFT JOIN parts p ON ue.entity_type = 'part' AND p.id = ue.entity_id
@@ -1399,6 +1680,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         if (results.length === 0) return { content: [{ type: 'text', text: 'No assets matched — try another name.' }] };
         return { content: [{ type: 'text', text: JSON.stringify(results.map((r) => ({
           asset_id: r.id, type: r.type, name: r.name, category: r.category,
+          ...(r.status && { status: r.status }),
           ...(r.metrics.length > 0 && { metrics: r.metrics.map(({ tool_id, ...m }) => m) }),
         })), null, 2) }] };
       } catch (err) {
@@ -1663,11 +1945,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         asset_id: z.string().describe('The asset_id from search_assets'),
         name: z.string().min(1).optional(),
         ...ASSET_FIELDS,
+        concluded: z.boolean().optional().describe(
+          'Tools only. true concludes it: its purpose is complete, or it can no longer or will no longer ' +
+          'be worked with (a marker whose experiment is done, a pond whose liner failed). It leaves the ' +
+          'active asset lists but keeps its history and experiences. false makes it available again.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ asset_id, ...fields }) => {
-      console.log('update_asset called with:', JSON.stringify({ asset_id, fields: Object.keys(fields) }));
+    async ({ asset_id, concluded, ...fields }) => {
+      console.log('update_asset called with:', JSON.stringify({ asset_id, concluded, fields: Object.keys(fields) }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1675,7 +1961,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
-      if (Object.values(fields).every((v) => v === undefined)) {
+      if (concluded === undefined && Object.values(fields).every((v) => v === undefined)) {
         return { content: [{ type: 'text', text: 'Give at least one field to change.' }], isError: true };
       }
       try {
@@ -1686,16 +1972,70 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           [asset_id, accessibleOrgIds]
         )).rows[0]);
         if (!asset) return NOT_AN_ASSET(asset_id);
+        if (concluded !== undefined && asset.type === 'part') {
+          return { content: [{ type: 'text', text: 'concluded is not for a part.' }], isError: true };
+        }
         const changes = await assetChanges({ type: asset.type, fields, orgId: asset.organization_id, cognitoUserId });
+        if (concluded !== undefined) changes.status = concluded ? 'concluded' : 'available';
         const updated = await updateAsset({ cognitoUserId, orgId: asset.organization_id, type: asset.type, assetId: asset.id, changes });
         console.log('update_asset: updated', asset.type, asset.id);
         return { content: [{ type: 'text', text: JSON.stringify({
-          asset_id: asset.id, type: asset.type, name: updated.name, changed: Object.keys(fields).filter((k) => fields[k] !== undefined),
+          asset_id: asset.id, type: asset.type, name: updated.name, changed: [...Object.keys(fields).filter((k) => fields[k] !== undefined), ...(concluded !== undefined ? ['concluded'] : [])],
           link: ASSET_LINK(asset.id),
         }, null, 2) }] };
       } catch (err) {
         console.log('update_asset failed:', err.message);
         return { content: [{ type: 'text', text: `Could not edit the asset: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'remove_asset',
+    {
+      title: 'Remove a tool',
+      description:
+        'Remove a tool that should not have been recorded, such as a duplicate record or a mistake, as the ' +
+        'app\'s remove button does. It leaves the asset lists but its history is kept, and it can be made ' +
+        'available again. For a tool whose purpose is complete, or that can no longer be worked with, use ' +
+        'update_asset concluded instead. Tools only; only admins can remove, as in the app. Read the tool ' +
+        'back to the person (name, serial number) and only call this once they say yes.',
+      inputSchema: {
+        asset_id: z.string().describe('The tool\'s asset_id from search_assets'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ asset_id }) => {
+      console.log('remove_asset called with:', JSON.stringify({ asset_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow removing assets.' }],
+          isError: true,
+        };
+      }
+      try {
+        const asset = await withDbClient(async (client) => (await client.query(
+          `SELECT 'tool' AS type, id::text AS id, organization_id, name, serial_number FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])
+           UNION ALL
+           SELECT 'part', id::text, organization_id, name, NULL FROM parts WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+          [asset_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!asset) return NOT_AN_ASSET(asset_id);
+        if (asset.type === 'part') {
+          return { content: [{ type: 'text', text: 'Only tools can be removed here. A stock item is deleted in the app, which cannot be undone.' }], isError: true };
+        }
+        if (await memberRole(cognitoUserId, asset.organization_id) !== 'admin') {
+          return { content: [{ type: 'text', text: 'Only admins can remove a tool, as in the app.' }], isError: true };
+        }
+        await updateAsset({ cognitoUserId, orgId: asset.organization_id, type: 'tool', assetId: asset.id, changes: { status: 'removed' } });
+        console.log('remove_asset: removed', asset.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          asset_id: asset.id, name: asset.name, serial_number: asset.serial_number, removed: true, link: ASSET_LINK(asset.id),
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('remove_asset failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not remove the asset: ${err.message}` }], isError: true };
       }
     }
   );
@@ -1951,7 +2291,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'their title, type, status, completion date and claim (the account of what was done), plus the ' +
         'person\'s own rewrite of that claim for this experience if there is one, and the photos on the ' +
         'action\'s observations with whether each is included in this write-up (action_photos on ' +
-        'update_experience picks them). An experience need not be on an asset.',
+        'update_experience picks them). An experience need not be on an asset. Each action gives existing_state_ids, ' +
+        'the observations that are its existing state. linked_assets lists the assets linked directly (its own ' +
+        'asset, each action\'s asset and tools used, and the assets its observations are on) and span the days it ' +
+        'covers (to today while an action is open): search_claims with each asset_id and date_from/date_to over ' +
+        'the span finds observations that may belong in it, to suggest to the person. To say what an experience shows, ' +
+        'synthesise from all of it: the existing state, what was done, and every next state in time order. Next ' +
+        'states are observations, not verdicts; "no change yet" is information.',
       inputSchema: {
         experience_id: z.string().describe('The experience_id from search_experiences or get_asset'),
       },
@@ -2006,6 +2352,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              ORDER BY s.captured_at, sp.photo_order`,
             [actionIds]
           )).rows;
+          // Each action's existing state(s).
+          const existingStates = actionIds.length === 0 ? [] : (await client.query(
+            `SELECT es.entity_id::text AS action_id, es.state_id::text AS observation_id
+             FROM state_links es
+             WHERE es.entity_type = 'existing_state' AND es.entity_id::text = ANY($1::text[])`,
+            [actionIds]
+          )).rows;
           const stateIds = components.map((c) => c.observation_id).filter(Boolean);
           const readings = stateIds.length === 0 ? [] : (await client.query(
             `SELECT ms.state_id::text AS observation_id, m.name, ms.value, m.unit
@@ -2013,10 +2366,45 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              WHERE ms.state_id::text = ANY($1::text[])`,
             [stateIds]
           )).rows;
-          return { experience, components, readings, actionPhotos };
+          // Assets linked directly: each action's asset and required tools, and
+          // the tools and parts the experience's observations are linked to.
+          const linkedAssets = (await client.query(
+            `SELECT la.how, la.type, la.id, COALESCE(lt.name, lp.name) AS name FROM (
+               SELECT 'action asset' AS how, 'tool' AS type, ac.asset_id::text AS id
+                 FROM actions ac WHERE ac.id::text = ANY($1::text[]) AND ac.asset_id IS NOT NULL
+               UNION
+               SELECT 'tool used by an action', 'tool', rt.tool_id
+                 FROM actions ac, unnest(ac.required_tools) AS rt(tool_id) WHERE ac.id::text = ANY($1::text[])
+               UNION
+               SELECT 'observation', ol.entity_type, ol.entity_id::text
+                 FROM state_links ol WHERE ol.state_id::text = ANY($2::text[]) AND ol.entity_type IN ('tool', 'part')
+             ) la
+             LEFT JOIN tools lt ON la.type = 'tool' AND lt.id::text = la.id
+             LEFT JOIN parts lp ON la.type = 'part' AND lp.id::text = la.id
+             WHERE lt.id IS NOT NULL OR lp.id IS NOT NULL`,
+            [actionIds, stateIds]
+          )).rows;
+          return { experience, components, readings, actionPhotos, existingStates, linkedAssets };
         });
         if (!found) return NOT_AN_EXPERIENCE(experience_id);
-        const { experience: e, components, readings, actionPhotos } = found;
+        const { experience: e, components, readings, actionPhotos, existingStates, linkedAssets } = found;
+        // Every asset linked directly, once, with how it is linked (its own asset first).
+        const linked = new Map();
+        const addLinked = (id, type, name, how) => {
+          if (!linked.has(id)) linked.set(id, { asset_id: id, type, name, linked_as: [] });
+          if (!linked.get(id).linked_as.includes(how)) linked.get(id).linked_as.push(how);
+        };
+        if (e.asset_id) addLinked(e.asset_id, e.type, e.asset, 'experience asset');
+        for (const a of linkedAssets) addLinked(a.id, a.type, a.name, a.how);
+        // The time it covers: from its first observation or completed action to
+        // its last, or to today while an action in it is still open.
+        const times = components.map((c) => c.captured_at || c.completed_at).filter(Boolean).map((t) => new Date(t));
+        const isOpen = components.some((c) => c.action_id && c.status !== 'completed');
+        const span = times.length === 0 ? null : {
+          from: manilaDateString(new Date(Math.min(...times))),
+          to: isOpen ? manilaDateString(new Date()) : manilaDateString(new Date(Math.max(...times))),
+          ...(isOpen && { open: true }),
+        };
         const edits = e.metadata?.action_claim_edits || {};
         const included = e.metadata?.action_photo_inclusions || {};
         const describe = (c) => c.action_id
@@ -2025,6 +2413,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             ...(c.completed_at && { completed_at_manila: formatManilaTime(c.completed_at) }),
             ...(c.action_claim && { claim: c.action_claim }),
             ...(edits[c.action_id] && { claim_as_rewritten_here: edits[c.action_id] }),
+            existing_state_ids: existingStates.filter((o) => o.action_id === c.action_id).map((o) => o.observation_id),
             ...(actionPhotos.some((ph) => ph.action_id === c.action_id) && {
               photos: actionPhotos.filter((ph) => ph.action_id === c.action_id).map(({ action_id, photo_description, taken_at, gps_latitude, gps_longitude, ...ph }) => ({
                 ...ph,
@@ -2051,6 +2440,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           written_by: e.written_by,
           written_at_manila: formatManilaTime(e.created_at),
           link: `https://stargazer-farm.com/experiences/${e.id}`,
+          ...(span && { span }),
+          linked_assets: [...linked.values()],
           ...Object.fromEntries(Object.entries(LEGS).map(([type, leg]) => [leg, components.filter((c) => c.component_type === type).map(describe)])),
         }, null, 2) }] };
       } catch (err) {
@@ -2090,17 +2481,28 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'final states (how it turned out), as existing observations and actions. Find them with search_claims ' +
         'and search_actions, and look at their photos with get_observation_photos to pick the ones that show ' +
         'the change; an observation that doesn\'t exist yet can be recorded first with add_observation. It can be ' +
-        'on a tool or part, or on nothing in particular (e.g. a trial marked by a stake that isn\'t an asset). ' +
-        'Any leg may be empty. Read the write-up back to the person (each leg, and the photos picked) and only ' +
-        'call this once they say yes.',
+        'on a tool or part, or on nothing in particular (e.g. a spot marked by a stake that isn\'t an asset). ' +
+        'Any leg may be empty.\n\n' +
+        'From an action with an existing state, give from_action_id. From an asset\'s observations, when the work ' +
+        'was only recorded in observations (e.g. maintenance, payments): find the observations with search_claims ' +
+        '(asset_id), pick the one that reports the work and create its action with create_action (title, asset_id, ' +
+        'completed_at = the day it was done; no existing_state text), link that observation to the action and the ' +
+        'observation of how things were before as its existing_state (update_observation_links), then give the ' +
+        'action and the later observations as next states. Look at the observations of the assets linked directly ' +
+        'over the same days, as get_experience\'s linked_assets and span do, for any that belong in it.\n\n' +
+        'Read the write-up back to the person (each leg, and the photos picked) and only call this once they say yes.',
       inputSchema: {
         asset_id: z.string().optional().describe('The tool or part it is about (search_assets), if any'),
+        from_action_id: z.string().optional().describe(
+          'An action with an existing state, open or closed: builds the experience from it (its existing ' +
+          'state → initial, the action, its later observations → next states, in time order). ' +
+          'Other legs given are added.'),
         ...LEG_INPUTS,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ asset_id, initial_state_ids = [], action_ids = [], final_state_ids = [], action_photos }) => {
-      console.log('create_experience called with:', JSON.stringify({ asset_id, initial_state_ids, action_ids, final_state_ids, action_photos }));
+    async ({ asset_id, from_action_id, initial_state_ids = [], action_ids = [], final_state_ids = [], action_photos }) => {
+      console.log('create_experience called with:', JSON.stringify({ asset_id, from_action_id, initial_state_ids, action_ids, final_state_ids, action_photos }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -2109,6 +2511,38 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         };
       }
       try {
+        if (from_action_id) {
+          const from = await withDbClient(async (client) => {
+            const action = (await client.query(
+              `SELECT a.id::text AS id, a.status::text AS status, a.asset_id::text AS asset_id FROM actions a
+               WHERE a.id::text = $1 AND ${VISIBLE_ACTION('$2')}`,
+              [from_action_id, accessibleOrgIds]
+            )).rows[0];
+            if (!action) return { action };
+            // The action's observations, each marked when it is the existing state.
+            const observations = (await client.query(
+              `SELECT s.id::text AS id, s.captured_at,
+                      EXISTS (SELECT 1 FROM state_links es WHERE es.state_id = s.id
+                              AND es.entity_type = 'existing_state' AND es.entity_id::text = $1) AS is_existing_state
+               FROM state_links sl JOIN states s ON s.id = sl.state_id
+               WHERE sl.entity_type = 'action' AND sl.entity_id::text = $1
+               ORDER BY s.captured_at`,
+              [from_action_id]
+            )).rows;
+            return { action, observations };
+          });
+          if (!from.action) return { content: [{ type: 'text', text: `Action ${from_action_id} not found in your organizations. Nothing was written up.` }], isError: true };
+          const existing = from.observations.filter((o) => o.is_existing_state);
+          if (existing.length === 0) return { content: [{ type: 'text', text: 'The action has no existing state. Link the observation of how things were to it as existing_state with update_observation_links, or list the legs yourself. Nothing was written up.' }], isError: true };
+          const since = Math.min(...existing.map((o) => new Date(o.captured_at).getTime()));
+          const later = from.observations.filter((o) => !o.is_existing_state && new Date(o.captured_at).getTime() >= since);
+          const union = (a, b) => [...a, ...b.filter((x) => !a.includes(x))];
+          initial_state_ids = union(existing.map((o) => o.id), initial_state_ids);
+          action_ids = union([from_action_id], action_ids);
+          final_state_ids = union(later.map((o) => o.id), final_state_ids);
+          // Tool assumed when the action has an asset, as in the app.
+          asset_id = asset_id ?? from.action.asset_id ?? undefined;
+        }
         const { asset, missing, strayPhotos } = await withDbClient(async (client) => ({
           asset: asset_id && (await client.query(
             `SELECT 'tool' AS type, id::text AS id, name FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])
@@ -2300,12 +2734,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       if (add.length === 0 && remove.length === 0) {
         return { content: [{ type: 'text', text: 'Give links to add or remove.' }], isError: true };
       }
+      const { lookup, existing } = withExistingStates(add);
+      const toAdd = [...lookup, ...existing];
 
       const same = sameLink;
       try {
         const { targets, observations } = await withDbClient(async (client) => ({
           // What can be added must exist in the caller's orgs; names are for the reply.
-          targets: await findLinkTargets(client, add, accessibleOrgIds),
+          targets: await findLinkTargets(client, lookup, accessibleOrgIds),
           observations: (await client.query(
             `SELECT s.id::text AS id, s.organization_id,
                     COALESCE(json_agg(json_build_object('entity_type', sl.entity_type, 'entity_id', sl.entity_id))
@@ -2316,7 +2752,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [observation_ids, accessibleOrgIds]
           )).rows,
         }));
-        const missing = add.filter((l) => !targets.some((t) => same(t, l)));
+        const missing = lookup.filter((l) => !targets.some((t) => same(t, l)));
         if (missing.length > 0) return notFound(missing);
 
         const results = [];
@@ -2324,7 +2760,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const observation = observations.find((o) => o.id === id);
           if (!observation) { results.push({ observation_id: id, result: 'not found in your organizations' }); continue; }
           const kept = observation.links.filter((l) => !remove.some((r) => same(r, l)));
-          const links = [...kept, ...add.filter((l) => !kept.some((k) => same(k, l)))];
+          const links = [...kept, ...toAdd.filter((l) => !kept.some((k) => same(k, l)))];
           if (links.length === observation.links.length && links.every((l) => observation.links.some((o) => same(o, l)))) {
             results.push({ observation_id: id, result: 'no change' });
             continue;

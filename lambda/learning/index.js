@@ -1385,7 +1385,7 @@ async function fetchToolInventory(db, orgIdSafe) {
       `SELECT name, category, description
        FROM tools
        WHERE organization_id = '${orgIdSafe}'
-         AND status != 'removed'
+         AND status NOT IN ('removed', 'concluded')
        ORDER BY name
        LIMIT 100`
     );

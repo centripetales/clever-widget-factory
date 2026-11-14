@@ -618,9 +618,31 @@ async function writeClientCaptureMetadata(client, photo) {
   `);
 }
 
+// An existing_state link (entity_id = an action) marks the state as that
+// action's existing state. It always comes with the ordinary action link, so
+// the state shows on the action; add that link when it is missing.
+function withActionLinks(links) {
+  if (!Array.isArray(links)) return links;
+  const missing = links
+    .filter((l) => l.entity_type === 'existing_state')
+    .filter((l) => !links.some((o) => o.entity_type === 'action' && String(o.entity_id) === String(l.entity_id)))
+    .map((l) => ({ entity_type: 'action', entity_id: l.entity_id }));
+  return [...links, ...missing];
+}
+
+// Returns an error message when an existing_state link does not point at an action.
+async function existingStateLinkError(client, links) {
+  const ids = (links || []).filter((l) => l.entity_type === 'existing_state').map((l) => String(l.entity_id));
+  if (ids.length === 0) return null;
+  const found = (await client.query('SELECT id::text AS id FROM actions WHERE id::text = ANY($1::text[])', [ids])).rows.map((r) => r.id);
+  const notActions = ids.filter((id) => !found.includes(id));
+  return notActions.length ? `existing_state links must point at an action: ${notActions.join(', ')}` : null;
+}
+
 async function createState(event, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
-  const { action, state_text, captured_at, photos = [], links = [], shared_with_partners } = body;
+  const { action, state_text, captured_at, photos = [], shared_with_partners } = body;
+  const links = withActionLinks(body.links || []);
   const organizationId = authContext.organization_id;
   const userId = authContext.user_id;
 
@@ -634,6 +656,9 @@ async function createState(event, authContext, headers) {
   const client = await getDbClient();
   
   try {
+    const linkError = await existingStateLinkError(client, links);
+    if (linkError) return errorResponse(400, linkError, headers);
+
     await client.query('BEGIN');
 
     const stateSql = `
@@ -802,7 +827,8 @@ async function createState(event, authContext, headers) {
 
 async function updateState(event, id, authContext, headers) {
   const body = JSON.parse(event.body || '{}');
-  const { state_text, captured_at, photos, links, shared_with_partners } = body;
+  const { state_text, captured_at, photos, shared_with_partners } = body;
+  const links = withActionLinks(body.links);
   const organizationId = authContext.organization_id;
   const userId = authContext.user_id;
 
@@ -857,6 +883,9 @@ async function updateState(event, id, authContext, headers) {
       
       return await getState(id, authContext, headers);
     }
+
+    const linkError = await existingStateLinkError(client, links);
+    if (linkError) return errorResponse(400, linkError, headers);
 
     await client.query('BEGIN');
 

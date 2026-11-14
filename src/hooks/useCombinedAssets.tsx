@@ -225,7 +225,7 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     });
 
     sharedToolsData.forEach((t: any) => {
-      if (t.is_shared_inbound && t.organization_id && t.status !== 'removed') {
+      if (t.is_shared_inbound && t.organization_id && t.status !== 'removed' && t.status !== 'concluded') {
         counts[t.organization_id] = (counts[t.organization_id] || 0) + 1;
       }
     });
@@ -241,11 +241,11 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
     let filteredToolsData = toolsData || [];
     if (showRemovedItems) {
       filteredToolsData = filteredToolsData.filter((tool: any) => {
-        if (tool.status === 'removed') return true;
+        if (tool.status === 'removed' || tool.status === 'concluded') return true;
         return false;
       });
     } else {
-      filteredToolsData = filteredToolsData.filter((tool: any) => tool.status !== 'removed');
+      filteredToolsData = filteredToolsData.filter((tool: any) => tool.status !== 'removed' && tool.status !== 'concluded');
     }
 
     let filteredPartsData = partsData || [];
@@ -263,7 +263,7 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
 
     const extraSharedTools = hasSharedOrgsSelected
       ? (sharedToolsData as any[]).filter(
-          (t: any) => t.is_shared_inbound && selectedOrgs.includes(t.organization_id) && !ownToolIds.has(t.id) && t.status !== 'removed'
+          (t: any) => t.is_shared_inbound && selectedOrgs.includes(t.organization_id) && !ownToolIds.has(t.id) && t.status !== 'removed' && t.status !== 'concluded'
         )
       : [];
     const extraSharedParts = hasSharedOrgsSelected

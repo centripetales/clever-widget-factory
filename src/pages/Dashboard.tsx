@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useCognitoAuth";
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2 } from 'lucide-react';
+import { LogOut, CheckCircle, XCircle, Wrench, Box, ClipboardCheck, Target, BarChart3, Building2, Settings, Bot, RefreshCw, DollarSign, Search, User, Camera, Lock, ChevronDown, Loader2, Route } from 'lucide-react';
 import { PrismIcon } from '@/components/icons/PrismIcon';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
 import { orgHasFeature } from '@/hooks/useFeatureFlag';
@@ -128,6 +128,13 @@ export default function Dashboard() {
       path: "/actions",
       color: "bg-yellow-500",
       featureKey: "actions"
+    },
+    {
+      title: "Experiences",
+      description: "What was tried and what came of it, to share and learn from",
+      icon: Route,
+      path: "/experiences",
+      color: "bg-purple-500",
     },
     {
       title: "Sari Sari Store",

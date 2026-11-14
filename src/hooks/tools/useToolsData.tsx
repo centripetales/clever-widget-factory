@@ -57,7 +57,7 @@ export const useToolsData = (showRemovedItems: boolean = false) => {
   // Filter out removed items if needed
   let tools = toolsData;
   if (!showRemovedItems) {
-    tools = toolsData.filter((tool: Tool) => tool.status !== 'removed');
+    tools = toolsData.filter((tool: Tool) => tool.status !== 'removed' && tool.status !== 'concluded');
   }
 
   const updateTool = async (toolId: string, updates: any) => {
