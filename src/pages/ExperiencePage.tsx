@@ -26,7 +26,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Loader2, Plus, X, ImagePlus, Camera, Route } from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, X, ImagePlus, Camera } from 'lucide-react';
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -36,7 +36,7 @@ import { useFileUpload } from '@/hooks/useFileUpload';
 import { stateService } from '@/services/stateService';
 import { actionService, type ActionResponse } from '@/services/actionService';
 import { snapshotService } from '@/services/snapshotService';
-import { apiService, draftExperience, type DraftExperienceProposal } from '@/lib/apiService';
+import { apiService } from '@/lib/apiService';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { getImageUrl } from '@/lib/imageUtils';
 import { LinkExistingPhotoDialog, type LinkablePhoto } from '@/components/shared/LinkExistingPhotoDialog';
@@ -71,13 +71,8 @@ const PENDING_STATE_ID: Record<LegKey, string> = {
 const isPendingStateId = (id: string) =>
   id === PENDING_STATE_ID.initial_states || id === PENDING_STATE_ID.final_states;
 
-// Same sentinel pattern as PENDING_STATE_ID: an AI-drafted action (from an
-// observation-anchored "Draft Experience") doesn't exist yet, so it's held
-// under this id in the Action lane until Save creates it for real.
-const DRAFT_ACTION_ID = '__draft_action__';
-
 // A person-authored new action (title + observation, no AI involved) — same
-// "held here until Save" pattern as DRAFT_ACTION_ID and PENDING_STATE_ID.
+// "held here until Save" pattern as PENDING_STATE_ID.
 const NEW_ACTION_ID = '__new_action__';
 
 export default function ExperiencePage() {
@@ -98,7 +93,7 @@ export default function ExperiencePage() {
   const entityIdParam = searchParams.get('entity_id') || '';
   const preselectedActionId = searchParams.get('action_id') || undefined;
 
-  // "Draft Experience" entry point: a person picked one real observation or
+  // "Create experience" entry point: a person picked one real observation or
   // action they already recognize as worth writing up. draft_action_id wins
   // if both are somehow present.
   const draftStateIdParam = searchParams.get('draft_state_id') || undefined;
@@ -177,29 +172,14 @@ export default function ExperiencePage() {
   // Observations already linked to each action (entity_type='action'), fetched
   // on demand — same mechanism UnifiedActionDialog/StatesInline use.
   const [actionStatesById, setActionStatesById] = useState<Record<string, Observation[]>>({});
-
-  // --- Draft Experience (AI-assisted, from one anchor + a person's note) ---
-  const [draftNote, setDraftNote] = useState('');
-  const [isDrafting, setIsDrafting] = useState(false);
-  const [hasDrafted, setHasDrafted] = useState(false);
-  // AI-proposed action content when anchored on an observation — the action
-  // doesn't exist yet, so it's held here (editable) until Save creates it for
-  // real, same "materialize at Save, not before" rule as everything else here.
-  const [draftAction, setDraftAction] = useState<{
-    title: string;
-    description: string;
-    action_type: 'transformative' | 'entropy_reduction';
-    expected_state?: string;
-  } | null>(null);
-  // Points at the untouched AI draft (state_perspectives row) so Save can
-  // stamp experiences.metadata with it for future contrast.
-  const [draftPerspectiveId, setDraftPerspectiveId] = useState<string | null>(null);
-  const [draftGenerationConfigId, setDraftGenerationConfigId] = useState<string | null>(null);
+  // Description edits to photos picked from an action's observations, keyed by
+  // photo_url — saved to the observation each photo belongs to, as a state
+  // card's photo edits are.
+  const [actionPhotoDescriptionEdits, setActionPhotoDescriptionEdits] = useState<Record<string, string>>({});
 
   // --- New action (person-authored: a title + one observation, no AI) ---
   // Doesn't exist yet, so it's held here (editable) until Save creates the
-  // action and its observation for real — same pattern as draftAction above,
-  // just without any AI involved.
+  // action and its observation for real.
   const [newActionDraft, setNewActionDraft] = useState<{
     title: string;
     text: string;
@@ -226,11 +206,6 @@ export default function ExperiencePage() {
       setTitleEdits({});
       setPhotoInclusions({});
       setDrafts({});
-      setDraftNote('');
-      setHasDrafted(false);
-      setDraftAction(null);
-      setDraftPerspectiveId(null);
-      setDraftGenerationConfigId(null);
       setNewActionDraft(initialActionId ? null : { title: '', text: '', photos: [] });
       return;
     }
@@ -401,6 +376,21 @@ export default function ExperiencePage() {
     ensureDraft(id);
   };
 
+  // Brings back a lane's blank card for a new observation, after it was
+  // removed or used, as "New action" does for actions.
+  const newObservationButton = (leg: LegKey) => {
+    const pendingId = PENDING_STATE_ID[leg];
+    const laneIds = leg === 'initial_states' ? initialStateIds : finalStateIds;
+    if (laneIds.includes(pendingId)) return null;
+    const setter = leg === 'initial_states' ? setInitialStateIds : setFinalStateIds;
+    return (
+      <Button size="sm" variant="outline" className="w-full" onClick={() => setter((prev) => [...prev, pendingId])}>
+        <Plus className="h-3 w-3 mr-1" />
+        New observation
+      </Button>
+    );
+  };
+
   const removeFromLane = (leg: LegKey, id: string) => {
     const setter = leg === 'initial_states' ? setInitialStateIds : setFinalStateIds;
     setter((prev) => prev.filter((x) => x !== id));
@@ -534,60 +524,6 @@ export default function ExperiencePage() {
     });
   };
 
-  /**
-   * Fires the AI draft for the anchored observation/action plus the
-   * person's note. Writes nothing real — only pre-fills the draft lanes
-   * (via the existing pending-state mechanism, and a new draftAction for the
-   * observation-anchored case) for the person to edit before Save.
-   */
-  const handleDraftExperience = async () => {
-    if (!draftAnchor || !entityId) return;
-    setIsDrafting(true);
-    try {
-      const res = await draftExperience({
-        entity_type: entityType,
-        entity_id: entityId,
-        anchor_type: draftAnchor.type,
-        anchor_id: draftAnchor.id,
-        note: draftNote,
-      });
-      const proposal: DraftExperienceProposal = res.proposal;
-      setDraftPerspectiveId(res.perspective_id);
-      setDraftGenerationConfigId(res.llm_generation_config_id);
-
-      const seedPendingState = (leg: LegKey, text: string | undefined) => {
-        if (!text) return;
-        const pendingId = PENDING_STATE_ID[leg];
-        setDrafts((prev) => ({ ...prev, [pendingId]: { stateId: pendingId, text, photos: [], dirty: true } }));
-        const setter = leg === 'initial_states' ? setInitialStateIds : setFinalStateIds;
-        setter((prev) => (prev.includes(pendingId) ? prev : [...prev, pendingId]));
-      };
-
-      if (draftAnchor.type === 'state') {
-        // Anchor is already the final state; propose the action and the
-        // initial state around it.
-        setDraftAction({
-          title: proposal.title || 'Untitled action',
-          description: proposal.description || '',
-          action_type: proposal.action_type || 'entropy_reduction',
-          expected_state: proposal.expected_state,
-        });
-        seedPendingState('initial_states', proposal.initial_state_text);
-      } else {
-        // Anchor is already the real action; propose both boundary states.
-        seedPendingState('initial_states', proposal.initial_state_text);
-        seedPendingState('final_states', proposal.final_state_text);
-      }
-
-      setHasDrafted(true);
-    } catch (err) {
-      console.error('Failed to draft experience:', err);
-      toast({ title: 'Error', description: 'Failed to draft this experience.', variant: 'destructive' });
-    } finally {
-      setIsDrafting(false);
-    }
-  };
-
   // --- Save ------------------------------------------------------------
   const handleSave = async () => {
     setIsSaving(true);
@@ -672,13 +608,40 @@ export default function ExperiencePage() {
 
       // 3. Attach any new photos to their action as a fresh linked
       //    observation — same mechanism UnifiedActionDialog uses when an
-      //    action gets its existing state.
+      //    action gets its existing state — and pick them for this write-up,
+      //    since they were added here.
+      const nextInclusions: Record<string, string[]> = { ...photoInclusions };
       for (const [actionId, photos] of Object.entries(actionPhotoDrafts)) {
         if (photos.length === 0) continue;
         await stateService.createState({
           photos: toPhotoPayload(photos),
           links: [{ entity_type: 'action', entity_id: actionId }, ...entityLinks],
         });
+        const added = photos.map((p) => p.photo_url).filter((u): u is string => !!u);
+        nextInclusions[actionId] = [...(nextInclusions[actionId] || []), ...added.filter((u) => !(nextInclusions[actionId] || []).includes(u))];
+      }
+
+      // 3a. Save description edits to picked action photos on the observation
+      //     each belongs to, sending its whole photo list as a state card does.
+      //     An observation also being edited as a state card above already
+      //     saved its own photos, so it is left alone here.
+      if (Object.keys(actionPhotoDescriptionEdits).length > 0) {
+        const seen = new Set<string>();
+        for (const states of Object.values(actionStatesById)) {
+          for (const state of states) {
+            if (seen.has(state.id) || drafts[state.id]?.dirty) continue;
+            const photos = state.photos || [];
+            if (!photos.some((ph) => ph.photo_url in actionPhotoDescriptionEdits)) continue;
+            seen.add(state.id);
+            await stateService.updateState(state.id, {
+              photos: photos.map((ph, idx) => ({
+                photo_url: ph.photo_url,
+                photo_description: actionPhotoDescriptionEdits[ph.photo_url] ?? ph.photo_description ?? undefined,
+                photo_order: idx,
+              })),
+            });
+          }
+        }
       }
 
       // 4. Persist any action renames and date corrections directly to the
@@ -705,22 +668,7 @@ export default function ExperiencePage() {
         });
       }
 
-      // 5. Materialize an AI-drafted action (observation-anchored "Draft
-      //    Experience") for real — it's just a normal action creation,
-      //    the same call a human-authored action goes through.
       let nextActionIds = actionIds;
-      if (draftAction) {
-        const created = await actionService.createAction({
-          title: draftAction.title,
-          description: draftAction.description,
-          expected_state: draftAction.expected_state,
-          scoring_data: { action_type: draftAction.action_type },
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          asset_id: entityType === 'tool' && entityId ? entityId : undefined,
-        });
-        nextActionIds = [...actionIds, created.id];
-      }
 
       // 5b. Materialize a person-authored new action (title + one
       //     observation, no AI) — same actionService.createAction call
@@ -760,9 +708,7 @@ export default function ExperiencePage() {
           initial_state_ids: nextInitialIds,
           action_ids: nextActionIds,
           final_state_ids: nextFinalIds,
-          action_photo_inclusions: photoInclusions,
-          experience_perspective_id: draftPerspectiveId || undefined,
-          llm_generation_config_id: draftGenerationConfigId || undefined,
+          action_photo_inclusions: nextInclusions,
         });
         toast({ title: 'Experience created', description: 'Saved successfully.' });
       } else {
@@ -773,9 +719,7 @@ export default function ExperiencePage() {
             action_ids: nextActionIds,
             final_state_ids: nextFinalIds,
             action_claim_edits: claimEdits,
-            action_photo_inclusions: photoInclusions,
-            experience_perspective_id: draftPerspectiveId || undefined,
-            llm_generation_config_id: draftGenerationConfigId || undefined,
+            action_photo_inclusions: nextInclusions,
           },
         });
         toast({ title: 'Experience saved', description: 'Saved successfully.' });
@@ -829,7 +773,7 @@ export default function ExperiencePage() {
       >
         <div className="flex items-start justify-between gap-2">
           {isPending ? (
-            <p className="text-xs text-muted-foreground">New — created on save</p>
+            <span />
           ) : (
             <Input
               type="date"
@@ -916,46 +860,6 @@ export default function ExperiencePage() {
     );
   };
 
-  /** AI-proposed action content (observation-anchored draft) — editable,
-   *  not yet real. Materialized via actionService.createAction at Save. */
-  const renderDraftActionCard = () => {
-    if (!draftAction) return null;
-    return (
-      <div key={DRAFT_ACTION_ID} className="rounded-md border p-3 space-y-2 bg-background border-primary/50 border-dashed">
-        <div className="flex items-start justify-between gap-2">
-          <Input
-            value={draftAction.title}
-            onChange={(e) => setDraftAction((prev) => (prev ? { ...prev, title: e.target.value } : prev))}
-            className="h-7 text-sm font-medium px-2"
-            aria-label="Action title"
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-6 px-2 shrink-0"
-            onClick={() => setDraftAction(null)}
-            aria-label="Remove this drafted action"
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-        <Badge variant="outline" className="text-[10px]">
-          {draftAction.action_type === 'transformative' ? 'Transformative' : 'Entropy reduction'}
-        </Badge>
-        <Textarea
-          placeholder="What was done…"
-          value={draftAction.description}
-          onChange={(e) => setDraftAction((prev) => (prev ? { ...prev, description: e.target.value } : prev))}
-          rows={3}
-          className="text-sm"
-        />
-        <p className="text-[11px] text-muted-foreground">
-          New — from the AI draft, created on save.
-        </p>
-      </div>
-    );
-  };
-
   /**
    * A person-authored new action — just a title and one observation (text
    * + photos), the same shape as a state card. No action_type, expected_state,
@@ -1015,7 +919,6 @@ export default function ExperiencePage() {
   };
 
   const renderActionCard = (actionId: string) => {
-    if (actionId === DRAFT_ACTION_ID) return renderDraftActionCard();
     if (actionId === NEW_ACTION_ID) return renderNewActionCard();
     const comp = componentByActionId.get(actionId);
     const fallback = actionsById.get(actionId);
@@ -1041,6 +944,15 @@ export default function ExperiencePage() {
     const linkedPhotos = allLinkedPhotos.filter((p) => included.has(p.photo_url));
     const candidatePhotos = allLinkedPhotos.filter((p) => !included.has(p.photo_url));
     const newPhotos = actionPhotoDrafts[actionId] || [];
+    const pickedItems: PhotoItem[] = linkedPhotos.map((p, idx) => ({
+      id: p.id,
+      photo_url: p.photo_url,
+      photo_description: actionPhotoDescriptionEdits[p.photo_url] ?? p.photo_description ?? '',
+      photo_order: idx,
+      previewUrl: p.photo_url,
+      isExisting: true,
+      captured_at: p.captured_at ?? null,
+    }));
 
     return (
       <div key={actionId} className="rounded-md border p-3 space-y-2 bg-background">
@@ -1082,40 +994,6 @@ export default function ExperiencePage() {
           />
         </div>
 
-        {/* Photos deliberately picked for this write-up from the action's
-            linked observations. Removing one only un-picks it here — it
-            stays linked to the action and reappears below as a candidate. */}
-        {linkedPhotos.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {linkedPhotos.map((p, idx) => (
-              <div key={`${p.id || p.photo_url}-${idx}`} className="flex flex-col items-center">
-                {p.captured_at && (
-                  <p className="text-[10px] text-muted-foreground truncate max-w-14">
-                    {format(new Date(p.captured_at), 'MMM d')}
-                  </p>
-                )}
-                <div className="relative">
-                <img
-                  src={getImageUrl(p.photo_url) || p.photo_url}
-                  alt={p.photo_description || ''}
-                  title={p.photo_description || undefined}
-                  className="h-14 w-14 rounded object-cover border"
-                  loading="lazy"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeIncludedPhoto(actionId, p.photo_url)}
-                  aria-label="Remove this photo from this experience"
-                  title="Remove from this experience — stays on the action"
-                  className="absolute -top-1.5 -right-1.5 rounded-full bg-background border shadow-sm h-5 w-5 flex items-center justify-center"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
         {/* Other photos already on this action's linked observations, not
             yet part of this write-up — pick any that actually belong. */}
         {candidatePhotos.length > 0 && (
@@ -1152,9 +1030,28 @@ export default function ExperiencePage() {
             </div>
           </div>
         )}
+        {/* The photos in this write-up, picked from the action's observations
+            or added here, each with a description, as on a state card.
+            Removing a picked photo only un-picks it: it stays on the action
+            and shows again above as another photo on this action. */}
         <PhotoUploadPanel
-          photos={newPhotos}
-          onPhotosChange={(photos) => setActionPhotoDrafts((prev) => ({ ...prev, [actionId]: photos }))}
+          photos={[...pickedItems, ...newPhotos]}
+          onPhotosChange={(photos) => {
+            const kept = photos.filter((p) => p.isExisting);
+            for (const p of linkedPhotos) {
+              if (!kept.some((k) => k.photo_url === p.photo_url)) removeIncludedPhoto(actionId, p.photo_url);
+            }
+            setActionPhotoDescriptionEdits((prev) => {
+              const next = { ...prev };
+              for (const k of kept) {
+                const original = linkedPhotos.find((l) => l.photo_url === k.photo_url)?.photo_description || '';
+                if ((k.photo_description || '') !== original) next[k.photo_url!] = k.photo_description || '';
+                else delete next[k.photo_url!];
+              }
+              return next;
+            });
+            setActionPhotoDrafts((prev) => ({ ...prev, [actionId]: photos.filter((p) => !p.isExisting) }));
+          }}
           onEagerUpload={handleEagerUpload}
           showDescriptions
           showCapturedDate
@@ -1178,9 +1075,6 @@ export default function ExperiencePage() {
               rows={3}
               className="text-sm"
             />
-            <p className="text-[11px] text-muted-foreground">
-              Saved on this experience — the action's own record is left unchanged.
-            </p>
           </>
         )}
       </div>
@@ -1198,7 +1092,7 @@ export default function ExperiencePage() {
     <Card className="flex-1 min-w-0">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm">{title}</CardTitle>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
       </CardHeader>
       <CardContent className="space-y-2">
         {ids.length === 0 ? (
@@ -1253,41 +1147,21 @@ export default function ExperiencePage() {
         </p>
       </div>
 
-      {draftAnchor && !hasDrafted && (
-        <Card className="mb-4 border-primary/50">
-          <CardContent className="pt-4 space-y-3">
-            <p className="text-sm text-muted-foreground">
-              What do you want captured about this {draftAnchor.type === 'action' ? 'action' : 'observation'}?
-            </p>
-            <Textarea
-              placeholder="A short note steering what to focus on…"
-              value={draftNote}
-              onChange={(e) => setDraftNote(e.target.value)}
-              rows={2}
-            />
-            <Button onClick={handleDraftExperience} disabled={isDrafting}>
-              {isDrafting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Route className="h-4 w-4 mr-2" />}
-              {isDrafting ? 'Drafting…' : 'Draft Experience'}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Lanes stack on mobile — this app is used in the field. */}
       <div className="rounded-lg border-2 border-[#8b5a2b] bg-[#8b5a2b]/5 p-3">
         <div className="flex flex-col lg:flex-row gap-4">
           {renderLane(
             'Initial state',
-            'The condition this started from',
+            '',
             initialStateIds,
             (id) => renderStateCard('initial_states', id),
-            'No starting state yet'
+            'No starting state yet',
+            newObservationButton('initial_states')
           )}
           {renderLane(
             'Action(s)',
             'What was done',
             [
-              ...(draftAction ? [DRAFT_ACTION_ID] : []),
               ...(newActionDraft ? [NEW_ACTION_ID] : []),
               ...actionIds,
             ],
@@ -1306,11 +1180,12 @@ export default function ExperiencePage() {
             )
           )}
           {renderLane(
-            'Final state',
-            'What resulted — including measurements',
+            'Observations',
+            '',
             finalStateIds,
             (id) => renderStateCard('final_states', id),
-            'No outcome observed yet'
+            'No observations yet',
+            newObservationButton('final_states')
           )}
         </div>
       </div>
