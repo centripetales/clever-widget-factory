@@ -1,4 +1,8 @@
-import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2, Route } from "lucide-react";
+import { ArrowLeft, Plus, Zap, MapPin, Maximize2, Camera, Edit, Trash2, Loader2, Route, Info } from "lucide-react";
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { CONCLUDED_INFO } from "@/components/CombinedAssetCard";
+import { useCreateExperience } from "@/hooks/useExperiences";
+import { loadExperienceFromAction } from "@/lib/experienceFromAction";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -67,6 +71,18 @@ export const ToolDetails = ({
   // silently returns false and the delete never fires.
   const [deleteConfirm, setDeleteConfirm] = useState<{ kind: 'observation' | 'action'; id: string } | null>(null);
   const navigate = useNavigate();
+  // A completed action with an existing state becomes an experience straight
+  // away; otherwise the experience page opens with the action preselected.
+  const createExperience = useCreateExperience();
+  const handleCreateExperienceFromAction = async (actionId: string) => {
+    const request = await loadExperienceFromAction({ id: actionId, asset_id: tool.id });
+    if (request) {
+      const result = await createExperience.mutateAsync(request);
+      navigate(`/experiences/${result.data.id}`);
+      return;
+    }
+    navigate(`/experiences/new?entity_type=tool&entity_id=${tool.id}&action_id=${actionId}`);
+  };
   const location = useLocation();
   const { user } = useAuth();
   const { organization, isAdmin } = useOrganization();
@@ -270,10 +286,10 @@ export const ToolDetails = ({
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => navigate(`/experiences/new?entity_type=tool&entity_id=${tool.id}&draft_action_id=${record.action_id}`)}
+                                    onClick={() => handleCreateExperienceFromAction(record.action_id!)}
                                     className="h-8 px-2 text-purple-700 hover:text-purple-900 hover:bg-purple-100"
-                                    aria-label="Draft Experience"
-                                    title="Draft Experience"
+                                    aria-label="Create experience"
+                                    title="Create experience"
                                   >
                                     <Route className="h-4 w-4" />
                                   </Button>
@@ -376,8 +392,8 @@ export const ToolDetails = ({
                               size="sm"
                               onClick={() => navigate(`/experiences/new?entity_type=tool&entity_id=${tool.id}&draft_state_id=${record.id}`)}
                               className="h-8 px-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100"
-                              aria-label="Draft Experience"
-                              title="Draft Experience"
+                              aria-label="Create experience"
+                              title="Create experience"
                             >
                               <Route className="h-4 w-4" />
                             </Button>
@@ -506,6 +522,16 @@ export const ToolDetails = ({
           <h1 className="text-2xl font-bold">{tool.name}</h1>
           <div className="flex items-center gap-2 mt-1">
             <ToolStatusBadge status={tool.status} />
+            {tool.status === 'concluded' && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help"><Info className="h-4 w-4 text-muted-foreground" /></span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs"><p>{CONCLUDED_INFO}</p></TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </div>
         </div>
       </div>

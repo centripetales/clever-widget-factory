@@ -37,6 +37,7 @@ import ObservationsList from "./pages/ObservationsList";
 import Actions from "./pages/Actions";
 import ActionPage from "./pages/ActionPage";
 import ExperiencePage from "./pages/ExperiencePage";
+import Experiences from "./pages/Experiences";
 import Explorations from "./pages/Explorations";
 import Audit from "./pages/Audit";
 import AuditTool from "./pages/AuditTool";
@@ -274,6 +275,14 @@ function AppContent() {
         />
         {/* Experiences: one page for both new and existing, matching the
             /actions/new + /actions/:actionId pattern above. */}
+        <Route
+          path="/experiences"
+          element={
+            <ProtectedRoute>
+              <Experiences />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/experiences/new"
           element={

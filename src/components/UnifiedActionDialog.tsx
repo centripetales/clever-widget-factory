@@ -42,7 +42,8 @@ import {
   Copy,
   Sparkles,
   Search,
-  Handshake
+  Handshake,
+  RotateCcw
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useFileUpload } from "@/hooks/useFileUpload";
@@ -63,7 +64,6 @@ import { BaseAction, Profile, ActionCreationContext } from "@/types/actions";
 import { generateActionUrl, copyToClipboard } from "@/lib/urlUtils";
 import { useStates } from "@/hooks/useStates";
 import { parseLearningTakeawayStateText, buildCopyContextText } from "@/lib/learningUtils";
-import { aiContentService } from "@/services/aiContentService";
 import { useActionObservationCount } from "@/hooks/useActionObservationCount";
 import { PrismIcon } from "@/components/icons/PrismIcon";
 import { MaxwellInlinePanel } from "@/components/MaxwellInlinePanel";
@@ -270,7 +270,6 @@ export function ActionForm({
   // itself is saved, rather than requiring a separate save-then-add-observation
   // round trip. See docs/specs/azolla-impact-power-model.md — "states as
   // action context."
-  const [newActionObservationText, setNewActionObservationText] = useState('');
   const [newActionObservationPhotos, setNewActionObservationPhotos] = useState<PhotoItem[]>([]);
   const { uploadFiles: uploadObservationFile } = useFileUpload();
   const handleObservationEagerUpload = async (file: File) => {
@@ -373,8 +372,6 @@ export function ActionForm({
   const uploadCompletedTimeRef = useRef<number>(0);
   const isAutoSavingFromUploadRef = useRef<boolean>(false);
   const [attachmentFiles, setAttachmentFiles] = useState<Map<string, File>>(new Map());
-  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
-  const [isGeneratingExpectedState, setIsGeneratingExpectedState] = useState(false);
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -514,7 +511,6 @@ export function ActionForm({
       setStoredActionId(null);
       setCurrentContextType(null);
       setIsTitleEditing(false);
-      setNewActionObservationText('');
       setNewActionObservationPhotos([]);
     }
   }, [open, actionId, context?.type, isCreating, action]);
@@ -581,6 +577,13 @@ export function ActionForm({
     // Derive from cache using the existing hook value
     // derivedObservationCount is already computed at line 362
     setIsInImplementationMode((derivedObservationCount ?? 0) > 0);
+  };
+
+  // Puts a completed action back in progress, e.g. when follow-up is still
+  // needed. Stock it used up stays used.
+  const handleReopen = async () => {
+    if (!action?.id) return;
+    await saveActionMutation.mutateAsync({ id: action.id, status: 'in_progress' });
   };
 
   const handleReadyForReview = async () => {
@@ -714,105 +717,6 @@ export function ActionForm({
         description: text,
         duration: 10000,
       });
-    }
-  };
-
-  // Generate AI summary policy text
-  const generateAISummaryPolicy = async () => {
-    if (!formData.description && !formData.policy) {
-      toast({
-        title: "Missing Information",
-        description: "Please add a description or policy text first",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setIsGeneratingAI(true);
-    try {
-      const response = await aiContentService.generateSummaryPolicy({
-        state_text: formData.description || '',
-        policy_text: formData.policy || '',
-        action_context: {
-          title: formData.title,
-          assigned_to: formData.assigned_to || undefined,
-          priority: 'normal' // Could be enhanced with actual priority field
-        }
-      });
-
-      if (response?.content?.summary_policy_text) {
-        // Update the Action Policy field with the generated text
-        setFormData(prev => ({
-          ...prev,
-          policy: response.content.summary_policy_text
-        }));
-        toast({
-          title: "AI Suggestion Generated",
-          description: "Action policy has been updated with AI-generated content. You can edit it as needed.",
-        });
-      } else {
-        toast({
-          title: "AI Unavailable",
-          description: "AI service is currently unavailable. Please enter the policy manually.",
-          variant: "destructive"
-        });
-      }
-    } catch (error) {
-      console.error('Error generating AI summary:', error);
-      toast({
-        title: "Error",
-        description: "Failed to generate AI summary",
-        variant: "destructive"
-      });
-    } finally {
-      setIsGeneratingAI(false);
-    }
-  };
-
-  // Generate AI expected state (S') text
-  const generateAIExpectedState = async () => {
-    if (!formData.title && !formData.description) {
-      toast({
-        title: "Missing Information",
-        description: "Please add a title or description first",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setIsGeneratingExpectedState(true);
-    try {
-      const response = await aiContentService.generateExpectedState({
-        title: formData.title || '',
-        description: formData.description || '',
-        asset_name: formData.asset?.name
-      });
-
-      if (response?.content?.expected_state) {
-        setFormData(prev => ({
-          ...prev,
-          expected_state: response.content.expected_state
-        }));
-        toast({
-          title: "AI Suggestion Generated",
-          description: "Expected state has been updated with AI-generated content. You can edit it as needed.",
-        });
-      } else {
-        toast({
-          title: "AI Unavailable",
-          description: "AI service is currently unavailable. Please enter the expected state manually.",
-          variant: "destructive"
-        });
-      }
-    } catch (error) {
-      console.error('Error generating AI expected state:', error);
-      toast({
-        title: "Error",
-        description: "Failed to generate AI expected state",
-        variant: "destructive"
-      });
-    } finally {
-      setIsGeneratingExpectedState(false);
     }
   };
 
@@ -964,7 +868,8 @@ export function ActionForm({
 
       const actionData: any = {
         title: formData.title.trim(),
-        description: formData.description || null,
+        // On a new action the text is saved only as its existing-state observation below.
+        description: isCreating || !action?.id ? null : formData.description || null,
         expected_state: formData.expected_state || null,
         policy: normalizedPolicy,
         assigned_to: formData.assigned_to === 'unassigned' ? null : formData.assigned_to || null,
@@ -982,14 +887,15 @@ export function ActionForm({
 
       const savedAction = await saveActionMutation.mutateAsync(isCreating || !action?.id ? actionData : { ...actionData, id: action.id });
 
-      // Existing state (S): create it now that the action has a real id.
-      // Same mechanism StatesInline uses post-creation — this just removes
-      // the save-then-add-observation round trip for a brand new action.
-      const hasNewObservation = newActionObservationText.trim() || newActionObservationPhotos.some((p) => p.photo_url);
+      // Existing state (S): create it now that the action has a real id,
+      // from the Existing State text and the photos, linked to the action
+      // twice — its ordinary action link and an existing_state link.
+      const existingStateText = (formData.description || '').trim();
+      const hasNewObservation = existingStateText || newActionObservationPhotos.some((p) => p.photo_url);
       if ((isCreating || !action?.id) && savedAction?.id && hasNewObservation) {
         try {
           await stateService.createState({
-            state_text: newActionObservationText.trim() || undefined,
+            state_text: existingStateText || undefined,
             photos: newActionObservationPhotos
               .filter((p) => p.photo_url)
               .map((p, idx) => ({
@@ -1001,6 +907,7 @@ export function ActionForm({
               })),
             links: [
               { entity_type: 'action', entity_id: savedAction.id },
+              { entity_type: 'existing_state', entity_id: savedAction.id },
               // Assumes tool when an asset is set — actions.asset_id matches
               // either tools or parts with nothing on this form to
               // distinguish them, and tools account for the overwhelming
@@ -1388,12 +1295,12 @@ export function ActionForm({
                   }
                 />
                 <RewardsSection actionId={action.id} />
-                <ActionExperiences actionId={action.id} />
+                <ActionExperiences actionId={action.id} assetId={formData.asset_id} />
               </>
             ) : (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  Describe the situation this action responds to. Saved as this action's
+                  What is the existing state? Saved as this action's
                   existing state once you save the action below.
                 </p>
                 <PhotoUploadPanel
@@ -1401,12 +1308,6 @@ export function ActionForm({
                   onPhotosChange={setNewActionObservationPhotos}
                   onEagerUpload={handleObservationEagerUpload}
                   showDescriptions
-                />
-                <Textarea
-                  placeholder="What's the current situation?"
-                  value={newActionObservationText}
-                  onChange={(e) => setNewActionObservationText(e.target.value)}
-                  rows={4}
                 />
               </div>
             )}
@@ -1534,6 +1435,17 @@ export function ActionForm({
             >
               <CheckCircle className="h-4 w-4 mr-2" />
               {isCompleting ? 'Marking Complete...' : 'Done'}
+            </Button>
+          )}
+          {!isCreating && action?.id && action.status === 'completed' && (
+            <Button
+              variant="outline"
+              onClick={handleReopen}
+              disabled={saveActionMutation.isPending || isSubmitting}
+              className="flex-1 min-w-0"
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Reopen
             </Button>
           )}
           <Button
