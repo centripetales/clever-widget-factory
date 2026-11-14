@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, Camera, MapPin, Handshake, Network } from "lucide-react";
+import { Wrench, Edit, Trash2, AlertTriangle, AlertCircle, Plus, Minus, Triangle, Info, Camera, MapPin, Handshake, Network, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ShareConfigurationDialog } from "./ShareConfigurationDialog";
@@ -13,6 +13,9 @@ import { useMemo, memo, useState } from "react";
 import { CombinedAsset } from '@/hooks/useCombinedAssets';
 import { useToast } from "@/hooks/use-toast";
 
+export const CONCLUDED_INFO =
+  "Concluded: this asset's purpose is complete, or it can no longer be worked with. It's out of the active lists, but its history and experiences are kept and can be shared.";
+
 interface CombinedAssetCardProps {
   asset: CombinedAsset;
   canEdit: boolean;
@@ -22,6 +25,7 @@ interface CombinedAssetCardProps {
   onView: (asset: CombinedAsset) => void;
   onEdit: (asset: CombinedAsset) => void;
   onRemove: (asset: CombinedAsset) => void;
+  onConclude?: (asset: CombinedAsset) => void;
   onAddQuantity?: (asset: CombinedAsset) => void;
   onUseQuantity?: (asset: CombinedAsset) => void;
   onAskMaxwell?: (asset: CombinedAsset) => void;
@@ -104,6 +108,7 @@ export const CombinedAssetCard = memo(({
   onView,
   onEdit,
   onRemove,
+  onConclude,
   onAddQuantity,
   onUseQuantity,
   onAskMaxwell,
@@ -116,6 +121,23 @@ export const CombinedAssetCard = memo(({
     if (asset.type === 'asset') {
       if (asset.status === 'removed') {
         return <Badge variant="outline" className="text-gray-600 border-gray-600">Removed</Badge>;
+      }
+      if (asset.status === 'concluded') {
+        return (
+          <span className="inline-flex items-center gap-1">
+            <Badge variant="outline" className="text-emerald-700 border-emerald-700">Concluded</Badge>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help" onClick={(e) => e.stopPropagation()}>
+                    <Info className="h-3 w-3 text-muted-foreground" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs"><p>{CONCLUDED_INFO}</p></TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </span>
+        );
       }
       return null;
     } else {
@@ -562,6 +584,32 @@ export const CombinedAssetCard = memo(({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+
+              {isAdmin && onConclude && asset.type === 'asset' && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-block">
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          disabled={asset.is_shared_inbound}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConclude(asset);
+                          }}
+                          className="text-muted-foreground h-9 w-9"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{asset.status === 'concluded' ? 'Make available again' : 'Conclude'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
 
               {isAdmin && (
                 <TooltipProvider>

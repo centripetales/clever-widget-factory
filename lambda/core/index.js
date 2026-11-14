@@ -41,6 +41,25 @@ async function queryJSON(sql, params = []) {
 
 
 
+// A serial number already on another tool in use (index
+// tools_active_serial_unique, migration 033) becomes a 400 naming that tool;
+// any other error is rethrown.
+async function serialClashResponse(err, { organizationId, serialNumber, toolId, headers }) {
+  if (err?.code !== '23505' || err?.constraint !== 'tools_active_serial_unique') throw err;
+  const other = (await queryJSON(
+    `SELECT name FROM tools WHERE organization_id = $1 AND lower(btrim(serial_number)) = lower(btrim($2))
+       AND status NOT IN ('removed', 'concluded') AND ($3::uuid IS NULL OR id <> $3::uuid) LIMIT 1`,
+    [organizationId, serialNumber, toolId || null]
+  ))[0];
+  return {
+    statusCode: 400,
+    headers,
+    body: JSON.stringify({
+      error: `Serial number "${String(serialNumber).trim()}" is already on "${other?.name?.trim() || 'another tool'}". Conclude that one or pick another number.`,
+    }),
+  };
+}
+
 exports.handler = async (event) => {
   console.log('Event:', JSON.stringify(event, null, 2));
   
@@ -306,7 +325,12 @@ exports.handler = async (event) => {
             NOW()
           ) RETURNING *`;
         
-        const result = await queryJSON(insertSql);
+        let result;
+        try {
+          result = await queryJSON(insertSql);
+        } catch (err) {
+          return await serialClashResponse(err, { organizationId, serialNumber: body.serial_number, headers });
+        }
         
         // Log creation to asset_history
         if (userId && organizationId) {
@@ -397,7 +421,19 @@ exports.handler = async (event) => {
         }
         updates.push('updated_at = NOW()');
         const sql = `UPDATE tools SET ${updates.join(', ')} WHERE id = '${toolId}' RETURNING *`;
-        const result = await queryJSON(sql);
+        let result;
+        try {
+          result = await queryJSON(sql);
+        } catch (err) {
+          // Also reached when a concluded or removed tool is made available
+          // again and its number has since been reused.
+          return await serialClashResponse(err, {
+            organizationId: currentTool.organization_id,
+            serialNumber: body.serial_number !== undefined ? body.serial_number : currentTool.serial_number,
+            toolId,
+            headers,
+          });
+        }
         
         // Log to asset_history - only log fields that actually changed
         const userId = authContext.cognito_user_id;
@@ -585,7 +621,7 @@ exports.handler = async (event) => {
         // Handle status filter (supports "!removed" or "!=removed" syntax)
         if (status) {
           if (status === '!removed' || status === '!=removed') {
-            whereClauses.push(`tools.status != 'removed'`);
+            whereClauses.push(`tools.status NOT IN ('removed', 'concluded')`);
           } else {
             whereClauses.push(`tools.status = ${formatSqlValue(status)}`);
           }

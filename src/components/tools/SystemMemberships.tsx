@@ -138,7 +138,7 @@ export function SystemMemberships({ toolId, toolName, isSystem }: { toolId: stri
   const { systems, assets } = useMemo(() => {
     const tools = queryClient.getQueryData<{ id: string; name: string; category?: string; status?: string }[]>(toolsQueryKey()) ?? [];
     const parts = queryClient.getQueryData<{ id: string; name: string }[]>(['parts']) ?? [];
-    const live = tools.filter((t) => t.status !== 'removed' && t.id !== toolId);
+    const live = tools.filter((t) => t.status !== 'removed' && t.status !== 'concluded' && t.id !== toolId);
     return {
       systems: live.filter((t) => t.category === 'System').map((t): AssetOption => ({ id: t.id, type: 'tool', name: t.name })),
       assets: [
