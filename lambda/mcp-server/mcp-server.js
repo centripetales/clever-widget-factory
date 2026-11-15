@@ -1001,7 +1001,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       // lambda/financial-records).
       const columns = `
         fr.id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
-        fr.vendor_organization_id::text AS vendor_organization_id,
+        fr.vendor_organization_id::text AS vendor_organization_id, fr.action_id::text AS action_id,
         (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
         d.id AS description_state_id, d.state_text AS description,
         (SELECT om.full_name FROM organization_members om
@@ -1063,6 +1063,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             direction: amount < 0 ? 'in' : 'out',
             amount_php: Math.abs(amount),
             payment_method: r.payment_method,
+            ...(r.action_id && { action_id: r.action_id }),
             ...(r.vendor_organization_id && { vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name } }),
             description: r.description,
             observation_id: r.description_state_id,
@@ -1131,7 +1132,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   });
   const findFinancialRecord = (id) => withDbClient(async (client) => (await client.query(
     `SELECT fr.id::text AS id, fr.organization_id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
-       fr.vendor_organization_id::text AS vendor_organization_id,
+       fr.vendor_organization_id::text AS vendor_organization_id, fr.action_id::text AS action_id,
+       (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
        (SELECT ds.state_text FROM state_links sl JOIN states ds ON ds.id = sl.state_id
          WHERE sl.entity_id = fr.id AND sl.entity_type = 'financial_record'
          ORDER BY ds.created_at, ds.id LIMIT 1) AS description
@@ -1248,13 +1250,20 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     }
   );
 
-  const TRANSACTION_ACTION = (r, a, items = []) => ({
-    financial_record_id: r.id,
-    action_id: a.action_id,
-    action_link: `https://stargazer-farm.com/actions/${a.action_id}`,
-    vendor: { organization_id: a.other_org.id, name: a.other_org.name },
-    items: items.map(formatItem),
-  });
+  // `a` is the reward flow's summary (action and other organization), present once
+  // rewards have been started; the action itself is the record's, from the start.
+  const TRANSACTION_ACTION = (r, a, items = []) => {
+    const vendor = a?.other_org ?? (r.vendor_organization_id && { id: r.vendor_organization_id, name: r.vendor_name });
+    const actionId = a?.action_id ?? r.action_id;
+    return {
+      financial_record_id: r.id,
+      action_id: actionId,
+      action_link: `https://stargazer-farm.com/actions/${actionId}`,
+      vendor: vendor ? { organization_id: vendor.id, name: vendor.name } : null,
+      rewards_started: !!a,
+      items: items.map(formatItem),
+    };
+  };
   // The expense's line items with the part each was matched to.
   const findRecordItems = (recordId) => withDbClient(async (client) => (await client.query(
     `SELECT i.id::text AS id, i.financial_record_id::text AS financial_record_id, i.item_text, i.quantity, i.unit, i.amount, i.unit_price,
@@ -1269,11 +1278,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Get the action behind an expense',
       description:
-        'An expense is an action with inputs (money, stock, hours) and outputs (the new state): its action, if it has one, ' +
-        'with the organization it was paid to and the expense\'s line items with the vendor part each was matched to ' +
-        '(set_financial_record_items). Observations linked to the action (add_observation) are its next states, ' +
-        'e.g. photos and readings of what arrived; link each to the action and to the vendor parts below. An expense has an action only when one was made for it ' +
-        '(create_transaction_action, or the app\'s Rewards section). Find the financial_record_id with search_financial_records.',
+        'An expense is an action with inputs (money, stock, hours) and outputs (the new state). Every expense has its ' +
+        'action, made with it: this gives its id, the organization it was paid to and the expense\'s line items with ' +
+        'the vendor part each was matched to (set_financial_record_items), and whether its rewards have been started ' +
+        '(create_transaction_action, or the app\'s Rewards section; the action exists either way). Observations linked ' +
+        'to the action (add_observation) are its next states, e.g. photos and readings of what arrived; link each to ' +
+        'the action and to the vendor parts below. The action is also the action of an experience about the ' +
+        'purchase (create_experience). Find the financial_record_id with search_financial_records.',
       inputSchema: { financial_record_id: z.string() },
     },
     async ({ financial_record_id }) => {
@@ -1282,9 +1293,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       try {
         const record = await findFinancialRecord(financial_record_id);
         if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
-        const action = await getTransactionAction({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
-        if (!action) return { content: [{ type: 'text', text: 'This expense has no action yet. create_transaction_action makes one.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action, await findRecordItems(record.id)), null, 2) }] };
+        const started = await getTransactionAction({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
+        if (!started && !record.action_id) return { content: [{ type: 'text', text: 'This expense has no action (it predates them). create_transaction_action makes one.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, started, await findRecordItems(record.id)), null, 2) }] };
       } catch (err) {
         console.log('get_transaction_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not get the expense's action: ${err.message}` }], isError: true };
@@ -1295,14 +1306,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   server.registerTool(
     'create_transaction_action',
     {
-      title: 'Make the action behind an expense',
+      title: 'Start the rewards for an expense',
       description:
-        'Make an expense an action, so what it bought can be followed: its next states (photos and readings of what ' +
-        'arrived) and, if a person puts it forward, an experience. The action is dated the expense\'s date, assigned ' +
-        'to whoever recorded the expense (left unassigned for one with no recorder) and names the vendor, so the ' +
-        'expense needs its vendor first (update_financial_record vendor_organization_id). It starts the app\'s ' +
-        'rewards build for the action in the background (an AI run), so make one only when asked or when the ' +
-        'purchase is worth following. Making one that exists returns it. Say what it will do and only call this ' +
+        'Start the Positive Sum rewards for an expense\'s action (what each side gained, and the options they ' +
+        'had otherwise), as the app\'s Rewards section does. Every expense already has its action (get_transaction_action), ' +
+        'so this is not needed to follow what arrived or to write up an experience. The rewards name the vendor, so ' +
+        'the expense needs its vendor first (update_financial_record vendor_organization_id). It starts the rewards ' +
+        'build in the background (an AI run), so call it only when asked or when the purchase is worth ' +
+        'weighing that way. Calling it again returns the same action. Say what it will do and only call this ' +
         'once the person says yes.',
       inputSchema: { financial_record_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -2887,7 +2898,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'and search_actions, and look at their photos with get_observation_photos to pick the ones that show ' +
         'the change; an observation that doesn\'t exist yet can be recorded first with add_observation. It can be ' +
         'on a tool or part, or on nothing in particular (e.g. a spot marked by a stake that isn\'t an asset). ' +
-        'Any leg may be empty.\n\n' +
+        'Any leg may be empty. For a purchase, the expense\'s action (get_transaction_action) is the action, and ' +
+        'the observations of what arrived are final states.\n\n' +
         'From an action with an existing state, give from_action_id. From an asset\'s observations, when the work ' +
         'was only recorded in observations (e.g. maintenance, payments): find the observations with search_claims ' +
         '(asset_id), pick the one that reports the work and create its action with create_action (title, asset_id, ' +

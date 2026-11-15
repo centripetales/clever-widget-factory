@@ -431,7 +431,7 @@ describe('the action behind an expense', () => {
     assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.deepStrictEqual(JSON.parse(event.body), { other_org_id: 'org-prince' });
     assert.deepStrictEqual(JSON.parse(result.content[0].text), {
-      financial_record_id: 'fr-1', action_id: 'act-1', action_link: 'https://stargazer-farm.com/actions/act-1', vendor: { organization_id: 'org-prince', name: 'Prince' }, items: [],
+      financial_record_id: 'fr-1', action_id: 'act-1', action_link: 'https://stargazer-farm.com/actions/act-1', vendor: { organization_id: 'org-prince', name: 'Prince' }, rewards_started: true, items: [],
     });
   });
 
@@ -448,6 +448,15 @@ describe('the action behind an expense', () => {
     assert.strictEqual(invocations.length, 0);
   });
 
+  test('get_transaction_action gives the record\'s own action before rewards are started', async () => {
+    rows = (sql) => sql.includes('FROM financial_record_items') ? [] : [{ id: 'none', organization_id: 'org-a', action_id: 'act-own', vendor_organization_id: 'org-prince', vendor_name: 'Prince' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const found = JSON.parse((await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'none' } })).content[0].text);
+    assert.strictEqual(found.action_id, 'act-own');
+    assert.strictEqual(found.rewards_started, false);
+    assert.deepStrictEqual(found.vendor, { organization_id: 'org-prince', name: 'Prince' });
+  });
+
   test('get_transaction_action reads it, or says there is none', async () => {
     rows = [{ id: 'fr-1', organization_id: 'org-a' }];
     const client = await connect(['org-a'], 'Stefan Hamilton');
@@ -460,7 +469,7 @@ describe('the action behind an expense', () => {
     assert.strictEqual(invocations[0].event.httpMethod, 'GET');
     rows = [{ id: 'none', organization_id: 'org-a' }];
     const none = await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'none' } });
-    assert.match(none.content[0].text, /no action yet/);
+    assert.match(none.content[0].text, /has no action/);
   });
 });
 
