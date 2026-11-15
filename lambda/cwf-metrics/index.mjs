@@ -481,6 +481,49 @@ export const handler = async (event) => {
       return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ value: updated.rows[0].value }) };
     }
 
+    // POST /api/metrics - Create a metric of an organization, action, part or
+    // state (a tool's metrics go through /api/tools/{id}/metrics). The metric
+    // belongs to the caller's org; the entity must be one it can use.
+    if (httpMethod === 'POST' && path.endsWith('/api/metrics')) {
+      const body = JSON.parse(event.body || '{}');
+      const { entity_type, entity_id, name, unit, benchmark_value, details } = body;
+      const entityChecks = {
+        organization: 'SELECT 1 FROM organizations WHERE id::text = $1 AND is_active',
+        action: 'SELECT 1 FROM actions WHERE id::text = $1 AND organization_id = $2',
+        part: 'SELECT 1 FROM parts WHERE id::text = $1 AND (organization_id = $2 OR created_by_organization_id = $2)',
+        state: 'SELECT 1 FROM states WHERE id::text = $1 AND organization_id = $2',
+      };
+      if (!entityChecks[entity_type]) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: `entity_type must be one of: ${Object.keys(entityChecks).join(', ')}` }) };
+      }
+      if (!name || !name.trim()) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'Name is required' }) };
+      }
+
+      let typeFields;
+      let benchmark;
+      try {
+        typeFields = parseValueTypeFields(body);
+        benchmark = toNumberOrNull(benchmark_value, 'benchmark_value');
+      } catch (err) {
+        return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: err.message }) };
+      }
+
+      const entity = await executeQuery(entityChecks[entity_type], entity_type === 'organization' ? [String(entity_id)] : [String(entity_id), organizationId]);
+      if (entity.rows.length === 0) {
+        return { statusCode: 404, headers: corsHeaders, body: JSON.stringify({ error: `No ${entity_type} ${entity_id} this organization can use` }) };
+      }
+
+      const result = await executeQuery(
+        `INSERT INTO metrics (entity_type, entity_id, name, unit, benchmark_value, details, value_type, min_value, max_value, organization_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING metric_id, entity_type, entity_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+        [entity_type, entity_id, name.trim(), unit || null, benchmark, details || null, typeFields.value_type, typeFields.min_value, typeFields.max_value, organizationId]
+      );
+
+      return { statusCode: 201, headers: corsHeaders, body: JSON.stringify({ metric: result.rows[0] }) };
+    }
+
     const toolId = pathParams.id; // API Gateway uses {id} not {tool_id}
     const metricId = pathParams.metric_id || pathParams.metricId;
 

@@ -739,13 +739,33 @@ exports.handler = async (event) => {
         };
       }
       
+      // A vendor's part: one in the vendor's organization, which has no people
+      // to keep it, recorded as added by the caller's org (which can see it)
+      let partOrganizationId = organizationId;
+      if (body.vendor_organization_id) {
+        const vendor = await queryJSON(
+          `SELECT 1 FROM organizations o
+            WHERE o.id::text = $1 AND o.is_active
+              AND NOT EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.is_active)`,
+          [String(body.vendor_organization_id)]
+        );
+        if (vendor.length === 0) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: 'vendor_organization_id must be an active organization with no members' })
+          };
+        }
+        partOrganizationId = body.vendor_organization_id;
+      }
+
       const partId = randomUUID();
       const sql = `
         INSERT INTO parts (
           id, name, description, category, current_quantity, minimum_quantity,
           unit, parent_structure_id, storage_location, legacy_storage_vicinity,
           accountable_person_id, image_url, policy, organization_id, sellable, cost_per_unit,
-          created_at, updated_at
+          created_by_organization_id, created_at, updated_at
         ) VALUES (
           '${partId}',
           ${formatSqlValue(body.name)},
@@ -760,9 +780,10 @@ exports.handler = async (event) => {
           ${formatSqlValue(body.accountable_person_id)},
           ${formatSqlValue(body.image_url)},
           ${formatSqlValue(body.policy)},
-          ${formatSqlValue(organizationId)},
+          ${formatSqlValue(partOrganizationId)},
           ${body.sellable !== undefined ? body.sellable : false},
           ${body.cost_per_unit !== undefined ? body.cost_per_unit : 'NULL'},
+          ${body.vendor_organization_id ? formatSqlValue(organizationId) : 'NULL'},
           NOW(),
           NOW()
         ) RETURNING *
@@ -782,7 +803,7 @@ exports.handler = async (event) => {
               entity_type: 'part',
               entity_id: partId,
               embedding_source: embeddingSource,
-              organization_id: organizationId
+              organization_id: partOrganizationId
             })
           }));
           console.log('Queued embedding generation for part', partId);

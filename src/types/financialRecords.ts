@@ -1,5 +1,16 @@
 import type { ObservationPhoto } from './observations';
 
+export interface FinancialRecordItem {
+  id: string;
+  item_text: string;
+  quantity: string | null;
+  unit: string | null;
+  amount: string;
+  unit_price: string | null;
+  part_id: string | null;
+  part_name: string | null;
+}
+
 export interface FinancialRecord {
   id: string;
   organization_id: string;
@@ -10,6 +21,8 @@ export interface FinancialRecord {
   payment_method: 'Cash' | 'SCash' | 'GCash' | 'Wise';
   description?: string;
   photos?: ObservationPhoto[];
+  items?: FinancialRecordItem[];
+  vendor?: { id: string; name: string } | null;
   state_id?: string;
   balance_after?: number | null;
   created_at: string;

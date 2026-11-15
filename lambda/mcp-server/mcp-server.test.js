@@ -47,11 +47,15 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-actions-lambda' && event.path.endsWith('/action')) {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: event.httpMethod === 'POST' ? 201 : 200, body: JSON.stringify({ data: event.pathParameters?.id === 'none' || event.path.includes('/none/') ? null : { action_id: 'act-1', other_org: { id: body.other_org_id || 'org-prince', name: 'Prince' } } }) })) };
+  }
   if (command.input.FunctionName === 'cwf-financial-records-lambda' && event.path.endsWith('/items')) {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ items: body.items.map((item, i) => ({
       id: item.id || `item-${i}`, financial_record_id: event.pathParameters.id, item_text: item.item_text,
       quantity: item.quantity ?? null, unit: item.unit ?? null, amount: String(item.amount),
       unit_price: item.unit_price ?? (item.quantity ? item.amount / item.quantity : null),
+      part_id: item.part_id ?? null, part_name: item.part_id ? 'Fine sand' : null,
     })) }) })) };
   }
   if (command.input.FunctionName === 'cwf-financial-records-lambda') {
@@ -412,6 +416,50 @@ describe('update_financial_record and delete_financial_record', () => {
   });
 });
 
+describe('the action behind an expense', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('create_transaction_action makes the action in the record\'s org, naming its vendor', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-b', vendor_organization_id: 'org-prince' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_transaction_action', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-actions-lambda');
+    assert.strictEqual(event.httpMethod, 'POST');
+    assert.strictEqual(event.path, '/api/financial-records/fr-1/action');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { other_org_id: 'org-prince' });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), {
+      financial_record_id: 'fr-1', action_id: 'act-1', action_link: 'https://stargazer-farm.com/actions/act-1', vendor: { organization_id: 'org-prince', name: 'Prince' },
+    });
+  });
+
+  test('an expense with no vendor, one outside the caller\'s orgs, and a read-only connection make nothing', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    rows = [{ id: 'fr-1', organization_id: 'org-a', vendor_organization_id: null }];
+    const noVendor = await client.callTool({ name: 'create_transaction_action', arguments: { financial_record_id: 'fr-1' } });
+    assert.strictEqual(noVendor.isError, true);
+    assert.match(noVendor.content[0].text, /no vendor/);
+    rows = [];
+    assert.strictEqual((await client.callTool({ name: 'create_transaction_action', arguments: { financial_record_id: 'fr-x' } })).isError, true);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_transaction_action', arguments: { financial_record_id: 'fr-1' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('get_transaction_action reads it, or says there is none', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const found = JSON.parse((await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'fr-1' } })).content[0].text);
+    assert.strictEqual(found.action_id, 'act-1');
+    assert.strictEqual(invocations[0].event.httpMethod, 'GET');
+    rows = [{ id: 'none', organization_id: 'org-a' }];
+    const none = await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'none' } });
+    assert.match(none.content[0].text, /no action yet/);
+  });
+});
+
 describe('set_financial_record_items and search_prices', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
 
@@ -696,6 +744,100 @@ describe('metrics', () => {
     assert.strictEqual(invocations.length, 0);
   });
 
+  describe('on any entity', () => {
+    const wait = { metric_id: 'metric-wait', entity_type: 'organization', entity_id: 'org-wilcon', tool_id: null, name: 'Wait at checkout', unit: 'hours', value_type: 'number', min_value: null, max_value: null };
+    const wilcon = { id: 'org-wilcon', name: 'Wilcon', organization_id: 'org-wilcon' };
+    const answers = (extra = {}) => (sql) =>
+      sql.includes('SELECT role') ? [{ role: extra.role ?? 'contributor' }]
+        : sql.includes('FROM organizations') ? [wilcon]
+        : sql.includes('FROM parts') ? (extra.part ? [extra.part] : [])
+        : sql.includes('metric_id::text = ANY') ? [{ id: 'metric-fill' }]
+        : sql.includes('FROM metrics') ? (extra.metrics ?? [])
+        : [];
+
+    test('create_metric adds a metric of an organization through the metrics service', async () => {
+      rows = answers();
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      const result = await client.callTool({ name: 'create_metric', arguments: { entity_type: 'organization', entity_id: 'org-wilcon', name: 'Wait at checkout', unit: 'hours' } });
+      assert.strictEqual(result.isError, undefined);
+      const [{ functionName, event }] = invocations;
+      assert.strictEqual(functionName, 'cwf-metrics-lambda');
+      assert.strictEqual(event.path, '/api/metrics');
+      assert.deepStrictEqual(JSON.parse(event.body), { entity_type: 'organization', entity_id: 'org-wilcon', name: 'Wait at checkout', unit: 'hours', value_type: 'number' });
+      assert.deepStrictEqual(JSON.parse(result.content[0].text).entity, { type: 'organization', id: 'org-wilcon', name: 'Wilcon' });
+    });
+
+    test('create_metric is refused with nothing created: both a tool and an entity, neither, one already there, a part not usable, a viewer', async () => {
+      const attempts = [
+        [answers(), { asset_id: 'tool-1', entity_type: 'organization', entity_id: 'org-wilcon', name: 'x' }],
+        [answers(), { name: 'x' }],
+        [answers({ metrics: [{ ...wait }] }), { entity_type: 'organization', entity_id: 'org-wilcon', name: 'wait at checkout' }],
+        [answers(), { entity_type: 'part', entity_id: 'part-x', name: 'x' }],
+        [answers({ role: 'viewer' }), { entity_type: 'organization', entity_id: 'org-wilcon', name: 'x' }],
+      ];
+      for (const [r, args] of attempts) {
+        rows = r;
+        const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+        assert.strictEqual((await client.callTool({ name: 'create_metric', arguments: args })).isError, true, JSON.stringify(args));
+      }
+      assert.strictEqual(invocations.length, 0);
+    });
+
+    test('add_observation records a reading of the metric of a linked organization', async () => {
+      rows = (sql) => sql.includes('FROM metrics') ? [wait] : [{ entity_type: 'organization', entity_id: 'org-wilcon', name: 'Wilcon' }];
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      const result = await client.callTool({ name: 'add_observation', arguments: {
+        text: 'Waited in line at 1pm.', links: [{ entity_type: 'organization', entity_id: 'org-wilcon' }], metrics: [{ metric_id: 'metric-wait', value: 0.5 }],
+      } });
+      assert.strictEqual(result.isError, undefined);
+      const [observation, snapshot] = invocations;
+      assert.deepStrictEqual(JSON.parse(observation.event.body).links, [{ entity_type: 'organization', entity_id: 'org-wilcon' }]);
+      assert.deepStrictEqual(JSON.parse(snapshot.event.body), { metric_id: 'metric-wait', value: '0.5' });
+    });
+
+    const fillModel = {
+      entity_type: 'part', entity_id: 'part-1', name: 'Sand delivered', description: 'A truck delivers about three quarters of what is claimed',
+      anchor: '2026-11-10', time_step_days: 1, horizon_days: 30,
+      variables: { fill: { name: 'Fill', unit: '%', distribution: 'fixed', params: { value: 75 }, metric_id: 'metric-fill' } },
+      rationale: 'The one delivery so far', evidence: { summary: 'One delivery, estimated from photos' },
+    };
+
+    test('set_model saves a model about a vendor part, in the caller\'s org, and links it to the part', async () => {
+      rows = answers({ part: { id: 'part-1', name: 'Screened sand', organization_id: 'org-prince' } });
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      const result = await client.callTool({ name: 'set_model', arguments: fillModel });
+      assert.strictEqual(result.isError, undefined, result.content[0].text);
+      const [create, link] = invocations;
+      assert.strictEqual(create.event.headers['X-Organization-Id'], 'org-a');
+      assert.strictEqual(link.event.path, '/api/state-space-models/model-1/associations');
+      assert.deepStrictEqual(JSON.parse(link.event.body), { entity_type: 'part', entity_id: 'part-1' });
+      assert.deepStrictEqual(JSON.parse(result.content[0].text).entity, { type: 'part', id: 'part-1', name: 'Screened sand' });
+    });
+
+    test('set_model is refused with nothing saved: a part not usable, a viewer, a tool and an entity together', async () => {
+      const attempts = [
+        [answers(), fillModel],
+        [answers({ role: 'viewer', part: { id: 'part-1', name: 'Sand', organization_id: 'org-prince' } }), fillModel],
+        [answers(), { ...fillModel, asset_id: 'tool-1' }],
+      ];
+      for (const [r, args] of attempts) {
+        rows = r;
+        const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+        assert.strictEqual((await client.callTool({ name: 'set_model', arguments: args })).isError, true);
+      }
+      assert.strictEqual(invocations.length, 0);
+    });
+
+    test('get_model reads the models of an organization', async () => {
+      rows = answers();
+      const client = await connect(['org-a'], 'Stefan Hamilton');
+      const result = await client.callTool({ name: 'get_model', arguments: { entity_type: 'organization', entity_id: 'org-wilcon' } });
+      assert.strictEqual(result.isError, undefined);
+      assert.match(result.content[0].text, /Wilcon has no expectation model yet/);
+      assert.ok(queries.some((q) => q.sql.includes('state_space_model_associations') && q.params.includes('organization')));
+    });
+  });
+
   test('update_observation updates a reading already there, adds a new one, after the edit check', async () => {
     const depth = { ...coverage, metric_id: 'metric-2', name: 'Depth' };
     rows = (sql) => sql.includes('FROM metric_snapshots') ? [{ snapshot_id: 'snap-1', metric_id: 'metric-1' }]
@@ -929,6 +1071,66 @@ describe('create_organization', () => {
     const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
     assert.strictEqual((await reader.callTool({ name: 'create_organization', arguments: { name: 'Prince' } })).isError, true);
     assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('a vendor\'s parts', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const role = (r) => (sql) => (sql.includes('SELECT role') && r ? [{ role: r }] : []);
+
+  test('create_asset adds a sellable part to the vendor organization, with no stock fields', async () => {
+    rows = role('contributor');
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_asset', arguments: {
+      type: 'part', name: 'Screened sand', unit: 'm3', cost_per_unit: 1800, description: 'Pit sand, per cubic meter', vendor_organization_id: 'org-prince',
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-core-lambda');
+    assert.strictEqual(event.path, '/api/parts');
+    assert.strictEqual(event.headers['X-Organization-Id'], undefined);
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      name: 'Screened sand', unit: 'm3', cost_per_unit: 1800, description: 'Pit sand, per cubic meter', sellable: true, vendor_organization_id: 'org-prince',
+    });
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('SELECT role')).params, ['cognito-1', 'org-a']);
+    assert.strictEqual(JSON.parse(result.content[0].text).vendor_organization_id, 'org-prince');
+  });
+
+  test('refused, with nothing created: a tool, stock fields, a viewer', async () => {
+    const attempts = [
+      [role('contributor'), { type: 'tool', name: 'Drill', vendor_organization_id: 'org-prince' }],
+      [role('contributor'), { type: 'part', name: 'Sand', current_quantity: 3, vendor_organization_id: 'org-prince' }],
+      [role('contributor'), { type: 'part', name: 'Sand', area_id: 'shed-1', vendor_organization_id: 'org-prince' }],
+      [role('viewer'), { type: 'part', name: 'Sand', vendor_organization_id: 'org-prince' }],
+    ];
+    for (const [r, args] of attempts) {
+      rows = r;
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      assert.strictEqual((await client.callTool({ name: 'create_asset', arguments: args })).isError, true, JSON.stringify(args));
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('search_vendor_parts lists the vendor parts the caller\'s orgs added, with the listed price', async () => {
+    rows = [{ id: 'part-1', name: 'Screened sand', description: null, unit: 'm3', cost_per_unit: '1800.00', vendor_organization_id: 'org-prince', vendor_name: 'Prince' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton');
+    const result = await client.callTool({ name: 'search_vendor_parts', arguments: { vendor_organization_id: 'org-prince' } });
+    assert.deepStrictEqual(queries[0].params.slice(0, 3), [['org-a', 'org-b'], 'org-prince', null]);
+    assert.match(queries[0].sql, /created_by_organization_id = ANY/);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), [{
+      part_id: 'part-1', name: 'Screened sand', unit: 'm3', listed_price_php: 1800, vendor: { organization_id: 'org-prince', name: 'Prince' },
+    }]);
+    assert.strictEqual((await client.callTool({ name: 'search_vendor_parts', arguments: {} })).isError, true);
+  });
+
+  test('items carry the part they were matched to, and search_prices shows it', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'set_financial_record_items', arguments: {
+      financial_record_id: 'fr-1', items: [{ item_text: 'buhangin', quantity: 2, unit: 'cu.m', amount_php: 3600, part_id: 'part-1' }],
+    } });
+    assert.strictEqual(JSON.parse(invocations[0].event.body).items[0].part_id, 'part-1');
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).items[0].part, { part_id: 'part-1', name: 'Fine sand' });
   });
 });
 
@@ -1540,7 +1742,7 @@ describe('expectation models', () => {
   });
 
   test('get_metric_history lists readings oldest first and the tool\'s actions, within the caller orgs', async () => {
-    rows = (sql) => sql.includes('FROM metrics m') ? [{ ...coverageMetric, tool_name: 'Azolla Pond', value_type: 'number', min_value: null }]
+    rows = (sql) => sql.includes('FROM metrics m') ? [{ ...coverageMetric, entity_type: 'tool', tool_name: 'Azolla Pond', value_type: 'number', min_value: null }]
       : sql.includes('FROM metric_snapshots') ? [{ observation_id: 'o1', captured_at: '2026-09-02T00:00:00Z', value: '20', captured_by: 'Lester', claim: 'Pond a fifth covered' }]
       : sql.includes('FROM actions') ? [{ action_id: 'a1', title: 'Restock pond', status: 'completed', created_at: '2026-09-01T00:00:00Z', completed_at: null }]
       : [];

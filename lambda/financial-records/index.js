@@ -422,7 +422,18 @@ async function getRecord(id, authContext) {
     [id, organizationId]
   );
 
-  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows });
+  // Line items (with the vendor part each was matched to) and the vendor
+  const itemsResult = await pool.query(
+    'SELECT i.id, i.item_text, i.quantity, i.unit, i.amount, i.unit_price, i.part_id, p.name AS part_name' +
+    ' FROM financial_record_items i LEFT JOIN parts p ON p.id = i.part_id' +
+    ' WHERE i.financial_record_id = $1 ORDER BY i.created_at, i.id',
+    [id]
+  );
+  const vendorResult = record.vendor_organization_id
+    ? await pool.query('SELECT id, name FROM organizations WHERE id = $1', [record.vendor_organization_id])
+    : { rows: [] };
+
+  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, items: itemsResult.rows, vendor: vendorResult.rows[0] || null });
 }
 
 async function updateRecord(event, id, authContext) {
@@ -586,19 +597,38 @@ async function updateRecord(event, id, authContext) {
       );
     }
 
-    // Manage state_photos if photos provided
+    // Manage state_photos if photos provided: photos are matched by URL, so
+    // those kept stay as they are (and keep what is attached to them), changed
+    // descriptions or order are updated, new ones added and removed ones deleted
     if (hasPhotosChange && stateId) {
-      // Delete existing photos for this state
-      await client.query('DELETE FROM state_photos WHERE state_id = $1', [stateId]);
+      const newPhotos = Array.isArray(body.photos) ? body.photos : [];
+      const existingPhotos = (await client.query(
+        'SELECT id, photo_url, photo_description, photo_order FROM state_photos WHERE state_id = $1',
+        [stateId]
+      )).rows;
+      const byUrl = new Map(existingPhotos.map((row) => [row.photo_url, row]));
+      const keepUrls = new Set(newPhotos.map((photo) => photo.photo_url));
 
-      // Insert new photos
-      const newPhotos = body.photos || [];
-      if (Array.isArray(newPhotos)) {
-        for (let i = 0; i < newPhotos.length; i++) {
-          const photo = newPhotos[i];
+      for (const row of existingPhotos) {
+        if (!keepUrls.has(row.photo_url)) {
+          await client.query('DELETE FROM state_photos WHERE id = $1', [row.id]);
+        }
+      }
+
+      for (let i = 0; i < newPhotos.length; i++) {
+        const photo = newPhotos[i];
+        const description = photo.photo_description || null;
+        const order = photo.photo_order || i;
+        const row = byUrl.get(photo.photo_url);
+        if (!row) {
           await client.query(
             'INSERT INTO state_photos (state_id, photo_url, photo_description, photo_order) VALUES ($1, $2, $3, $4)',
-            [stateId, photo.photo_url, photo.photo_description || null, photo.photo_order || i]
+            [stateId, photo.photo_url, description, order]
+          );
+        } else if ((row.photo_description || null) !== description || row.photo_order !== order) {
+          await client.query(
+            'UPDATE state_photos SET photo_description = $2, photo_order = $3 WHERE id = $1',
+            [row.id, description, order]
           );
         }
       }
@@ -682,7 +712,8 @@ async function updateRecord(event, id, authContext) {
   }
 }
 
-const ITEM_COLUMNS = 'id, financial_record_id, item_text, quantity, unit, amount, unit_price';
+const ITEM_COLUMNS = 'id, financial_record_id, item_text, quantity, unit, amount, unit_price, part_id';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function getItems(recordId, { organizationId }) {
   const record = await pool.query('SELECT id FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId]);
@@ -702,13 +733,16 @@ function itemProblem(item) {
   if (!isNumber(item.amount)) return `amount is required for "${item.item_text}"`;
   if (item.quantity != null && !(isNumber(item.quantity) && item.quantity > 0)) return `quantity must be above 0 for "${item.item_text}"`;
   if (item.unit_price != null && !(isNumber(item.unit_price) && item.unit_price >= 0)) return `unit_price must be 0 or more for "${item.item_text}"`;
+  if (item.part_id != null && !(typeof item.part_id === 'string' && UUID.test(item.part_id))) return `part_id must be a part id for "${item.item_text}"`;
   return null;
 }
 
 // The items given are the record's items: those with an id are updated (only
 // when something changed), those without are added, and the record's other
 // items are removed. Unit price is worked out from amount and quantity when
-// not given.
+// not given. An item's part is the vendor's part it was matched to: one the
+// org can see (its own, or one it added to a vendor's organization), and in
+// the record's vendor organization when the record has one.
 async function saveItems(event, recordId, { organizationId, cognitoUserId, permissions }) {
   let body;
   try {
@@ -722,7 +756,7 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
   if (problem) return error(problem, 400);
 
   const recordResult = await pool.query(
-    'SELECT created_by FROM financial_records WHERE id = $1 AND organization_id = $2',
+    'SELECT created_by, vendor_organization_id FROM financial_records WHERE id = $1 AND organization_id = $2',
     [recordId, organizationId]
   );
   if (recordResult.rows.length === 0) return error('Record not found', 404);
@@ -732,6 +766,20 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
   const isOwner = createdBy && createdBy.toString() === cognitoUserId.toString();
   if (!isOwner && !hasPermission({ permissions }, 'data:write:all') && !hasPermission({ permissions }, 'data:write:org')) {
     return error('Not authorized to edit this record', 403);
+  }
+
+  const partIds = [...new Set(items.map((item) => item.part_id).filter(Boolean))];
+  if (partIds.length > 0) {
+    const vendorId = recordResult.rows[0].vendor_organization_id;
+    const parts = (await pool.query(
+      'SELECT id, organization_id FROM parts WHERE id = ANY($1::uuid[]) AND (organization_id = $2 OR created_by_organization_id = $2)',
+      [partIds, organizationId]
+    )).rows;
+    const byId = new Map(parts.map((part) => [part.id, part]));
+    const missing = partIds.find((id) => !byId.has(id));
+    if (missing) return error(`Part ${missing} is not a part this organization can use`, 400);
+    const elsewhere = parts.find((part) => vendorId && part.organization_id !== vendorId && part.organization_id !== organizationId);
+    if (elsewhere) return error(`Part ${elsewhere.id} is not a part of this record's vendor`, 400);
   }
 
   const client = await pool.connect();
@@ -758,22 +806,23 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
       const quantity = item.quantity ?? null;
       const unitPrice = item.unit_price ?? (quantity ? Math.round((item.amount / quantity) * 1e4) / 1e4 : null);
       const unit = item.unit ?? null;
+      const partId = item.part_id ?? null;
       const text = item.item_text.trim();
       if (item.id) {
         const row = byId.get(item.id);
-        const same = row.item_text === text && row.unit === unit && Number(row.amount) === item.amount &&
+        const same = row.item_text === text && row.unit === unit && row.part_id === partId && Number(row.amount) === item.amount &&
           (row.quantity === null ? quantity === null : Number(row.quantity) === quantity) &&
           (row.unit_price === null ? unitPrice === null : Number(row.unit_price) === unitPrice);
         if (same) continue;
         await client.query(
-          'UPDATE financial_record_items SET item_text = $2, quantity = $3, unit = $4, amount = $5, unit_price = $6, updated_at = NOW() WHERE id = $1',
-          [item.id, text, quantity, unit, item.amount, unitPrice]
+          'UPDATE financial_record_items SET item_text = $2, quantity = $3, unit = $4, amount = $5, unit_price = $6, part_id = $7, updated_at = NOW() WHERE id = $1',
+          [item.id, text, quantity, unit, item.amount, unitPrice, partId]
         );
         if (row.item_text !== text) queued.push({ id: item.id, text });
       } else {
         const inserted = await client.query(
-          'INSERT INTO financial_record_items (financial_record_id, organization_id, item_text, quantity, unit, amount, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-          [recordId, organizationId, text, quantity, unit, item.amount, unitPrice]
+          'INSERT INTO financial_record_items (financial_record_id, organization_id, item_text, quantity, unit, amount, unit_price, part_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+          [recordId, organizationId, text, quantity, unit, item.amount, unitPrice, partId]
         );
         queued.push({ id: inserted.rows[0].id, text });
       }

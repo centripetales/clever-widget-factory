@@ -87,6 +87,7 @@ export default function FinancialRecordDetail() {
           id: `existing-${i}`,
           photo_url: p.photo_url,
           photo_type: 'receipt',
+          photo_description: p.photo_description || '',
           photo_order: p.photo_order || i,
           isExisting: true,
           previewUrl: getImageUrl(p.photo_url) || p.photo_url,
@@ -117,10 +118,11 @@ export default function FinancialRecordDetail() {
       const photosToUpload = editPhotos.filter((p) => p.file && !p.photo_url);
       const existingPhotos = editPhotos.filter((p) => p.photo_url && !p.file);
 
-      let uploadedPhotos: { photo_url: string; photo_type: string; photo_order: number }[] =
+      let uploadedPhotos: { photo_url: string; photo_type: string; photo_description: string; photo_order: number }[] =
         existingPhotos.map((p) => ({
           photo_url: p.photo_url!,
           photo_type: p.photo_type || 'receipt',
+          photo_description: p.photo_description || '',
           photo_order: p.photo_order,
         }));
 
@@ -132,6 +134,7 @@ export default function FinancialRecordDetail() {
         const newUploaded = resultsArray.map((result, index) => ({
           photo_url: result.url,
           photo_type: photosToUpload[index].photo_type || 'receipt',
+          photo_description: photosToUpload[index].photo_description || '',
           photo_order: existingPhotos.length + index,
         }));
 
@@ -150,7 +153,7 @@ export default function FinancialRecordDetail() {
           payment_method: editPaymentMethod,
           photos: uploadedPhotos.length > 0 ? uploadedPhotos.map((p, i) => ({
             photo_url: p.photo_url,
-            photo_description: undefined,
+            photo_description: p.photo_description,
             photo_order: i,
           })) : undefined,
         },
@@ -333,18 +336,17 @@ export default function FinancialRecordDetail() {
                           />
                         </div>
 
-                        {/* Right part: AI description details */}
+                        {/* Right part: the person's description of the photo */}
                         <div className="flex-1 flex flex-col justify-start min-w-0">
-                          {photo.transcription?.trim() ? (
-                            <div className="p-3 rounded bg-indigo-50/30 dark:bg-indigo-950/15 border border-indigo-100/50 dark:border-indigo-900/20 h-full">
-                              <span className="block font-semibold text-xs text-indigo-900 dark:text-indigo-400 mb-1">AI Description:</span>
+                          {photo.photo_description?.trim() ? (
+                            <div className="p-3 rounded bg-zinc-100/50 dark:bg-zinc-800/20 border border-zinc-200/50 dark:border-zinc-750/30 h-full">
                               <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed font-normal whitespace-pre-wrap">
-                                {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                {photo.photo_description}
                               </p>
                             </div>
                           ) : (
                             <div className="p-3 rounded bg-zinc-100/50 dark:bg-zinc-800/20 border border-zinc-200/50 dark:border-zinc-750/30 h-full flex items-center justify-center">
-                              <p className="text-xs text-muted-foreground italic">AI description not yet available.</p>
+                              <p className="text-xs text-muted-foreground italic">No description.</p>
                             </div>
                           )}
                         </div>
@@ -437,10 +439,40 @@ export default function FinancialRecordDetail() {
                 <p className="text-sm text-muted-foreground">Payment Method</p>
                 <Badge variant="outline">{record.payment_method}</Badge>
               </div>
+              {record.vendor && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Vendor</p>
+                  <p className="font-medium">{record.vendor.name}</p>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Line items, saved through Claude from the receipt */}
+      {!isEditing && record.items && record.items.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Items</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {record.items.map((item) => (
+              <div key={item.id} className="flex items-start justify-between gap-4 text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium">{item.item_text}</p>
+                  <p className="text-muted-foreground">
+                    {item.quantity !== null && `${Number(item.quantity)}${item.unit ? ` ${item.unit}` : ''}`}
+                    {item.unit_price !== null && ` at ₱${Number(item.unit_price).toFixed(2)}`}
+                    {item.part_name && ` · ${item.part_name}`}
+                  </p>
+                </div>
+                <p className="font-medium whitespace-nowrap">₱{Number(item.amount).toFixed(2)}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Rewards — expenses only for now (docs/design/POSITIVE_SUM.md §2.6) */}
       {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} descriptionStateId={record.state_id} />}

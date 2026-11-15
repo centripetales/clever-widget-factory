@@ -7,8 +7,8 @@ import {
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
-  createModel, linkModel, createMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
-  findSimilarOrganizations, createOrganization, saveFinancialRecordItems,
+  createModel, linkModel, createMetric, createEntityMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
+  findSimilarOrganizations, createOrganization, saveFinancialRecordItems, getTransactionAction, createTransactionAction,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -170,7 +170,7 @@ const VISIBLE_ACTION = (orgs) => `(a.organization_id = ANY(${orgs}::uuid[]) OR (
 // What an observation can be linked to through the connector — the same as
 // the observation screen's Link Asset (assets) and linked action.
 const LINK = z.object({
-  entity_type: z.enum(['action', 'tool', 'part', 'existing_state']).describe(
+  entity_type: z.enum(['action', 'tool', 'part', 'organization', 'existing_state']).describe(
     'existing_state: this observation is the action\'s existing state (how things were when it was taken); ' +
     'entity_id is the action'),
   entity_id: z.string(),
@@ -196,17 +196,21 @@ async function findLinkTargets(client, links, orgIds) {
      UNION ALL
      SELECT 'tool', id::text, name FROM tools WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])
      UNION ALL
-     SELECT 'part', id::text, name FROM parts WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+     SELECT 'part', id::text, name FROM parts
+       WHERE id::text = ANY($1::text[]) AND (organization_id = ANY($2::uuid[]) OR created_by_organization_id = ANY($2::uuid[]))
+     UNION ALL
+     SELECT 'organization', id::text, name FROM organizations WHERE id::text = ANY($1::text[]) AND is_active`,
     [links.map((l) => l.entity_id), orgIds]
   )).rows;
 }
 
-// Metric values for an observation of a tool, like the observation screen's
-// Metrics section. Metrics are defined per tool; search_assets lists them.
+// Metric values for an observation of something with metrics (a tool, part,
+// action or organization it is linked to), like the observation screen's
+// Metrics section. search_assets lists a tool's metrics; get_metric_history any metric's readings.
 const METRIC_VALUES = z.array(z.object({
   metric_id: z.string(),
   value: z.union([z.string(), z.number()]).describe('The reading; a number unless the metric is text'),
-})).describe('Metric values, for metrics of a tool the observation is linked to (search_assets lists each tool\'s metrics)');
+})).describe('Metric values, for metrics of something the observation is linked to (search_assets lists a tool\'s metrics)');
 
 // The active metrics of these tools in the caller's orgs.
 async function findToolMetrics(client, toolIds, orgIds) {
@@ -220,19 +224,56 @@ async function findToolMetrics(client, toolIds, orgIds) {
   )).rows;
 }
 
-// One metric and its tool, in the caller's orgs.
+// The active metrics of these entities ({ entity_type, entity_id }) in the caller's orgs.
+async function findEntityMetrics(client, entities, orgIds) {
+  if (entities.length === 0) return [];
+  return (await client.query(
+    `SELECT metric_id::text AS metric_id, entity_type, entity_id::text AS entity_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+     FROM metrics
+     WHERE (entity_type, entity_id::text) IN (SELECT t, i FROM unnest($1::text[], $2::text[]) AS e(t, i))
+       AND organization_id = ANY($3::uuid[]) AND active IS NOT FALSE
+     ORDER BY created_at`,
+    [entities.map((e) => e.entity_type), entities.map((e) => e.entity_id), orgIds]
+  )).rows;
+}
+
+// An entity a metric or model can be about, if the caller's orgs can use it
+// (a vendor's part is usable by the org that added it, any organization by anyone).
+const ENTITY_QUERIES = {
+  tool: 'SELECT id::text AS id, name, organization_id FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])',
+  part: 'SELECT id::text AS id, name, organization_id FROM parts WHERE id::text = $1 AND (organization_id = ANY($2::uuid[]) OR created_by_organization_id = ANY($2::uuid[]))',
+  action: 'SELECT id::text AS id, title AS name, organization_id FROM actions WHERE id::text = $1 AND organization_id = ANY($2::uuid[])',
+  state: "SELECT id::text AS id, left(coalesce(state_text, ''), 60) AS name, organization_id FROM states WHERE id::text = $1 AND organization_id = ANY($2::uuid[])",
+  experience: "SELECT id::text AS id, 'experience of ' || entity_type AS name, organization_id FROM experiences WHERE id::text = $1 AND organization_id = ANY($2::uuid[])",
+  organization: 'SELECT id::text AS id, name, id AS organization_id FROM organizations WHERE id::text = $1 AND is_active AND $2::uuid[] IS NOT NULL',
+};
+async function findEntity(client, entityType, entityId, orgIds) {
+  const row = (await client.query(ENTITY_QUERIES[entityType], [entityId, orgIds])).rows[0];
+  return row && { entity_type: entityType, ...row };
+}
+
+// One metric and what it is about (a tool, part, action, organization or state), in the caller's orgs.
 async function findMetric(client, metricId, orgIds) {
   return (await client.query(
     `SELECT m.metric_id::text AS metric_id, m.name, m.unit, m.value_type, m.min_value, m.max_value, m.benchmark_value, m.details,
-            t.id::text AS tool_id, t.name AS tool_name
-     FROM metrics m JOIN tools t ON t.id = m.tool_id
+            m.entity_type, m.entity_id::text AS entity_id, m.tool_id::text AS tool_id,
+            COALESCE(t.name, p.name, a.title, o.name, left(s.state_text, 60)) AS tool_name
+     FROM metrics m
+     LEFT JOIN tools t ON m.entity_type = 'tool' AND t.id = m.entity_id
+     LEFT JOIN parts p ON m.entity_type = 'part' AND p.id = m.entity_id
+     LEFT JOIN actions a ON m.entity_type = 'action' AND a.id = m.entity_id
+     LEFT JOIN organizations o ON m.entity_type = 'organization' AND o.id = m.entity_id
+     LEFT JOIN states s ON m.entity_type = 'state' AND s.id = m.entity_id
      WHERE m.metric_id::text = $1 AND m.organization_id = ANY($2::uuid[])`,
     [metricId, orgIds]
   )).rows[0];
 }
 
 const describeMetric = (m) => ({
-  metric_id: m.metric_id, name: m.name, tool: m.tool_name, tool_id: m.tool_id,
+  metric_id: m.metric_id, name: m.name,
+  ...(m.entity_type === 'tool'
+    ? { tool: m.tool_name, tool_id: m.tool_id }
+    : { entity: { type: m.entity_type, id: m.entity_id, name: m.tool_name } }),
   ...Object.fromEntries(['unit', 'value_type', 'min_value', 'max_value', 'benchmark_value', 'details'].filter((k) => m[k] !== null).map((k) => [k, m[k]])),
 });
 
@@ -1090,6 +1131,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   });
   const findFinancialRecord = (id) => withDbClient(async (client) => (await client.query(
     `SELECT fr.id::text AS id, fr.organization_id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
+       fr.vendor_organization_id::text AS vendor_organization_id,
        (SELECT ds.state_text FROM state_links sl JOIN states ds ON ds.id = sl.state_id
          WHERE sl.entity_id = fr.id AND sl.entity_type = 'financial_record'
          ORDER BY ds.created_at, ds.id LIMIT 1) AS description
@@ -1206,6 +1248,82 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     }
   );
 
+  const TRANSACTION_ACTION = (r, a) => ({
+    financial_record_id: r.id,
+    action_id: a.action_id,
+    action_link: `https://stargazer-farm.com/actions/${a.action_id}`,
+    vendor: { organization_id: a.other_org.id, name: a.other_org.name },
+  });
+
+  server.registerTool(
+    'get_transaction_action',
+    {
+      title: 'Get the action behind an expense',
+      description:
+        'An expense is an action with inputs (money, stock, hours) and outputs (the new state): its action, if it has one, ' +
+        'with the organization it was paid to. Observations linked to the action (add_observation) are its next states, ' +
+        'e.g. photos and readings of what arrived. An expense has an action only when one was made for it ' +
+        '(create_transaction_action, or the app\'s Rewards section). Find the financial_record_id with search_financial_records.',
+      inputSchema: { financial_record_id: z.string() },
+    },
+    async ({ financial_record_id }) => {
+      console.log('get_transaction_action called with:', JSON.stringify({ financial_record_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        const action = await getTransactionAction({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
+        if (!action) return { content: [{ type: 'text', text: 'This expense has no action yet. create_transaction_action makes one.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action), null, 2) }] };
+      } catch (err) {
+        console.log('get_transaction_action failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not get the expense's action: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_transaction_action',
+    {
+      title: 'Make the action behind an expense',
+      description:
+        'Make an expense an action, so what it bought can be followed: its next states (photos and readings of what ' +
+        'arrived) and, if a person puts it forward, an experience. The action is dated the expense\'s date, assigned ' +
+        'to whoever recorded the expense (left unassigned for one with no recorder) and names the vendor, so the ' +
+        'expense needs its vendor first (update_financial_record vendor_organization_id). It starts the app\'s ' +
+        'rewards build for the action in the background (an AI run), so make one only when asked or when the ' +
+        'purchase is worth following. Making one that exists returns it. Say what it will do and only call this ' +
+        'once the person says yes.',
+      inputSchema: { financial_record_id: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ financial_record_id }) => {
+      console.log('create_transaction_action called with:', JSON.stringify({ financial_record_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow making actions.' }],
+          isError: true,
+        };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        if (!record.vendor_organization_id) {
+          return refuse('This expense has no vendor yet. Set it with update_financial_record (vendor_organization_id; create_organization finds or adds the organization), then try again.');
+        }
+        const action = await createTransactionAction({
+          cognitoUserId, orgId: record.organization_id, recordId: record.id, otherOrgId: record.vendor_organization_id,
+        });
+        console.log('create_transaction_action: action', action.action_id, 'for', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action), null, 2) }] };
+      } catch (err) {
+        console.log('create_transaction_action failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not make the expense's action: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
   const ITEM_INPUT = z.object({
     id: z.string().optional().describe('An existing item of this record, from search_prices; leave out for a new one'),
     item_text: z.string().min(1).describe('The item as written on the receipt, in its own words, e.g. "fine sand"; not standardized'),
@@ -1213,6 +1331,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     unit: z.string().optional().describe('As written: bag, sack, truck, kg…'),
     amount_php: z.number().describe('The line total in pesos, as on the receipt'),
     unit_price_php: z.number().min(0).optional().describe('The price per unit as printed on the receipt; worked out from amount and quantity when left out'),
+    part_id: z.string().nullable().optional().describe('The vendor\'s part this line is, from search_vendor_parts (or create_asset with vendor_organization_id); your standardization of the line, while item_text stays as written. Leave out when not matched'),
   });
 
   server.registerTool(
@@ -1268,6 +1387,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     financial_record_id: r.financial_record_id,
     ...(r.transaction_date && { transaction_date: String(r.transaction_date).slice(0, 10) }),
     ...(r.vendor_organization_id && { vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name } }),
+    ...(r.part_id && { part: { part_id: r.part_id, name: r.part_name } }),
     item_text: r.item_text,
     quantity: r.quantity === null ? null : Number(r.quantity),
     unit: r.unit,
@@ -1301,6 +1421,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       const columns = `i.id::text AS id, i.financial_record_id::text AS financial_record_id, fr.transaction_date::text AS transaction_date,
         fr.vendor_organization_id::text AS vendor_organization_id,
         (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
+        i.part_id::text AS part_id, (SELECT pp.name FROM parts pp WHERE pp.id = i.part_id) AS part_name,
         i.item_text, i.quantity, i.unit, i.amount, i.unit_price`;
       try {
         const results = await withDbClient(async (client) => {
@@ -1606,8 +1727,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       try {
         const { targets, known } = await withDbClient(async (client) => ({
           targets: await findLinkTargets(client, lookup, accessibleOrgIds),
-          known: metrics.length === 0 ? [] : await findToolMetrics(
-            client, links.filter((l) => l.entity_type === 'tool').map((l) => l.entity_id), accessibleOrgIds),
+          known: metrics.length === 0 ? [] : await findEntityMetrics(
+            client, links.filter((l) => l.entity_type !== 'existing_state').map(({ entity_type, entity_id }) => ({ entity_type, entity_id })), accessibleOrgIds),
         }));
         const missing = lookup.filter((l) => !targets.some((t) => sameLink(t, l)));
         if (missing.length > 0) return notFound(missing);
@@ -1877,6 +1998,66 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'search_vendor_parts',
+    {
+      title: 'Search a vendor\'s parts',
+      description:
+        'Find what vendors sell: parts in vendor organizations that your organization added (create_asset with ' +
+        'vendor_organization_id), with the vendor\'s unit and listed price. Use it to match a receipt line to the ' +
+        'vendor\'s own item before set_financial_record_items (part_id), and to compare the listed price with what ' +
+        'was paid. Separate from search_assets, which only finds your own stock. Give a query, a vendor, or both.',
+      inputSchema: {
+        query: z.string().min(1).optional().describe('Name or topic, e.g. "sand"; matches by meaning'),
+        vendor_organization_id: z.string().optional().describe('Only this vendor\'s parts'),
+        limit: z.number().int().min(1).max(100).optional().describe('Max results, default 10'),
+      },
+    },
+    async ({ query, vendor_organization_id, limit }) => {
+      console.log('search_vendor_parts called with:', JSON.stringify({ query, vendor_organization_id, limit }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!query && !vendor_organization_id) return { content: [{ type: 'text', text: 'Give a query, a vendor_organization_id, or both.' }], isError: true };
+      const effectiveLimit = limit || DEFAULT_LIMIT;
+      const columns = `p.id::text AS id, p.name, p.description, p.unit, p.cost_per_unit,
+        p.organization_id::text AS vendor_organization_id, vo.name AS vendor_name`;
+      const visible = `p.created_by_organization_id = ANY($1::uuid[]) AND ($2::text IS NULL OR p.organization_id::text = $2)`;
+      try {
+        const parts = await withDbClient(async (client) => {
+          const byName = (await client.query(
+            `SELECT ${columns} FROM parts p JOIN organizations vo ON vo.id = p.organization_id
+             WHERE ${visible} AND ($3::text IS NULL OR p.name ILIKE '%' || $3 || '%')
+             ORDER BY vo.name, p.name LIMIT $4`,
+            [accessibleOrgIds, vendor_organization_id || null, query || null, effectiveLimit]
+          )).rows;
+          if (!query) return byName;
+          const vector = `[${(await generateEmbedding(query)).join(',')}]`;
+          const byMeaning = (await client.query(
+            `SELECT ${columns}
+             FROM unified_embeddings ue
+             JOIN parts p ON ue.entity_type = 'part' AND p.id = ue.entity_id
+             JOIN organizations vo ON vo.id = p.organization_id
+             WHERE ${visible} AND 1 - (ue.embedding <=> $3::vector) > $5
+             ORDER BY ue.embedding <=> $3::vector LIMIT $4`,
+            [accessibleOrgIds, vendor_organization_id || null, vector, effectiveLimit, SIMILARITY_THRESHOLD]
+          )).rows;
+          const seen = new Set();
+          return [...byName, ...byMeaning].filter((r) => !seen.has(r.id) && seen.add(r.id)).slice(0, effectiveLimit);
+        });
+        console.log(`search_vendor_parts: -> ${parts.length} parts`);
+        if (parts.length === 0) return { content: [{ type: 'text', text: 'No vendor parts matched. Add one with create_asset and vendor_organization_id.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(parts.map((r) => ({
+          part_id: r.id, name: r.name,
+          ...(r.description && { description: r.description }),
+          unit: r.unit,
+          listed_price_php: r.cost_per_unit === null ? null : Number(r.cost_per_unit),
+          vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name },
+        })), null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error searching vendor parts: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
     'get_asset',
     {
       title: 'Get an asset',
@@ -2040,12 +2221,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         type: z.enum(['tool', 'part']).describe('tool: one tracked item or place; part: stock counted in units'),
         name: z.string().min(1),
         current_quantity: z.number().min(0).optional().describe('Parts only. How many there are now; later changes go through adjust_stock'),
+        vendor_organization_id: z.string().optional().describe('Add a part a vendor sells to the vendor\'s organization instead of your own stock (parts only; the vendor org must have no members; find or add it with create_organization). Give name, unit and cost_per_unit (the vendor\'s listed price) and description. Your organization can see it (search_vendor_parts)'),
         ...ASSET_FIELDS,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ type, name, current_quantity, ...fields }) => {
-      console.log('create_asset called with:', JSON.stringify({ type, name }));
+    async ({ type, name, current_quantity, vendor_organization_id, ...fields }) => {
+      console.log('create_asset called with:', JSON.stringify({ type, name, vendor_organization_id }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -2054,6 +2236,23 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         };
       }
       try {
+        if (vendor_organization_id) {
+          if (type !== 'part') throw new Error('Only a part can be added to a vendor.');
+          const unsupported = Object.keys(fields).filter((k) => fields[k] !== undefined && !['description', 'unit', 'cost_per_unit'].includes(k));
+          if (current_quantity !== undefined || unsupported.length > 0) {
+            throw new Error(`A vendor's part takes only name, description, unit and cost_per_unit (not ${[...(current_quantity !== undefined ? ['current_quantity'] : []), ...unsupported].join(', ')}).`);
+          }
+          const role = await memberRole(cognitoUserId, accessibleOrgIds[0]);
+          if (!['contributor', 'leadership', 'admin'].includes(role)) throw new Error('Only contributors, leadership and admins can add a vendor\'s parts.');
+          const part = await createAsset({
+            cognitoUserId, type,
+            asset: { name, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), sellable: true, vendor_organization_id },
+          });
+          console.log('create_asset: created vendor part', part.id);
+          return { content: [{ type: 'text', text: JSON.stringify({
+            part_id: part.id, name: part.name, vendor_organization_id, note: 'Use this part_id on items (set_financial_record_items). It is found again with search_vendor_parts.',
+          }, null, 2) }] };
+        }
         if (type === 'tool' && current_quantity !== undefined) throw new Error('current_quantity is not for a tool.');
         // New assets go in the primary org, as new actions do.
         const changes = await assetChanges({ type, fields, orgId: accessibleOrgIds[0], cognitoUserId });
@@ -2983,15 +3182,19 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   server.registerTool(
     'create_metric',
     {
-      title: 'Add a metric to a tool',
+      title: 'Add a metric',
       description:
-        'Add something to measure on a tool, as the tool\'s page in the app does, e.g. "Root length" in cm ' +
-        'on an azolla container. Its readings are then recorded with observations (add_observation metrics) ' +
-        'and can be compared with an expectation (set_model). Check get_asset for the metrics it already ' +
-        'has. Read the metric back to the person (name, unit, number or text, range, how to measure it) and ' +
-        'only call this once they say yes.',
+        'Add something to measure, e.g. "Root length" in cm on an azolla container, "Fill" in % on a vendor\'s ' +
+        'sand, or "Wait at checkout" in hours on a store. A metric belongs to a tool (asset_id, as the tool\'s ' +
+        'page in the app does) or to an organization, action, part or state (entity_type and entity_id). Its ' +
+        'readings are then recorded with observations linked to it (add_observation metrics) and can be ' +
+        'compared with an expectation (set_model). Check get_asset for a tool\'s metrics. How long an ' +
+        'operation takes belongs to the organization, never to a person. Read the metric back to the person ' +
+        '(name, unit, number or text, range, how to measure it) and only call this once they say yes.',
       inputSchema: {
-        asset_id: z.string().describe('The tool, from search_assets'),
+        asset_id: z.string().optional().describe('The tool, from search_assets; or give entity_type and entity_id instead'),
+        entity_type: z.enum(['organization', 'action', 'part', 'state']).optional().describe('What the metric is about, when it is not a tool'),
+        entity_id: z.string().optional().describe('Its id: an organization from create_organization, an action from search_actions, a part from search_assets or search_vendor_parts, a state (observation) id'),
         name: z.string().min(1).describe('e.g. "Root length"'),
         unit: z.string().optional().describe('e.g. "cm", "%", "count"'),
         value_type: z.enum(['number', 'text']).optional().describe('number (the default) or text, e.g. low/medium/high'),
@@ -3001,8 +3204,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ asset_id, name, unit, value_type = 'number', min_value, max_value, details }) => {
-      console.log('create_metric called with:', JSON.stringify({ asset_id, name, unit, value_type }));
+    async ({ asset_id, entity_type, entity_id, name, unit, value_type = 'number', min_value, max_value, details }) => {
+      console.log('create_metric called with:', JSON.stringify({ asset_id, entity_type, entity_id, name, unit, value_type }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -3010,7 +3213,32 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           isError: true,
         };
       }
+      if (!asset_id === !(entity_type && entity_id) || (entity_type && !entity_id) || (!entity_type && entity_id)) {
+        return refuse('Give either asset_id (a tool) or both entity_type and entity_id.');
+      }
       try {
+        if (!asset_id) {
+          const role = await memberRole(cognitoUserId, accessibleOrgIds[0]);
+          if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can add metrics.');
+          const found = await withDbClient(async (client) => {
+            const entity = await findEntity(client, entity_type, entity_id, accessibleOrgIds);
+            return entity && { entity, existing: await findEntityMetrics(client, [entity], [accessibleOrgIds[0]]) };
+          });
+          if (!found) return refuse(`No ${entity_type} ${entity_id} your organizations can use.`);
+          const same = found.existing.find((m) => m.name.trim().toLowerCase() === name.trim().toLowerCase());
+          if (same) return refuse(`${found.entity.name} already has a metric "${same.name}" (metric_id ${same.metric_id}).`);
+          const metric = await createEntityMetric({
+            cognitoUserId, entityType: entity_type, entityId: entity_id,
+            metric: { name: name.trim(), unit, value_type, min_value, max_value, details },
+          });
+          console.log('create_metric: created', metric.metric_id, 'on', entity_type, entity_id);
+          return { content: [{ type: 'text', text: JSON.stringify({
+            metric_id: metric.metric_id, entity: { type: entity_type, id: entity_id, name: found.entity.name },
+            name: metric.name, unit: metric.unit, value_type: metric.value_type,
+            ...(metric.min_value !== null && { min_value: metric.min_value }),
+            ...(metric.max_value !== null && { max_value: metric.max_value }),
+          }, null, 2) }] };
+        }
         const tool = await withDbClient(async (client) => (await client.query(
           `SELECT t.id::text AS id, t.name, t.organization_id FROM tools t WHERE t.id::text = $1 AND t.organization_id = ANY($2::uuid[])`,
           [asset_id, accessibleOrgIds]
@@ -3063,7 +3291,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           const metric = await findMetric(client, metric_id, accessibleOrgIds);
           if (!metric) return null;
           const readings = await findReadings(client, metric_id, accessibleOrgIds);
-          const actions = (await client.query(
+          const actions = metric.entity_type !== 'tool' ? [] : (await client.query(
             `SELECT a.id::text AS action_id, a.title, a.status, a.created_at, a.completed_at
              FROM actions a
              WHERE a.organization_id = ANY($2::uuid[]) AND (a.asset_id::text = $1 OR $1 = ANY(a.required_tools::text[]))
@@ -3099,14 +3327,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Set what a tool\'s metrics are expected to do',
       description:
-        'Saves an expectation model for a tool: random variables over time, usually tied to its metrics, ' +
+        'Saves an expectation model for a tool, or for an organization, action, part, state or experience ' +
+        '(entity_type and entity_id): e.g. what a vendor\'s sand is expected to deliver, or the wait at a store. ' +
+        'Data goes into a model at the experience level. Random variables over time, usually tied to metrics, ' +
         'that readings are then compared against (get_model). Each save is a new version; earlier versions ' +
         'stay, and each reading is judged against the version in force when it was taken.\n\n' +
         'The model is human-directed. Start from what the person expects in their own words ("about 6 months ' +
         'until they lay"), the farm\'s readings (get_metric_history), its experiences and any outside sources. ' +
         'Before calling, describe the expectation to them in plain words: what is expected by when, how sure, ' +
         'and what it rests on (borrowed from outside sources, or the farm\'s own readings). Only call once they ' +
-        'say yes. Only the person accountable for the tool, leadership or admins can save one.\n\n' +
+        'say yes. Only the person accountable for a tool, leadership or admins can save its model; for the other ' +
+        'entities, contributors, leadership and admins can.\n\n' +
         'Each variable has a distribution and its parameters: numbers, or formulas (mathjs) of t (days since ' +
         'the anchor), other variables in the same step, and <name>_prev (the variable\'s previous value, from ' +
         'its initial value at t = 0). Distributions: fixed(value), normal(mean, sd), lognormal(mu, sigma), ' +
@@ -3117,7 +3348,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'agreed value (readings are judged by it) and a min–max range for the slider. Agree the values and ' +
         'ranges with the person like the rest of the model.',
       inputSchema: {
-        asset_id: z.string().describe('The tool, from search_assets'),
+        asset_id: z.string().optional().describe('The tool, from search_assets; or give entity_type and entity_id instead'),
+        entity_type: z.enum(['organization', 'action', 'part', 'state', 'experience']).optional().describe('What the model is about, when it is not a tool'),
+        entity_id: z.string().optional().describe('Its id'),
         name: z.string().min(1).describe('What the model is of, e.g. "Azolla coverage". Saving the same name again is a new version of it'),
         description: z.string().min(1).describe('The expectation in plain words, as agreed with the person'),
         anchor: MEMBERSHIP_DAY.describe('The day t = 0, YYYY-MM-DD: e.g. when it was planted, acquired or last reset'),
@@ -3150,8 +3383,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ asset_id, name, description, anchor, time_step_days, horizon_days, variables, inputs, rationale, evidence }) => {
-      console.log('set_model called with:', JSON.stringify({ asset_id, name, variables: Object.keys(variables) }));
+    async ({ asset_id, entity_type, entity_id, name, description, anchor, time_step_days, horizon_days, variables, inputs, rationale, evidence }) => {
+      console.log('set_model called with:', JSON.stringify({ asset_id, entity_type, entity_id, name, variables: Object.keys(variables) }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -3161,8 +3394,45 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       }
       const observationIds = evidence.observation_ids ?? [];
       const experienceIds = evidence.experience_ids ?? [];
+      if (!asset_id === !(entity_type && entity_id) || (entity_type && !entity_id) || (!entity_type && entity_id)) {
+        return refuse('Give either asset_id (a tool) or both entity_type and entity_id.');
+      }
       try {
         const checked = await withDbClient(async (client) => {
+          if (!asset_id) {
+            // Not a tool: the model is the caller's org's, about something its orgs can use.
+            const role = await memberRole(cognitoUserId, accessibleOrgIds[0]);
+            if (!['contributor', 'leadership', 'admin'].includes(role)) return { error: refuse('Only contributors, leadership and admins can set a model.') };
+            const entity = await findEntity(client, entity_type, entity_id, accessibleOrgIds);
+            if (!entity) return { error: refuse(`No ${entity_type} ${entity_id} your organizations can use.`) };
+            const metricIds = Object.values(variables).map((v) => v.metric_id).filter(Boolean);
+            const known = metricIds.length === 0 ? [] : (await client.query(
+              `SELECT metric_id::text AS id FROM metrics WHERE metric_id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+              [metricIds, accessibleOrgIds]
+            )).rows.map((r) => r.id);
+            const unknownMetrics = metricIds.filter((id) => !known.includes(id));
+            if (unknownMetrics.length > 0) return { error: refuse(`Not metrics in your organizations: ${unknownMetrics.join(', ')}.`) };
+            const observed = observationIds.length === 0 ? [] : (await client.query(
+              `SELECT id::text AS id FROM states WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+              [observationIds, accessibleOrgIds]
+            )).rows.map((r) => r.id);
+            const experienced = experienceIds.length === 0 ? [] : (await client.query(
+              `SELECT id::text AS id FROM experiences WHERE id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[])`,
+              [experienceIds, accessibleOrgIds]
+            )).rows.map((r) => r.id);
+            const notEvidence = [
+              ...observationIds.filter((id) => !observed.includes(id)).map((id) => `observation ${id} (not in your organizations)`),
+              ...experienceIds.filter((id) => !experienced.includes(id)).map((id) => `experience ${id} (not in your organizations)`),
+            ];
+            if (notEvidence.length > 0) return { error: refuse(`Not evidence for this model: ${notEvidence.join(', ')}.`) };
+            const versions = (await client.query(
+              `SELECT m.version FROM state_space_models m
+               JOIN state_space_model_associations a ON a.model_id = m.id AND a.entity_type = $3 AND a.entity_id::text = $1
+               WHERE m.name = $2 AND m.model_definition->>'kind' = 'expectation' AND m.organization_id = $4`,
+              [entity.id, name, entity_type, accessibleOrgIds[0]]
+            )).rows.map((r) => Number(r.version) || 0);
+            return { tool: { id: entity.id, name: entity.name, organization_id: accessibleOrgIds[0] }, entityType: entity_type, version: String(Math.max(0, ...versions) + 1) };
+          }
           const tool = (await client.query(
             `SELECT t.id::text AS id, t.name, t.organization_id, t.accountable_person_id::text AS accountable_person_id,
                     om.role, om.user_id::text AS user_id
@@ -3203,10 +3473,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              WHERE m.name = $2 AND m.model_definition->>'kind' = 'expectation'`,
             [tool.id, name]
           )).rows.map((r) => Number(r.version) || 0);
-          return { tool, version: String(Math.max(0, ...versions) + 1) };
+          return { tool, entityType: 'tool', version: String(Math.max(0, ...versions) + 1) };
         });
         if (checked.error) return checked.error;
-        const { tool, version } = checked;
+        const { tool, version, entityType } = checked;
         const definition = {
           kind: 'expectation',
           model_metadata: { name, version, author: callerName || 'unknown', description },
@@ -3224,13 +3494,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         if (blank.length > 0) return refuse(`These variables give no numbers at some steps: ${blank.join(', ')}. Check their formulas.`);
 
         const model = await createModel({ cognitoUserId, orgId: tool.organization_id, definition });
-        await linkModel({ cognitoUserId, orgId: tool.organization_id, modelId: model.id, entityType: 'tool', entityId: tool.id });
-        console.log('set_model: saved', model.id, 'version', version, 'for tool', tool.id);
+        await linkModel({ cognitoUserId, orgId: tool.organization_id, modelId: model.id, entityType, entityId: tool.id });
+        console.log('set_model: saved', model.id, 'version', version, 'for', entityType, tool.id);
         return { content: [{ type: 'text', text: JSON.stringify({
-          model_id: model.id, name, version, tool: tool.name,
+          model_id: model.id, name, version, ...(entityType === 'tool' ? { tool: tool.name } : { entity: { type: entityType, id: tool.id, name: tool.name } }),
           basis: observationIds.length > 0 ? 'farm readings' : 'borrowed (no farm readings cited)',
           expected: Object.fromEntries(Object.keys(variables).map((k) => [k, expectedPath(definition, run, k)])),
-          link: ASSET_LINK(tool.id),
+          ...(entityType === 'tool' && { link: ASSET_LINK(tool.id) }),
         }, null, 2) }] };
       } catch (err) {
         console.log('set_model failed:', err.message);
@@ -3252,13 +3522,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Without asset_id, lists every expectation model (latest versions, which tool, in plain words), to ' +
         'find ones worth reading before writing a model for a new place.',
       inputSchema: {
-        asset_id: z.string().optional().describe('The tool, from search_assets; leave out to list every model'),
+        asset_id: z.string().optional().describe('The tool, from search_assets; leave out (with no entity) to list every tool\'s model'),
+        entity_type: z.enum(['organization', 'action', 'part', 'state', 'experience']).optional().describe('Read the models of something that is not a tool'),
+        entity_id: z.string().optional().describe('Its id'),
       },
     },
-    async ({ asset_id }) => {
-      console.log('get_model called with:', JSON.stringify({ asset_id }));
+    async ({ asset_id, entity_type, entity_id }) => {
+      console.log('get_model called with:', JSON.stringify({ asset_id, entity_type, entity_id }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
-      if (!asset_id) {
+      if (asset_id && (entity_type || entity_id)) return refuse('Give either asset_id or entity_type with entity_id.');
+      if (!!entity_type !== !!entity_id) return refuse('Give both entity_type and entity_id.');
+      if (!asset_id && !entity_type) {
         try {
           const rows = await withDbClient(async (client) => (await client.query(
             `SELECT DISTINCT ON (a.entity_id, m.name)
@@ -3285,24 +3559,26 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       }
       try {
         const found = await withDbClient(async (client) => {
-          const tool = (await client.query(
-            `SELECT id::text AS id, name FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
-            [asset_id, accessibleOrgIds]
-          )).rows[0];
+          const tool = entity_type
+            ? await findEntity(client, entity_type, entity_id, accessibleOrgIds)
+            : (await client.query(
+              `SELECT id::text AS id, name FROM tools WHERE id::text = $1 AND organization_id = ANY($2::uuid[])`,
+              [asset_id, accessibleOrgIds]
+            )).rows[0];
           if (!tool) return null;
           const models = (await client.query(
             `SELECT m.id::text AS id, m.name, m.version, m.model_definition, m.created_at
              FROM state_space_models m
-             JOIN state_space_model_associations a ON a.model_id = m.id AND a.entity_type = 'tool' AND a.entity_id::text = $1
+             JOIN state_space_model_associations a ON a.model_id = m.id AND a.entity_type = $3 AND a.entity_id::text = $1
              WHERE m.organization_id = ANY($2::uuid[]) AND m.model_definition->>'kind' = 'expectation'
              ORDER BY m.created_at`,
-            [tool.id, accessibleOrgIds]
+            [tool.id, accessibleOrgIds, entity_type || 'tool']
           )).rows;
           const metricIds = [...new Set(models.flatMap((m) => Object.values(m.model_definition.variables).map((v) => v.metric_id).filter(Boolean)))];
           const readings = Object.fromEntries(await Promise.all(metricIds.map(async (id) => [id, await findReadings(client, id, accessibleOrgIds)])));
           return { tool, models, readings };
         });
-        if (!found) return NOT_AN_ASSET(asset_id);
+        if (!found) return entity_type ? refuse(`No ${entity_type} ${entity_id} your organizations can use.`) : NOT_AN_ASSET(asset_id);
         const { tool, models, readings } = found;
         if (models.length === 0) {
           return { content: [{ type: 'text', text: `${tool.name} has no expectation model yet. set_model makes one with the person accountable for it.` }] };
@@ -3341,7 +3617,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           };
         });
         console.log(`get_model: ${result.length} models for tool ${tool.id}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ tool: tool.name, models: result }, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ ...(entity_type ? { entity: { type: entity_type, id: tool.id, name: tool.name } } : { tool: tool.name }), models: result }, null, 2) }] };
       } catch (err) {
         console.log('get_model failed:', err.message);
         return { content: [{ type: 'text', text: `Could not get the models: ${err.message}` }], isError: true };
