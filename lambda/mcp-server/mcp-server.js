@@ -1248,12 +1248,21 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     }
   );
 
-  const TRANSACTION_ACTION = (r, a) => ({
+  const TRANSACTION_ACTION = (r, a, items = []) => ({
     financial_record_id: r.id,
     action_id: a.action_id,
     action_link: `https://stargazer-farm.com/actions/${a.action_id}`,
     vendor: { organization_id: a.other_org.id, name: a.other_org.name },
+    items: items.map(formatItem),
   });
+  // The expense's line items with the part each was matched to.
+  const findRecordItems = (recordId) => withDbClient(async (client) => (await client.query(
+    `SELECT i.id::text AS id, i.financial_record_id::text AS financial_record_id, i.item_text, i.quantity, i.unit, i.amount, i.unit_price,
+            i.part_id::text AS part_id, (SELECT pp.name FROM parts pp WHERE pp.id = i.part_id) AS part_name
+     FROM financial_record_items i
+     WHERE i.financial_record_id::text = $1 AND i.organization_id = ANY($2::uuid[]) ORDER BY i.created_at, i.id`,
+    [recordId, accessibleOrgIds]
+  )).rows);
 
   server.registerTool(
     'get_transaction_action',
@@ -1261,8 +1270,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       title: 'Get the action behind an expense',
       description:
         'An expense is an action with inputs (money, stock, hours) and outputs (the new state): its action, if it has one, ' +
-        'with the organization it was paid to. Observations linked to the action (add_observation) are its next states, ' +
-        'e.g. photos and readings of what arrived. An expense has an action only when one was made for it ' +
+        'with the organization it was paid to and the expense\'s line items with the vendor part each was matched to ' +
+        '(set_financial_record_items). Observations linked to the action (add_observation) are its next states, ' +
+        'e.g. photos and readings of what arrived; link each to the action and to the vendor parts below. An expense has an action only when one was made for it ' +
         '(create_transaction_action, or the app\'s Rewards section). Find the financial_record_id with search_financial_records.',
       inputSchema: { financial_record_id: z.string() },
     },
@@ -1274,7 +1284,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
         const action = await getTransactionAction({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
         if (!action) return { content: [{ type: 'text', text: 'This expense has no action yet. create_transaction_action makes one.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action, await findRecordItems(record.id)), null, 2) }] };
       } catch (err) {
         console.log('get_transaction_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not get the expense's action: ${err.message}` }], isError: true };
@@ -1316,7 +1326,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           cognitoUserId, orgId: record.organization_id, recordId: record.id, otherOrgId: record.vendor_organization_id,
         });
         console.log('create_transaction_action: action', action.action_id, 'for', record.id);
-        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action, await findRecordItems(record.id)), null, 2) }] };
       } catch (err) {
         console.log('create_transaction_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not make the expense's action: ${err.message}` }], isError: true };
@@ -1701,7 +1711,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'the person the photo link: it opens the observation in the CWF app, ' +
         'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
         'when the observation is of such a tool, ask for the readings and give them in metrics. ' +
-        'When it is how things were when an action was taken, also link it to that action as existing_state.',
+        'When it is how things were when an action was taken, also link it to that action as existing_state.\n\n' +
+        'Following a purchase: when what arrived is documented (photos, counts, estimates, time in line), ' +
+        'link the observation to the expense\'s action (get_transaction_action) and to each vendor part ' +
+        'involved (search_vendor_parts, or the part ids get_transaction_action lists), and give readings ' +
+        'for those parts\' metrics, or for the vendor organization\'s (e.g. fill, usable fraction, hours in ' +
+        'line). If no metric fits, propose one (create_metric on the part or organization) and add it once the ' +
+        'person agrees. Document at this level, one part at a time, rather than as one note on the expense.',
       inputSchema: {
         text: z.string().optional().describe('What the person observed, in their own words. Can be left out if they only want to add photos.'),
         links: z.array(LINK).optional().describe('What it is about: an action and/or tools and parts. Leave out for a standalone observation.'),

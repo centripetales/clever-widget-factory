@@ -420,7 +420,7 @@ describe('the action behind an expense', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
 
   test('create_transaction_action makes the action in the record\'s org, naming its vendor', async () => {
-    rows = [{ id: 'fr-1', organization_id: 'org-b', vendor_organization_id: 'org-prince' }];
+    rows = (sql) => sql.includes('FROM financial_record_items') ? [] : [{ id: 'fr-1', organization_id: 'org-b', vendor_organization_id: 'org-prince' }];
     const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
     const result = await client.callTool({ name: 'create_transaction_action', arguments: { financial_record_id: 'fr-1' } });
     assert.strictEqual(result.isError, undefined);
@@ -431,7 +431,7 @@ describe('the action behind an expense', () => {
     assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
     assert.deepStrictEqual(JSON.parse(event.body), { other_org_id: 'org-prince' });
     assert.deepStrictEqual(JSON.parse(result.content[0].text), {
-      financial_record_id: 'fr-1', action_id: 'act-1', action_link: 'https://stargazer-farm.com/actions/act-1', vendor: { organization_id: 'org-prince', name: 'Prince' },
+      financial_record_id: 'fr-1', action_id: 'act-1', action_link: 'https://stargazer-farm.com/actions/act-1', vendor: { organization_id: 'org-prince', name: 'Prince' }, items: [],
     });
   });
 
@@ -451,8 +451,12 @@ describe('the action behind an expense', () => {
   test('get_transaction_action reads it, or says there is none', async () => {
     rows = [{ id: 'fr-1', organization_id: 'org-a' }];
     const client = await connect(['org-a'], 'Stefan Hamilton');
+    rows = (sql) => sql.includes('FROM financial_record_items') ? [{ id: 'i-1', financial_record_id: 'fr-1', item_text: 'buhangin', quantity: '2', unit: 'cu.m', amount: '3600', unit_price: '1800', part_id: 'part-1', part_name: 'Screened sand' }] : [{ id: 'fr-1', organization_id: 'org-a' }];
     const found = JSON.parse((await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'fr-1' } })).content[0].text);
     assert.strictEqual(found.action_id, 'act-1');
+    assert.deepStrictEqual(found.items, [{
+      item_id: 'i-1', financial_record_id: 'fr-1', item_text: 'buhangin', quantity: 2, unit: 'cu.m', amount_php: 3600, unit_price_php: 1800, part: { part_id: 'part-1', name: 'Screened sand' },
+    }]);
     assert.strictEqual(invocations[0].event.httpMethod, 'GET');
     rows = [{ id: 'none', organization_id: 'org-a' }];
     const none = await client.callTool({ name: 'get_transaction_action', arguments: { financial_record_id: 'none' } });
