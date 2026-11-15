@@ -1,5 +1,13 @@
 import type { ObservationPhoto } from './observations';
 
+/** An observation linked to the record after its description. */
+export interface FinancialRecordNote {
+  id: string;
+  state_text: string;
+  captured_at: string;
+  captured_by_name: string;
+}
+
 export interface FinancialRecordItem {
   id: string;
   item_text: string;
@@ -22,6 +30,7 @@ export interface FinancialRecord {
   description?: string;
   photos?: ObservationPhoto[];
   items?: FinancialRecordItem[];
+  notes?: FinancialRecordNote[];
   vendor?: { id: string; name: string } | null;
   state_id?: string;
   balance_after?: number | null;

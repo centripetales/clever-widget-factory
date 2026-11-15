@@ -808,6 +808,17 @@ describe('metrics', () => {
       assert.deepStrictEqual(JSON.parse(snapshot.event.body), { metric_id: 'metric-wait', value: '0.5' });
     });
 
+    test('add_observation writes a note on a financial transaction', async () => {
+      rows = [{ entity_type: 'financial_record', entity_id: 'fr-1', name: 'Kimbee stuff' }];
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      const result = await client.callTool({ name: 'add_observation', arguments: {
+        text: 'Read by Claude from the receipt photo: 9 lines, adding up to the total.', links: [{ entity_type: 'financial_record', entity_id: 'fr-1' }],
+      } });
+      assert.strictEqual(result.isError, undefined);
+      assert.deepStrictEqual(JSON.parse(invocations[0].event.body).links, [{ entity_type: 'financial_record', entity_id: 'fr-1' }]);
+      assert.deepStrictEqual(JSON.parse(result.content[0].text).linked_to, ['financial_record: Kimbee stuff']);
+    });
+
     const fillModel = {
       entity_type: 'part', entity_id: 'part-1', name: 'Sand delivered', description: 'A truck delivers about three quarters of what is claimed',
       anchor: '2026-11-10', time_step_days: 1, horizon_days: 30,

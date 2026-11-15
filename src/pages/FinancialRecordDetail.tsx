@@ -474,6 +474,25 @@ export default function FinancialRecordDetail() {
         </Card>
       )}
 
+      {/* Notes: observations added after the description, e.g. what Claude found reading the receipt */}
+      {!isEditing && record.notes && record.notes.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Notes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {record.notes.map((note) => (
+              <div key={note.id} className="text-sm">
+                <p className="whitespace-pre-wrap">{note.state_text}</p>
+                <p className="text-muted-foreground mt-1">
+                  {note.captured_by_name} · {new Date(note.captured_at).toLocaleDateString()}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Rewards — expenses only for now (docs/design/POSITIVE_SUM.md §2.6) */}
       {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} descriptionStateId={record.state_id} />}
 

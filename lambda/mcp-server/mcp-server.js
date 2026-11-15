@@ -170,7 +170,8 @@ const VISIBLE_ACTION = (orgs) => `(a.organization_id = ANY(${orgs}::uuid[]) OR (
 // What an observation can be linked to through the connector — the same as
 // the observation screen's Link Asset (assets) and linked action.
 const LINK = z.object({
-  entity_type: z.enum(['action', 'tool', 'part', 'organization', 'existing_state']).describe(
+  entity_type: z.enum(['action', 'tool', 'part', 'organization', 'financial_record', 'existing_state']).describe(
+    'financial_record: a note on that financial transaction (it shows under Notes on its page); ' +
     'existing_state: this observation is the action\'s existing state (how things were when it was taken); ' +
     'entity_id is the action'),
   entity_id: z.string(),
@@ -199,7 +200,12 @@ async function findLinkTargets(client, links, orgIds) {
      SELECT 'part', id::text, name FROM parts
        WHERE id::text = ANY($1::text[]) AND (organization_id = ANY($2::uuid[]) OR created_by_organization_id = ANY($2::uuid[]))
      UNION ALL
-     SELECT 'organization', id::text, name FROM organizations WHERE id::text = ANY($1::text[]) AND is_active`,
+     SELECT 'organization', id::text, name FROM organizations WHERE id::text = ANY($1::text[]) AND is_active
+     UNION ALL
+     SELECT 'financial_record', fr.id::text,
+       left(COALESCE((SELECT ds.state_text FROM state_links dl JOIN states ds ON ds.id = dl.state_id
+         WHERE dl.entity_id = fr.id AND dl.entity_type = 'financial_record' ORDER BY ds.created_at, ds.id LIMIT 1), 'financial transaction'), 80)
+       FROM financial_records fr WHERE fr.id::text = ANY($1::text[]) AND fr.organization_id = ANY($2::uuid[])`,
     [links.map((l) => l.entity_id), orgIds]
   )).rows;
 }
@@ -1363,9 +1369,12 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Save what an expense bought, line by line, so prices can be searched and compared (search_prices). ' +
         'The items given are the record\'s whole list: those with an id are updated, those without are added, and ' +
         'its other items are removed. Read the receipt photo (get_observation_photos), keep the item words as ' +
-        'written, and put anything unclear (vendor unknown, illegible signature) in the record\'s description with ' +
-        'update_financial_record, not in the items. A shared cost such as delivery is its own item with no ' +
-        'quantity. Read the items back to the person and only call this once they say yes.',
+        'written, and keep anything unclear out of the items. A shared cost such as delivery is its own item with no ' +
+        'quantity. A discount is an item with a negative amount. After saving, write a note on the transaction ' +
+        '(add_observation linked to it as financial_record) saying it was read by Claude from the receipt photo and what ' +
+        'was unclear or assumed: illegible lines, units guessed, a vendor not on the receipt, a cut-off page, and whether ' +
+        'the items add up to the total. It is a reading, not a fact, and the person\'s own description stays theirs. ' +
+        'Read the items and the note back to the person and only call this once they say yes.',
       inputSchema: {
         financial_record_id: z.string().describe('From search_financial_records'),
         items: z.array(ITEM_INPUT).describe('All the record\'s items'),
@@ -1722,7 +1731,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'the person the photo link: it opens the observation in the CWF app, ' +
         'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
         'when the observation is of such a tool, ask for the readings and give them in metrics. ' +
-        'When it is how things were when an action was taken, also link it to that action as existing_state.\n\n' +
+        'When it is how things were when an action was taken, also link it to that action as existing_state. ' +
+        'A note on a financial transaction (what was read from its receipt, and what was unclear) is linked to it as ' +
+        'financial_record and shows under Notes on its page.\n\n' +
         'Following a purchase: when what arrived is documented (photos, counts, estimates, time in line), ' +
         'link the observation to the expense\'s action (get_transaction_action) and to each vendor part ' +
         'involved (search_vendor_parts, or the part ids get_transaction_action lists), and give readings ' +

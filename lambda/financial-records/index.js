@@ -456,7 +456,20 @@ async function getRecord(id, authContext) {
     ? await pool.query('SELECT id, name FROM organizations WHERE id = $1', [record.vendor_organization_id])
     : { rows: [] };
 
-  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, items: itemsResult.rows, vendor: vendorResult.rows[0] || null });
+  // Notes: the observations linked to it after its description (e.g. what Claude
+  // found reading the receipt), oldest first; bookkeeping states are not notes
+  const notesResult = await pool.query(
+    'SELECT s.id, s.state_text, s.captured_at, COALESCE(om.full_name, \'Unknown\') AS captured_by_name' +
+    ' FROM state_links sl JOIN states s ON s.id = sl.state_id' +
+    ' LEFT JOIN organization_members om' +
+    '   ON om.cognito_user_id::text = s.captured_by::text AND om.organization_id = s.organization_id' +
+    ' WHERE sl.entity_type = \'financial_record\' AND sl.entity_id = $1' +
+    '   AND s.id IS DISTINCT FROM $2 AND s.state_text NOT LIKE \'{"type":"positive_sum.%\'' +
+    ' ORDER BY s.created_at, s.id',
+    [id, record.state_id]
+  );
+
+  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, items: itemsResult.rows, notes: notesResult.rows, vendor: vendorResult.rows[0] || null });
 }
 
 async function updateRecord(event, id, authContext) {
