@@ -450,24 +450,24 @@ export default function FinancialRecordDetail() {
         </CardContent>
       </Card>
 
-      {/* Line items, saved through Claude from the receipt */}
-      {!isEditing && record.items && record.items.length > 0 && (
+      {/* Purchases: the actual prices paid, saved through Claude from the receipt */}
+      {!isEditing && record.purchases && record.purchases.length > 0 && (
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>Items</CardTitle>
+            <CardTitle>Purchases</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {record.items.map((item) => (
-              <div key={item.id} className="flex items-start justify-between gap-4 text-sm">
+            {record.purchases.map((purchase) => (
+              <div key={purchase.id} className="flex items-start justify-between gap-4 text-sm">
                 <div className="min-w-0">
-                  <p className="font-medium">{item.item_text}</p>
+                  <p className="font-medium">{purchase.purchase_text}</p>
                   <p className="text-muted-foreground">
-                    {item.quantity !== null && `${Number(item.quantity)}${item.unit ? ` ${item.unit}` : ''}`}
-                    {item.unit_price !== null && ` at ₱${Number(item.unit_price).toFixed(2)}`}
-                    {item.part_name && ` · ${item.part_name}`}
+                    {purchase.quantity !== null && `${Number(purchase.quantity)}${purchase.unit ? ` ${purchase.unit}` : ''}`}
+                    {purchase.unit_price !== null && ` at ₱${Number(purchase.unit_price).toFixed(2)}`}
+                    {purchase.part_name && ` · ${purchase.part_name}`}
                   </p>
                 </div>
-                <p className="font-medium whitespace-nowrap">₱{Number(item.amount).toFixed(2)}</p>
+                <p className="font-medium whitespace-nowrap">₱{Number(purchase.amount).toFixed(2)}</p>
               </div>
             ))}
           </CardContent>

@@ -104,11 +104,11 @@ export async function createOrganization({ cognitoUserId, name }) {
   return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name, seed_member: false }, { cognitoUserId })).data;
 }
 
-// The items given become the record's line items, in the record's org (orgId):
+// The purchases given become the record's line purchases, in the record's org (orgId):
 // those with an id are updated, those without are added, and its others are
 // removed. The service decides who may edit the record.
-export async function saveFinancialRecordItems({ cognitoUserId, orgId, recordId, items }) {
-  return (await invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}/items`, { items }, { cognitoUserId, orgId }, { method: 'PUT', id: recordId })).items;
+export async function saveFinancialRecordPurchases({ cognitoUserId, orgId, recordId, purchases }) {
+  return (await invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}/purchases`, { purchases }, { cognitoUserId, orgId }, { method: 'PUT', id: recordId })).purchases;
 }
 
 // The action behind a financial record (the app's reward flow): null when it

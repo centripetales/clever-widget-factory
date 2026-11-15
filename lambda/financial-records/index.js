@@ -90,10 +90,10 @@ exports.handler = async (event) => {
   const permissions = authContext.permissions || [];
 
   try {
-    // GET/PUT /api/financial-records/:id/items - the record's line items
-    if (pathParameters?.id && path.endsWith('/items')) {
-      if (httpMethod === 'GET') return await getItems(pathParameters.id, { organizationId });
-      if (httpMethod === 'PUT') return await saveItems(event, pathParameters.id, { organizationId, cognitoUserId, permissions });
+    // GET/PUT /api/financial-records/:id/purchases - the record's line purchases
+    if (pathParameters?.id && path.endsWith('/purchases')) {
+      if (httpMethod === 'GET') return await getPurchases(pathParameters.id, { organizationId });
+      if (httpMethod === 'PUT') return await savePurchases(event, pathParameters.id, { organizationId, cognitoUserId, permissions });
     }
 
     // POST /api/financial-records - Create record
@@ -445,10 +445,10 @@ async function getRecord(id, authContext) {
     [id, organizationId]
   );
 
-  // Line items (with the vendor part each was matched to) and the vendor
-  const itemsResult = await pool.query(
-    'SELECT i.id, i.item_text, i.quantity, i.unit, i.amount, i.unit_price, i.part_id, p.name AS part_name' +
-    ' FROM financial_record_items i LEFT JOIN parts p ON p.id = i.part_id' +
+  // Line purchases (with the vendor part each was matched to) and the vendor
+  const purchasesResult = await pool.query(
+    'SELECT i.id, i.purchase_text, i.quantity, i.unit, i.amount, i.unit_price, i.part_id, p.name AS part_name' +
+    ' FROM financial_record_purchases i LEFT JOIN parts p ON p.id = i.part_id' +
     ' WHERE i.financial_record_id = $1 ORDER BY i.created_at, i.id',
     [id]
   );
@@ -469,7 +469,7 @@ async function getRecord(id, authContext) {
     [id, record.state_id]
   );
 
-  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, items: itemsResult.rows, notes: notesResult.rows, vendor: vendorResult.rows[0] || null });
+  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, purchases: purchasesResult.rows, notes: notesResult.rows, vendor: vendorResult.rows[0] || null });
 }
 
 async function updateRecord(event, id, authContext) {
@@ -764,47 +764,47 @@ async function updateRecord(event, id, authContext) {
   }
 }
 
-const ITEM_COLUMNS = 'id, financial_record_id, item_text, quantity, unit, amount, unit_price, part_id';
+const PURCHASE_COLUMNS = 'id, financial_record_id, purchase_text, quantity, unit, amount, unit_price, part_id';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function getItems(recordId, { organizationId }) {
+async function getPurchases(recordId, { organizationId }) {
   const record = await pool.query('SELECT id FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId]);
   if (record.rows.length === 0) return error('Record not found', 404);
-  const items = await pool.query(
-    `SELECT ${ITEM_COLUMNS} FROM financial_record_items WHERE financial_record_id = $1 ORDER BY created_at, id`,
+  const purchases = await pool.query(
+    `SELECT ${PURCHASE_COLUMNS} FROM financial_record_purchases WHERE financial_record_id = $1 ORDER BY created_at, id`,
     [recordId]
   );
-  return success({ items: items.rows });
+  return success({ purchases: purchases.rows });
 }
 
 const isNumber = (n) => typeof n === 'number' && Number.isFinite(n);
 
-// Why an item is not acceptable, or null.
-function itemProblem(item) {
-  if (typeof item.item_text !== 'string' || !item.item_text.trim()) return 'item_text is required';
-  if (!isNumber(item.amount)) return `amount is required for "${item.item_text}"`;
-  if (item.quantity != null && !(isNumber(item.quantity) && item.quantity > 0)) return `quantity must be above 0 for "${item.item_text}"`;
-  if (item.unit_price != null && !(isNumber(item.unit_price) && item.unit_price >= 0)) return `unit_price must be 0 or more for "${item.item_text}"`;
-  if (item.part_id != null && !(typeof item.part_id === 'string' && UUID.test(item.part_id))) return `part_id must be a part id for "${item.item_text}"`;
+// Why a purchase is not acceptable, or null.
+function purchaseProblem(purchase) {
+  if (typeof purchase.purchase_text !== 'string' || !purchase.purchase_text.trim()) return 'purchase_text is required';
+  if (!isNumber(purchase.amount)) return `amount is required for "${purchase.purchase_text}"`;
+  if (purchase.quantity != null && !(isNumber(purchase.quantity) && purchase.quantity > 0)) return `quantity must be above 0 for "${purchase.purchase_text}"`;
+  if (purchase.unit_price != null && !(isNumber(purchase.unit_price) && purchase.unit_price >= 0)) return `unit_price must be 0 or more for "${purchase.purchase_text}"`;
+  if (purchase.part_id != null && !(typeof purchase.part_id === 'string' && UUID.test(purchase.part_id))) return `part_id must be a part id for "${purchase.purchase_text}"`;
   return null;
 }
 
-// The items given are the record's items: those with an id are updated (only
+// The purchases given are the record's purchases: those with an id are updated (only
 // when something changed), those without are added, and the record's other
-// items are removed. Unit price is worked out from amount and quantity when
-// not given. An item's part is the vendor's part it was matched to: one the
+// purchases are removed. Unit price is worked out from amount and quantity when
+// not given. A purchase's part is the vendor's part it was matched to: one the
 // org can see (its own, or one it added to a vendor's organization), and in
 // the record's vendor organization when the record has one.
-async function saveItems(event, recordId, { organizationId, cognitoUserId, permissions }) {
+async function savePurchases(event, recordId, { organizationId, cognitoUserId, permissions }) {
   let body;
   try {
     body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
   } catch (parseErr) {
     return error('Invalid JSON in request body', 400);
   }
-  const items = body?.items;
-  if (!Array.isArray(items)) return error('items must be a list', 400);
-  const problem = items.map(itemProblem).find(Boolean);
+  const purchases = body?.purchases;
+  if (!Array.isArray(purchases)) return error('purchases must be a list', 400);
+  const problem = purchases.map(purchaseProblem).find(Boolean);
   if (problem) return error(problem, 400);
 
   const recordResult = await pool.query(
@@ -820,7 +820,7 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
     return error('Not authorized to edit this record', 403);
   }
 
-  const partIds = [...new Set(items.map((item) => item.part_id).filter(Boolean))];
+  const partIds = [...new Set(purchases.map((purchase) => purchase.part_id).filter(Boolean))];
   if (partIds.length > 0) {
     const vendorId = recordResult.rows[0].vendor_organization_id;
     const parts = (await pool.query(
@@ -839,42 +839,42 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
   try {
     await client.query('BEGIN');
     const existing = (await client.query(
-      `SELECT ${ITEM_COLUMNS} FROM financial_record_items WHERE financial_record_id = $1 FOR UPDATE`,
+      `SELECT ${PURCHASE_COLUMNS} FROM financial_record_purchases WHERE financial_record_id = $1 FOR UPDATE`,
       [recordId]
     )).rows;
     const byId = new Map(existing.map((row) => [row.id, row]));
-    const unknown = items.find((item) => item.id && !byId.has(item.id));
+    const unknown = purchases.find((purchase) => purchase.id && !byId.has(purchase.id));
     if (unknown) {
       await client.query('ROLLBACK');
-      return error(`Item ${unknown.id} is not an item of this record`, 400);
+      return error(`Purchase ${unknown.id} is not a purchase of this record`, 400);
     }
 
-    const keep = new Set(items.filter((item) => item.id).map((item) => item.id));
+    const keep = new Set(purchases.filter((purchase) => purchase.id).map((purchase) => purchase.id));
     for (const row of existing) {
-      if (!keep.has(row.id)) await client.query('DELETE FROM financial_record_items WHERE id = $1', [row.id]);
+      if (!keep.has(row.id)) await client.query('DELETE FROM financial_record_purchases WHERE id = $1', [row.id]);
     }
 
-    for (const item of items) {
-      const quantity = item.quantity ?? null;
-      const unitPrice = item.unit_price ?? (quantity ? Math.round((item.amount / quantity) * 1e4) / 1e4 : null);
-      const unit = item.unit ?? null;
-      const partId = item.part_id ?? null;
-      const text = item.item_text.trim();
-      if (item.id) {
-        const row = byId.get(item.id);
-        const same = row.item_text === text && row.unit === unit && row.part_id === partId && Number(row.amount) === item.amount &&
+    for (const purchase of purchases) {
+      const quantity = purchase.quantity ?? null;
+      const unitPrice = purchase.unit_price ?? (quantity ? Math.round((purchase.amount / quantity) * 1e4) / 1e4 : null);
+      const unit = purchase.unit ?? null;
+      const partId = purchase.part_id ?? null;
+      const text = purchase.purchase_text.trim();
+      if (purchase.id) {
+        const row = byId.get(purchase.id);
+        const same = row.purchase_text === text && row.unit === unit && row.part_id === partId && Number(row.amount) === purchase.amount &&
           (row.quantity === null ? quantity === null : Number(row.quantity) === quantity) &&
           (row.unit_price === null ? unitPrice === null : Number(row.unit_price) === unitPrice);
         if (same) continue;
         await client.query(
-          'UPDATE financial_record_items SET item_text = $2, quantity = $3, unit = $4, amount = $5, unit_price = $6, part_id = $7, updated_at = NOW() WHERE id = $1',
-          [item.id, text, quantity, unit, item.amount, unitPrice, partId]
+          'UPDATE financial_record_purchases SET purchase_text = $2, quantity = $3, unit = $4, amount = $5, unit_price = $6, part_id = $7, updated_at = NOW() WHERE id = $1',
+          [purchase.id, text, quantity, unit, purchase.amount, unitPrice, partId]
         );
-        if (row.item_text !== text) queued.push({ id: item.id, text });
+        if (row.purchase_text !== text) queued.push({ id: purchase.id, text });
       } else {
         const inserted = await client.query(
-          'INSERT INTO financial_record_items (financial_record_id, organization_id, item_text, quantity, unit, amount, unit_price, part_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-          [recordId, organizationId, text, quantity, unit, item.amount, unitPrice, partId]
+          'INSERT INTO financial_record_purchases (financial_record_id, organization_id, purchase_text, quantity, unit, amount, unit_price, part_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+          [recordId, organizationId, text, quantity, unit, purchase.amount, unitPrice, partId]
         );
         queued.push({ id: inserted.rows[0].id, text });
       }
@@ -887,23 +887,23 @@ async function saveItems(event, recordId, { organizationId, cognitoUserId, permi
     client.release();
   }
 
-  // Embeddings are regenerated for new or reworded items (fire-and-forget);
-  // a removed item's embedding goes with it by trigger.
+  // Embeddings are regenerated for new or reworded purchases (fire-and-forget);
+  // a removed purchase's embedding goes with it by trigger.
   for (const { id, text } of queued) {
     sqs.send(new SendMessageCommand({
       QueueUrl: EMBEDDINGS_QUEUE_URL,
       MessageBody: JSON.stringify({
-        entity_type: 'financial_record_item',
+        entity_type: 'financial_record_purchase',
         entity_id: id,
         embedding_source: text,
         organization_id: organizationId
       })
     }))
-    .then(() => console.log('Queued embedding for financial_record_item', id))
+    .then(() => console.log('Queued embedding for financial_record_purchase', id))
     .catch(err => console.error('Failed to queue embedding:', err));
   }
 
-  return await getItems(recordId, { organizationId });
+  return await getPurchases(recordId, { organizationId });
 }
 
 async function deleteRecord(id, authContext) {

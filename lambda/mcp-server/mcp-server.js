@@ -8,7 +8,7 @@ import {
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
   createModel, linkModel, createMetric, createEntityMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
-  findSimilarOrganizations, createOrganization, saveFinancialRecordItems, getTransactionAction, createTransactionAction,
+  findSimilarOrganizations, createOrganization, saveFinancialRecordPurchases, getTransactionAction, createTransactionAction,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -1258,7 +1258,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
 
   // `a` is the reward flow's summary (action and other organization), present once
   // rewards have been started; the action itself is the record's, from the start.
-  const TRANSACTION_ACTION = (r, a, items = []) => {
+  const TRANSACTION_ACTION = (r, a, purchases = []) => {
     const vendor = a?.other_org ?? (r.vendor_organization_id && { id: r.vendor_organization_id, name: r.vendor_name });
     const actionId = a?.action_id ?? r.action_id;
     return {
@@ -1267,14 +1267,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       action_link: `https://stargazer-farm.com/actions/${actionId}`,
       vendor: vendor ? { organization_id: vendor.id, name: vendor.name } : null,
       rewards_started: !!a,
-      items: items.map(formatItem),
+      purchases: purchases.map(formatPurchase),
     };
   };
-  // The expense's line items with the part each was matched to.
-  const findRecordItems = (recordId) => withDbClient(async (client) => (await client.query(
-    `SELECT i.id::text AS id, i.financial_record_id::text AS financial_record_id, i.item_text, i.quantity, i.unit, i.amount, i.unit_price,
+  // The expense's purchases with the part each was matched to.
+  const findRecordPurchases = (recordId) => withDbClient(async (client) => (await client.query(
+    `SELECT i.id::text AS id, i.financial_record_id::text AS financial_record_id, i.purchase_text, i.quantity, i.unit, i.amount, i.unit_price,
             i.part_id::text AS part_id, (SELECT pp.name FROM parts pp WHERE pp.id = i.part_id) AS part_name
-     FROM financial_record_items i
+     FROM financial_record_purchases i
      WHERE i.financial_record_id::text = $1 AND i.organization_id = ANY($2::uuid[]) ORDER BY i.created_at, i.id`,
     [recordId, accessibleOrgIds]
   )).rows);
@@ -1285,8 +1285,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       title: 'Get the action behind an expense',
       description:
         'An expense is an action with inputs (money, stock, hours) and outputs (the new state). Every expense has its ' +
-        'action, made with it: this gives its id, the organization it was paid to and the expense\'s line items with ' +
-        'the vendor part each was matched to (set_financial_record_items), and whether its rewards have been started ' +
+        'action, made with it: this gives its id, the organization it was paid to and the expense\'s purchases with ' +
+        'the vendor part each was matched to (set_financial_record_purchases), and whether its rewards have been started ' +
         '(create_transaction_action, or the app\'s Rewards section; the action exists either way). Observations linked ' +
         'to the action (add_observation) are its next states, e.g. photos and readings of what arrived; link each to ' +
         'the action and to the vendor parts below. The action is also the action of an experience about the ' +
@@ -1301,7 +1301,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
         const started = await getTransactionAction({ cognitoUserId, orgId: record.organization_id, recordId: record.id });
         if (!started && !record.action_id) return { content: [{ type: 'text', text: 'This expense has no action (it predates them). create_transaction_action makes one.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, started, await findRecordItems(record.id)), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, started, await findRecordPurchases(record.id)), null, 2) }] };
       } catch (err) {
         console.log('get_transaction_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not get the expense's action: ${err.message}` }], isError: true };
@@ -1343,7 +1343,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           cognitoUserId, orgId: record.organization_id, recordId: record.id, otherOrgId: record.vendor_organization_id,
         });
         console.log('create_transaction_action: action', action.action_id, 'for', record.id);
-        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action, await findRecordItems(record.id)), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(TRANSACTION_ACTION(record, action, await findRecordPurchases(record.id)), null, 2) }] };
       } catch (err) {
         console.log('create_transaction_action failed:', err.message);
         return { content: [{ type: 'text', text: `Could not make the expense's action: ${err.message}` }], isError: true };
@@ -1351,74 +1351,74 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     }
   );
 
-  const ITEM_INPUT = z.object({
-    id: z.string().optional().describe('An existing item of this record, from search_prices; leave out for a new one'),
-    item_text: z.string().min(1).describe('The item as written on the receipt, in its own words, e.g. "fine sand"; not standardized'),
+  const PURCHASE_INPUT = z.object({
+    id: z.string().optional().describe('An existing purchase of this record, from search_prices; leave out for a new one'),
+    purchase_text: z.string().min(1).describe('The purchase as written on the receipt, in its own words, e.g. "fine sand"; not standardized'),
     quantity: z.number().positive().optional().describe('How many, e.g. 6. Leave out for a cost with no quantity, such as delivery'),
     unit: z.string().optional().describe('As written: bag, sack, truck, kg…'),
     amount_php: z.number().describe('The line total in pesos, as on the receipt'),
     unit_price_php: z.number().min(0).optional().describe('The price per unit as printed on the receipt; worked out from amount and quantity when left out'),
-    part_id: z.string().nullable().optional().describe('The vendor\'s part this line is, from search_vendor_parts (or create_asset with vendor_organization_id); your standardization of the line, while item_text stays as written. Leave out when not matched'),
+    part_id: z.string().nullable().optional().describe('The vendor\'s part this line is, from search_vendor_parts (or create_asset with vendor_organization_id); your standardization of the line, while purchase_text stays as written. Leave out when not matched'),
   });
 
   server.registerTool(
-    'set_financial_record_items',
+    'set_financial_record_purchases',
     {
-      title: 'Save the line items of an expense',
+      title: 'Save the purchases of an expense',
       description:
         'Save what an expense bought, line by line, so prices can be searched and compared (search_prices). ' +
-        'The items given are the record\'s whole list: those with an id are updated, those without are added, and ' +
-        'its other items are removed. Read the receipt photo (get_observation_photos), keep the item words as ' +
-        'written, and keep anything unclear out of the items. A shared cost such as delivery is its own item with no ' +
-        'quantity. A discount is an item with a negative amount. After saving, write a note on the transaction ' +
+        'The purchases given are the record\'s whole list: those with an id are updated, those without are added, and ' +
+        'its other purchases are removed. Read the receipt photo (get_observation_photos), keep the purchase words as ' +
+        'written, and keep anything unclear out of the purchases. A shared cost such as delivery is its own purchase with no ' +
+        'quantity. A discount is a purchase with a negative amount. After saving, write a note on the transaction ' +
         '(add_observation linked to it as financial_record) saying it was read by Claude from the receipt photo and what ' +
         'was unclear or assumed: illegible lines, units guessed, a vendor not on the receipt, a cut-off page, and whether ' +
-        'the items add up to the total. It is a reading, not a fact, and the person\'s own description stays theirs. ' +
-        'Read the items and the note back to the person and only call this once they say yes.',
+        'the purchases add up to the total. It is a reading, not a fact, and the person\'s own description stays theirs. ' +
+        'Read the purchases and the note back to the person and only call this once they say yes.',
       inputSchema: {
         financial_record_id: z.string().describe('From search_financial_records'),
-        items: z.array(ITEM_INPUT).describe('All the record\'s items'),
+        purchases: z.array(PURCHASE_INPUT).describe('All the record\'s purchases'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ financial_record_id, items }) => {
-      console.log('set_financial_record_items called with:', JSON.stringify({ financial_record_id, count: items.length }));
+    async ({ financial_record_id, purchases }) => {
+      console.log('set_financial_record_purchases called with:', JSON.stringify({ financial_record_id, count: purchases.length }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
-          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow saving items.' }],
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow saving purchases.' }],
           isError: true,
         };
       }
       try {
         const record = await findFinancialRecord(financial_record_id);
         if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
-        const saved = await saveFinancialRecordItems({
+        const saved = await saveFinancialRecordPurchases({
           cognitoUserId, orgId: record.organization_id, recordId: record.id,
-          items: items.map(({ amount_php, unit_price_php, ...rest }) => ({
+          purchases: purchases.map(({ amount_php, unit_price_php, ...rest }) => ({
             ...rest, amount: amount_php, ...(unit_price_php !== undefined && { unit_price: unit_price_php }),
           })),
         });
-        console.log('set_financial_record_items: saved', saved.length, 'items for', record.id);
+        console.log('set_financial_record_purchases: saved', saved.length, 'purchases for', record.id);
         return { content: [{ type: 'text', text: JSON.stringify({
           financial_record_id: record.id,
           link: `https://stargazer-farm.com/financial-records/${record.id}`,
-          items: saved.map(formatItem),
+          purchases: saved.map(formatPurchase),
         }, null, 2) }] };
       } catch (err) {
-        console.log('set_financial_record_items failed:', err.message);
-        return { content: [{ type: 'text', text: `Could not save the items: ${err.message}` }], isError: true };
+        console.log('set_financial_record_purchases failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not save the purchases: ${err.message}` }], isError: true };
       }
     }
   );
 
-  const formatItem = (r) => ({
-    item_id: r.id,
+  const formatPurchase = (r) => ({
+    purchase_id: r.id,
     financial_record_id: r.financial_record_id,
     ...(r.transaction_date && { transaction_date: String(r.transaction_date).slice(0, 10) }),
     ...(r.vendor_organization_id && { vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name } }),
     ...(r.part_id && { part: { part_id: r.part_id, name: r.part_name } }),
-    item_text: r.item_text,
+    purchase_text: r.purchase_text,
     quantity: r.quantity === null ? null : Number(r.quantity),
     unit: r.unit,
     amount_php: Number(r.amount),
@@ -1431,14 +1431,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Search prices paid',
       description:
-        'Search the line items of expenses: what was bought, quantity, unit, amount and price per unit, with ' +
+        'Search the purchases of expenses: what was bought, quantity, unit, amount and price per unit, with ' +
         'the date of the expense. Matches by meaning, so "sand" finds "buhangin". Prices are as the receipt ' +
         'states them, in the unit written (bag, truck…); converting units for a comparison is yours to do, ' +
-        'saying the assumption. Or pass financial_record_id to list one expense\'s items. Items exist only ' +
-        'for expenses someone has saved them for (set_financial_record_items).',
+        'saying the assumption. Or pass financial_record_id to list one expense\'s purchases. Purchases exist only ' +
+        'for expenses someone has saved them for (set_financial_record_purchases).',
       inputSchema: {
-        query: z.string().optional().describe('Descriptive keywords for the item, e.g. "sand" or "cement bags"'),
-        financial_record_id: z.string().optional().describe('List the items of this expense instead of searching'),
+        query: z.string().optional().describe('Descriptive keywords for the purchase, e.g. "sand" or "cement bags"'),
+        financial_record_id: z.string().optional().describe('List the purchases of this expense instead of searching'),
         limit: z.number().int().min(1).max(25).optional().describe('Max results, default 10'),
       },
     },
@@ -1446,18 +1446,18 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       console.log('search_prices called with:', JSON.stringify({ query, financial_record_id, limit }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!query && !financial_record_id) {
-        return { content: [{ type: 'text', text: 'Give a query to search, or a financial_record_id to list one expense\'s items.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Give a query to search, or a financial_record_id to list one expense\'s purchases.' }], isError: true };
       }
       const columns = `i.id::text AS id, i.financial_record_id::text AS financial_record_id, fr.transaction_date::text AS transaction_date,
         fr.vendor_organization_id::text AS vendor_organization_id,
         (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
         i.part_id::text AS part_id, (SELECT pp.name FROM parts pp WHERE pp.id = i.part_id) AS part_name,
-        i.item_text, i.quantity, i.unit, i.amount, i.unit_price`;
+        i.purchase_text, i.quantity, i.unit, i.amount, i.unit_price`;
       try {
         const results = await withDbClient(async (client) => {
           if (financial_record_id) {
             return (await client.query(
-              `SELECT ${columns} FROM financial_record_items i JOIN financial_records fr ON fr.id = i.financial_record_id
+              `SELECT ${columns} FROM financial_record_purchases i JOIN financial_records fr ON fr.id = i.financial_record_id
                WHERE i.financial_record_id::text = $1 AND i.organization_id = ANY($2::uuid[]) ORDER BY i.created_at, i.id`,
               [financial_record_id, accessibleOrgIds]
             )).rows;
@@ -1467,13 +1467,13 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             `WITH matches AS (
                SELECT entity_id, 1 - (embedding <=> $1::vector) AS similarity
                FROM unified_embeddings
-               WHERE organization_id = ANY($2::uuid[]) AND entity_type = 'financial_record_item'
+               WHERE organization_id = ANY($2::uuid[]) AND entity_type = 'financial_record_purchase'
                ORDER BY embedding <=> $1::vector
                LIMIT $3
              )
              SELECT m.similarity, ${columns}
              FROM matches m
-             JOIN financial_record_items i ON i.id = m.entity_id
+             JOIN financial_record_purchases i ON i.id = m.entity_id
              JOIN financial_records fr ON fr.id = i.financial_record_id
              WHERE i.organization_id = ANY($2::uuid[]) AND m.similarity > $4
              ORDER BY fr.transaction_date DESC`,
@@ -1482,9 +1482,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         });
         console.log(`search_prices: ${results.length} results`);
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: financial_record_id ? 'That expense has no saved items.' : 'No items matched above the similarity threshold. Items exist only for expenses that have had them saved, so try a broader query, or search_financial_records for the expense.' }] };
+          return { content: [{ type: 'text', text: financial_record_id ? 'That expense has no saved purchases.' : 'No purchases matched above the similarity threshold. Purchases exist only for expenses that have had them saved, so try a broader query, or search_financial_records for the expense.' }] };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(results.map(formatItem), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(results.map(formatPurchase), null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching prices: ${err.message}` }], isError: true };
       }
@@ -2042,7 +2042,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Find what vendors sell: parts in vendor organizations that your organization added (create_asset with ' +
         'vendor_organization_id), with the vendor\'s unit and listed price. Use it to match a receipt line to the ' +
-        'vendor\'s own item before set_financial_record_items (part_id), and to compare the listed price with what ' +
+        'vendor\'s own part before set_financial_record_purchases (part_id), and to compare the listed price with what ' +
         'was paid. Separate from search_assets, which only finds your own stock. Give a query, a vendor, or both.',
       inputSchema: {
         query: z.string().min(1).optional().describe('Name or topic, e.g. "sand"; matches by meaning'),
@@ -2288,7 +2288,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           });
           console.log('create_asset: created vendor part', part.id);
           return { content: [{ type: 'text', text: JSON.stringify({
-            part_id: part.id, name: part.name, vendor_organization_id, note: 'Use this part_id on items (set_financial_record_items). It is found again with search_vendor_parts.',
+            part_id: part.id, name: part.name, vendor_organization_id, note: 'Use this part_id on purchases (set_financial_record_purchases). It is found again with search_vendor_parts.',
           }, null, 2) }] };
         }
         if (type === 'tool' && current_quantity !== undefined) throw new Error('current_quantity is not for a tool.');

@@ -8,9 +8,9 @@ export interface FinancialRecordNote {
   captured_by_name: string;
 }
 
-export interface FinancialRecordItem {
+export interface FinancialRecordPurchase {
   id: string;
-  item_text: string;
+  purchase_text: string;
   quantity: string | null;
   unit: string | null;
   amount: string;
@@ -29,7 +29,7 @@ export interface FinancialRecord {
   payment_method: 'Cash' | 'SCash' | 'GCash' | 'Wise';
   description?: string;
   photos?: ObservationPhoto[];
-  items?: FinancialRecordItem[];
+  purchases?: FinancialRecordPurchase[];
   notes?: FinancialRecordNote[];
   vendor?: { id: string; name: string } | null;
   state_id?: string;
