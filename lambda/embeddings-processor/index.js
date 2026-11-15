@@ -171,7 +171,7 @@ exports.handler = async (event) => {
       // both (see docs/specs/azolla-impact-power-model.md — "states as
       // action context"). Migration ran for real, all 706 actions have an
       // action_policy embedding, and the old rows are deleted (see §3b).
-      const validTypes = ['part', 'tool', 'action_policy', 'issue', 'policy', 'state', 'state_space_model', 'financial_record', 'action_skill_profile', 'skill_axis', 'claim_perspective', 'significance_perspective', 'entropy_perspective'];
+      const validTypes = ['part', 'tool', 'action_policy', 'issue', 'policy', 'state', 'state_space_model', 'financial_record', 'financial_record_item', 'action_skill_profile', 'skill_axis', 'claim_perspective', 'significance_perspective', 'entropy_perspective'];
       if (!validTypes.includes(entity_type)) {
         console.log(`Skipping ${entity_type} - not a valid entity type`);
         continue;

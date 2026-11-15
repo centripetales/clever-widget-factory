@@ -1,0 +1,45 @@
+-- Line items of a financial record: what was bought, as written on the receipt,
+-- with quantity, unit, the line's amount and its unit price, so prices can be
+-- searched (semantic search on item_text) and compared. A shared cost such as
+-- delivery is its own row with no quantity. The receipt photo stays on the
+-- record's observation as the evidence. See the Price Models spec.
+
+BEGIN;
+
+CREATE TABLE financial_record_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  financial_record_id uuid NOT NULL REFERENCES financial_records(id) ON DELETE CASCADE,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  item_text text NOT NULL,
+  quantity numeric(14,4),
+  unit text,
+  amount numeric(12,2) NOT NULL,
+  unit_price numeric(14,4),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX financial_record_items_record_idx ON financial_record_items (financial_record_id);
+CREATE INDEX financial_record_items_org_idx ON financial_record_items (organization_id);
+
+-- Embeddings of item_text, keyed by the item id like every other entity type.
+-- The constraint is rebuilt from the types already in the table plus the known
+-- ones, so a type added by an earlier migration is not lost.
+DO $$
+DECLARE types text[];
+BEGIN
+  SELECT array_agg(DISTINCT t) INTO types FROM (
+    SELECT entity_type AS t FROM unified_embeddings
+    UNION SELECT unnest(ARRAY['part', 'tool', 'action', 'issue', 'policy', 'action_existing_state', 'state',
+                              'financial_record', 'state_space_model', 'action_policy', 'financial_record_item'])
+  ) s;
+  ALTER TABLE unified_embeddings DROP CONSTRAINT IF EXISTS unified_embeddings_entity_type_check;
+  EXECUTE format('ALTER TABLE unified_embeddings ADD CONSTRAINT unified_embeddings_entity_type_check CHECK (entity_type = ANY (%L::text[]))', types);
+END $$;
+
+CREATE TRIGGER financial_record_items_delete_embedding
+  AFTER DELETE ON financial_record_items
+  FOR EACH ROW
+  EXECUTE FUNCTION delete_unified_embedding('financial_record_item');
+
+COMMIT;

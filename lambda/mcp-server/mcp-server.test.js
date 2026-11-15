@@ -47,6 +47,13 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
     }
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-observation' }) })) };
   }
+  if (command.input.FunctionName === 'cwf-financial-records-lambda' && event.path.endsWith('/items')) {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ items: body.items.map((item, i) => ({
+      id: item.id || `item-${i}`, financial_record_id: event.pathParameters.id, item_text: item.item_text,
+      quantity: item.quantity ?? null, unit: item.unit ?? null, amount: String(item.amount),
+      unit_price: item.unit_price ?? (item.quantity ? item.amount / item.quantity : null),
+    })) }) })) };
+  }
   if (command.input.FunctionName === 'cwf-financial-records-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: 'new-record', description: body.description, transaction_date: body.transaction_date, amount: body.amount, payment_method: body.payment_method }) })) };
   }
@@ -394,6 +401,58 @@ describe('update_financial_record and delete_financial_record', () => {
       assert.match(result.content[0].text, /reconnect/);
     }
     assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('set_financial_record_items and search_prices', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('saves the items through the records service in the record\'s org, amounts renamed', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'set_financial_record_items', arguments: {
+      financial_record_id: 'fr-1',
+      items: [{ item_text: 'fine sand', quantity: 6, unit: 'bag', amount_php: 270, unit_price_php: 45 }, { item_text: 'delivery', amount_php: 500 }],
+    } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-financial-records-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.strictEqual(event.path, '/api/financial-records/fr-1/items');
+    assert.strictEqual(event.pathParameters.id, 'fr-1');
+    assert.strictEqual(event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(event.body), { items: [
+      { item_text: 'fine sand', quantity: 6, unit: 'bag', amount: 270, unit_price: 45 },
+      { item_text: 'delivery', amount: 500 },
+    ] });
+    const shown = JSON.parse(result.content[0].text);
+    assert.deepStrictEqual(shown.items[0], {
+      item_id: 'item-0', financial_record_id: 'fr-1', item_text: 'fine sand', quantity: 6, unit: 'bag', amount_php: 270, unit_price_php: 45,
+    });
+    assert.strictEqual(shown.items[1].quantity, null);
+  });
+
+  test('a record outside the caller\'s orgs and a read-only connection invoke nothing', async () => {
+    const args = { financial_record_id: 'fr-x', items: [{ item_text: 'sand', amount_php: 1 }] };
+    rows = [];
+    const writerClient = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const missing = await writerClient.callTool({ name: 'set_financial_record_items', arguments: args });
+    assert.strictEqual(missing.isError, true);
+    assert.match(missing.content[0].text, /No financial record/);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'set_financial_record_items', arguments: args })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('search_prices lists one expense\'s items within the caller\'s orgs, and needs a query otherwise', async () => {
+    rows = [{ id: 'i-1', financial_record_id: 'fr-1', transaction_date: '2023-06-23', item_text: 'fine sand', quantity: '6.0000', unit: 'bag', amount: '270.00', unit_price: '45.0000' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const result = await client.callTool({ name: 'search_prices', arguments: { financial_record_id: 'fr-1' } });
+    assert.deepStrictEqual(queries[0].params, ['fr-1', ['org-a']]);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), [{
+      item_id: 'i-1', financial_record_id: 'fr-1', transaction_date: '2023-06-23', item_text: 'fine sand', quantity: 6, unit: 'bag', amount_php: 270, unit_price_php: 45,
+    }]);
+    assert.strictEqual((await client.callTool({ name: 'search_prices', arguments: {} })).isError, true);
   });
 });
 

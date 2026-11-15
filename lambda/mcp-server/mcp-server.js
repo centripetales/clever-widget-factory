@@ -8,7 +8,7 @@ import {
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
   createModel, linkModel, createMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
-  findSimilarOrganizations, createOrganization,
+  findSimilarOrganizations, createOrganization, saveFinancialRecordItems,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -1196,6 +1196,137 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       } catch (err) {
         console.log('delete_financial_record failed:', err.message);
         return { content: [{ type: 'text', text: `Could not delete the expense: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  const ITEM_INPUT = z.object({
+    id: z.string().optional().describe('An existing item of this record, from search_prices; leave out for a new one'),
+    item_text: z.string().min(1).describe('The item as written on the receipt, in its own words, e.g. "fine sand"; not standardized'),
+    quantity: z.number().positive().optional().describe('How many, e.g. 6. Leave out for a cost with no quantity, such as delivery'),
+    unit: z.string().optional().describe('As written: bag, sack, truck, kg…'),
+    amount_php: z.number().describe('The line total in pesos, as on the receipt'),
+    unit_price_php: z.number().min(0).optional().describe('The price per unit as printed on the receipt; worked out from amount and quantity when left out'),
+  });
+
+  server.registerTool(
+    'set_financial_record_items',
+    {
+      title: 'Save the line items of an expense',
+      description:
+        'Save what an expense bought, line by line, so prices can be searched and compared (search_prices). ' +
+        'The items given are the record\'s whole list: those with an id are updated, those without are added, and ' +
+        'its other items are removed. Read the receipt photo (get_observation_photos), keep the item words as ' +
+        'written, and put anything unclear (vendor unknown, illegible signature) in the record\'s description with ' +
+        'update_financial_record, not in the items. A shared cost such as delivery is its own item with no ' +
+        'quantity. Read the items back to the person and only call this once they say yes.',
+      inputSchema: {
+        financial_record_id: z.string().describe('From search_financial_records'),
+        items: z.array(ITEM_INPUT).describe('All the record\'s items'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ financial_record_id, items }) => {
+      console.log('set_financial_record_items called with:', JSON.stringify({ financial_record_id, count: items.length }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow saving items.' }],
+          isError: true,
+        };
+      }
+      try {
+        const record = await findFinancialRecord(financial_record_id);
+        if (!record) return NOT_A_FINANCIAL_RECORD(financial_record_id);
+        const saved = await saveFinancialRecordItems({
+          cognitoUserId, orgId: record.organization_id, recordId: record.id,
+          items: items.map(({ amount_php, unit_price_php, ...rest }) => ({
+            ...rest, amount: amount_php, ...(unit_price_php !== undefined && { unit_price: unit_price_php }),
+          })),
+        });
+        console.log('set_financial_record_items: saved', saved.length, 'items for', record.id);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          financial_record_id: record.id,
+          link: `https://stargazer-farm.com/financial-records/${record.id}`,
+          items: saved.map(formatItem),
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('set_financial_record_items failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not save the items: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  const formatItem = (r) => ({
+    item_id: r.id,
+    financial_record_id: r.financial_record_id,
+    ...(r.transaction_date && { transaction_date: String(r.transaction_date).slice(0, 10) }),
+    item_text: r.item_text,
+    quantity: r.quantity === null ? null : Number(r.quantity),
+    unit: r.unit,
+    amount_php: Number(r.amount),
+    unit_price_php: r.unit_price === null ? null : Number(r.unit_price),
+    ...(r.similarity !== undefined && { similarity: Number(Number(r.similarity).toFixed(3)) }),
+  });
+
+  server.registerTool(
+    'search_prices',
+    {
+      title: 'Search prices paid',
+      description:
+        'Search the line items of expenses: what was bought, quantity, unit, amount and price per unit, with ' +
+        'the date of the expense. Matches by meaning, so "sand" finds "buhangin". Prices are as the receipt ' +
+        'states them, in the unit written (bag, truck…); converting units for a comparison is yours to do, ' +
+        'saying the assumption. Or pass financial_record_id to list one expense\'s items. Items exist only ' +
+        'for expenses someone has saved them for (set_financial_record_items).',
+      inputSchema: {
+        query: z.string().optional().describe('Descriptive keywords for the item, e.g. "sand" or "cement bags"'),
+        financial_record_id: z.string().optional().describe('List the items of this expense instead of searching'),
+        limit: z.number().int().min(1).max(25).optional().describe('Max results, default 10'),
+      },
+    },
+    async ({ query, financial_record_id, limit }) => {
+      console.log('search_prices called with:', JSON.stringify({ query, financial_record_id, limit }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!query && !financial_record_id) {
+        return { content: [{ type: 'text', text: 'Give a query to search, or a financial_record_id to list one expense\'s items.' }], isError: true };
+      }
+      const columns = `i.id::text AS id, i.financial_record_id::text AS financial_record_id, fr.transaction_date::text AS transaction_date,
+        i.item_text, i.quantity, i.unit, i.amount, i.unit_price`;
+      try {
+        const results = await withDbClient(async (client) => {
+          if (financial_record_id) {
+            return (await client.query(
+              `SELECT ${columns} FROM financial_record_items i JOIN financial_records fr ON fr.id = i.financial_record_id
+               WHERE i.financial_record_id::text = $1 AND i.organization_id = ANY($2::uuid[]) ORDER BY i.created_at, i.id`,
+              [financial_record_id, accessibleOrgIds]
+            )).rows;
+          }
+          const embeddingStr = `[${(await generateEmbedding(query)).join(',')}]`;
+          return (await client.query(
+            `WITH matches AS (
+               SELECT entity_id, 1 - (embedding <=> $1::vector) AS similarity
+               FROM unified_embeddings
+               WHERE organization_id = ANY($2::uuid[]) AND entity_type = 'financial_record_item'
+               ORDER BY embedding <=> $1::vector
+               LIMIT $3
+             )
+             SELECT m.similarity, ${columns}
+             FROM matches m
+             JOIN financial_record_items i ON i.id = m.entity_id
+             JOIN financial_records fr ON fr.id = i.financial_record_id
+             WHERE i.organization_id = ANY($2::uuid[]) AND m.similarity > $4
+             ORDER BY fr.transaction_date DESC`,
+            [embeddingStr, accessibleOrgIds, limit || DEFAULT_LIMIT, SIMILARITY_THRESHOLD]
+          )).rows;
+        });
+        console.log(`search_prices: ${results.length} results`);
+        if (results.length === 0) {
+          return { content: [{ type: 'text', text: financial_record_id ? 'That expense has no saved items.' : 'No items matched above the similarity threshold. Items exist only for expenses that have had them saved, so try a broader query, or search_financial_records for the expense.' }] };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(results.map(formatItem), null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error searching prices: ${err.message}` }], isError: true };
       }
     }
   );

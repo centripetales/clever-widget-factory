@@ -90,6 +90,12 @@ exports.handler = async (event) => {
   const permissions = authContext.permissions || [];
 
   try {
+    // GET/PUT /api/financial-records/:id/items - the record's line items
+    if (pathParameters?.id && path.endsWith('/items')) {
+      if (httpMethod === 'GET') return await getItems(pathParameters.id, { organizationId });
+      if (httpMethod === 'PUT') return await saveItems(event, pathParameters.id, { organizationId, cognitoUserId, permissions });
+    }
+
     // POST /api/financial-records - Create record
     if (httpMethod === 'POST' && path === '/api/financial-records') {
       return await createRecord(event, { organizationId, cognitoUserId, permissions });
@@ -668,6 +674,129 @@ async function updateRecord(event, id, authContext) {
   } finally {
     client.release();
   }
+}
+
+const ITEM_COLUMNS = 'id, financial_record_id, item_text, quantity, unit, amount, unit_price';
+
+async function getItems(recordId, { organizationId }) {
+  const record = await pool.query('SELECT id FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId]);
+  if (record.rows.length === 0) return error('Record not found', 404);
+  const items = await pool.query(
+    `SELECT ${ITEM_COLUMNS} FROM financial_record_items WHERE financial_record_id = $1 ORDER BY created_at, id`,
+    [recordId]
+  );
+  return success({ items: items.rows });
+}
+
+const isNumber = (n) => typeof n === 'number' && Number.isFinite(n);
+
+// Why an item is not acceptable, or null.
+function itemProblem(item) {
+  if (typeof item.item_text !== 'string' || !item.item_text.trim()) return 'item_text is required';
+  if (!isNumber(item.amount)) return `amount is required for "${item.item_text}"`;
+  if (item.quantity != null && !(isNumber(item.quantity) && item.quantity > 0)) return `quantity must be above 0 for "${item.item_text}"`;
+  if (item.unit_price != null && !(isNumber(item.unit_price) && item.unit_price >= 0)) return `unit_price must be 0 or more for "${item.item_text}"`;
+  return null;
+}
+
+// The items given are the record's items: those with an id are updated (only
+// when something changed), those without are added, and the record's other
+// items are removed. Unit price is worked out from amount and quantity when
+// not given.
+async function saveItems(event, recordId, { organizationId, cognitoUserId, permissions }) {
+  let body;
+  try {
+    body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+  } catch (parseErr) {
+    return error('Invalid JSON in request body', 400);
+  }
+  const items = body?.items;
+  if (!Array.isArray(items)) return error('items must be a list', 400);
+  const problem = items.map(itemProblem).find(Boolean);
+  if (problem) return error(problem, 400);
+
+  const recordResult = await pool.query(
+    'SELECT created_by FROM financial_records WHERE id = $1 AND organization_id = $2',
+    [recordId, organizationId]
+  );
+  if (recordResult.rows.length === 0) return error('Record not found', 404);
+
+  // Same rule as editing the record: its recorder, or write permission
+  const createdBy = recordResult.rows[0].created_by;
+  const isOwner = createdBy && createdBy.toString() === cognitoUserId.toString();
+  if (!isOwner && !hasPermission({ permissions }, 'data:write:all') && !hasPermission({ permissions }, 'data:write:org')) {
+    return error('Not authorized to edit this record', 403);
+  }
+
+  const client = await pool.connect();
+  const queued = [];
+  try {
+    await client.query('BEGIN');
+    const existing = (await client.query(
+      `SELECT ${ITEM_COLUMNS} FROM financial_record_items WHERE financial_record_id = $1 FOR UPDATE`,
+      [recordId]
+    )).rows;
+    const byId = new Map(existing.map((row) => [row.id, row]));
+    const unknown = items.find((item) => item.id && !byId.has(item.id));
+    if (unknown) {
+      await client.query('ROLLBACK');
+      return error(`Item ${unknown.id} is not an item of this record`, 400);
+    }
+
+    const keep = new Set(items.filter((item) => item.id).map((item) => item.id));
+    for (const row of existing) {
+      if (!keep.has(row.id)) await client.query('DELETE FROM financial_record_items WHERE id = $1', [row.id]);
+    }
+
+    for (const item of items) {
+      const quantity = item.quantity ?? null;
+      const unitPrice = item.unit_price ?? (quantity ? Math.round((item.amount / quantity) * 1e4) / 1e4 : null);
+      const unit = item.unit ?? null;
+      const text = item.item_text.trim();
+      if (item.id) {
+        const row = byId.get(item.id);
+        const same = row.item_text === text && row.unit === unit && Number(row.amount) === item.amount &&
+          (row.quantity === null ? quantity === null : Number(row.quantity) === quantity) &&
+          (row.unit_price === null ? unitPrice === null : Number(row.unit_price) === unitPrice);
+        if (same) continue;
+        await client.query(
+          'UPDATE financial_record_items SET item_text = $2, quantity = $3, unit = $4, amount = $5, unit_price = $6, updated_at = NOW() WHERE id = $1',
+          [item.id, text, quantity, unit, item.amount, unitPrice]
+        );
+        if (row.item_text !== text) queued.push({ id: item.id, text });
+      } else {
+        const inserted = await client.query(
+          'INSERT INTO financial_record_items (financial_record_id, organization_id, item_text, quantity, unit, amount, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+          [recordId, organizationId, text, quantity, unit, item.amount, unitPrice]
+        );
+        queued.push({ id: inserted.rows[0].id, text });
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Embeddings are regenerated for new or reworded items (fire-and-forget);
+  // a removed item's embedding goes with it by trigger.
+  for (const { id, text } of queued) {
+    sqs.send(new SendMessageCommand({
+      QueueUrl: EMBEDDINGS_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        entity_type: 'financial_record_item',
+        entity_id: id,
+        embedding_source: text,
+        organization_id: organizationId
+      })
+    }))
+    .then(() => console.log('Queued embedding for financial_record_item', id))
+    .catch(err => console.error('Failed to queue embedding:', err));
+  }
+
+  return await getItems(recordId, { organizationId });
 }
 
 async function deleteRecord(id, authContext) {

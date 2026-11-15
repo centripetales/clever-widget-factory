@@ -104,6 +104,13 @@ export async function createOrganization({ cognitoUserId, name }) {
   return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name }, { cognitoUserId })).data;
 }
 
+// The items given become the record's line items, in the record's org (orgId):
+// those with an id are updated, those without are added, and its others are
+// removed. The service decides who may edit the record.
+export async function saveFinancialRecordItems({ cognitoUserId, orgId, recordId, items }) {
+  return (await invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}/items`, { items }, { cognitoUserId, orgId }, { method: 'PUT', id: recordId })).items;
+}
+
 // A new tool or part, through the parts and tools service as the app's add
 // form does, in the primary org (none given).
 export async function createAsset({ cognitoUserId, type, asset }) {
