@@ -12,7 +12,7 @@ export function orgHasFeature(org: { settings?: { enabled_features?: string[] } 
 }
 
 export function useFeatureFlag() {
-  const { organization, loading } = useOrganization();
+  const { organization, loading, organizationsLoading } = useOrganization();
 
   const enabledFeatures = organization?.settings?.enabled_features as string[] | undefined;
 
@@ -33,6 +33,9 @@ export function useFeatureFlag() {
   return {
     isFeatureEnabled,
     enabledFeatures: enabledFeatures ?? null,
-    isLoading: loading,
+    // The active org is also unknown while the user's organizations are still
+    // being fetched (e.g. a saved active org that is not the primary one), so a
+    // guarded page waits instead of showing "Access Restricted" for a moment
+    isLoading: loading || (!organization && !!organizationsLoading),
   };
 }

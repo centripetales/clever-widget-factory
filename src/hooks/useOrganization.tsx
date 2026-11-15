@@ -48,7 +48,7 @@ const OrganizationContext = createContext<OrganizationContextType | undefined>(u
 const ACTIVE_ORG_KEY = 'cwf_active_organization_id';
 
 export function OrganizationProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   
@@ -220,7 +220,9 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         invited_by: null
       } : null,
       isAdmin: effectiveIsAdmin,
-      loading: isLoading,
+      // Until the saved session is restored there is no user, so no query has started
+      // and isLoading is false: still loading, not an account without an organization
+      loading: isLoading || authLoading,
       refreshOrganization,
       accessibleOrganizations,
       organizationsLoading: isLoading || (membershipCount > 0 && !orgsLoaded),
