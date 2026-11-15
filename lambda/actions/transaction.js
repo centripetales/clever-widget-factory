@@ -1,6 +1,7 @@
-// The action behind a transaction: rewards belong to actions, so an expense
-// gets one only when someone uses the reward flow on it (draft → review →
-// save). The expense's observation is linked to the action, not copied; the
+// The action behind a transaction: rewards belong to actions. Every expense
+// has one (made with it); the reward flow (draft → review → save) records the
+// other organization and builds the rewards. The expense's observation is linked
+// to the action in that flow, not copied; the
 // description already says what was traded, so the action carries no states of
 // its own. The transaction and the other organization are kept in a TRANSACTION_CONTEXT
 // bookkeeping state on the action. See docs/design/POSITIVE_SUM.md §2.6.
@@ -38,6 +39,7 @@ const contextPrefix = recordId => stateText(STATE_TYPES.TRANSACTION_CONTEXT, { f
 async function loadRecord(client, recordId) {
   const { rows } = await client.query(
     `SELECT fr.id, fr.organization_id, fr.created_by, fr.transaction_date, fr.amount, fr.payment_method,
+            fr.action_id, fr.vendor_organization_id,
             o.name AS organization_name, s.id AS state_id, s.state_text AS description,
             (SELECT string_agg(sp.photo_description, E'\\n' ORDER BY sp.photo_order)
                FROM state_photos sp WHERE sp.state_id = s.id AND COALESCE(sp.photo_description, '') <> '') AS photo_text
@@ -145,23 +147,29 @@ function similarOrgs(name, orgs) {
 
 const isSameName = (a, b) => nameKey(a) === nameKey(b);
 
+// The record's own action (made when the record was) is used; a record without
+// one yet gets it here and is linked to it.
 async function createAction(client, { record, userId, otherOrgId, configId }) {
   const title = text(record.description) || `Transaction ${new Date(record.transaction_date).toISOString().slice(0, 10)}`;
   await client.query('BEGIN');
   try {
-    const { rows } = await client.query(
-      `INSERT INTO actions (id, organization_id, title, status,
-         created_by, updated_by, assigned_to, participants, required_tools, attachments,
-         created_at, updated_at, completed_at)
-       VALUES (gen_random_uuid(), $1, $2, 'completed', $3, $3, $4, '{}'::uuid[], '{}'::text[], '{}'::text[],
-         NOW(), NOW(), $5)
-       RETURNING id`,
-      [
-        record.organization_id, title.length > 80 ? `${title.slice(0, 77)}...` : title,
-        userId, record.created_by || userId, record.transaction_date,
-      ]
-    );
-    const actionId = rows[0].id;
+    let actionId = record.action_id;
+    if (!actionId) {
+      const { rows } = await client.query(
+        `INSERT INTO actions (id, organization_id, title, status,
+           created_by, updated_by, assigned_to, participants, required_tools, attachments,
+           created_at, updated_at, completed_at)
+         VALUES (gen_random_uuid(), $1, $2, 'completed', $3, $3, $4, '{}'::uuid[], '{}'::text[], '{}'::text[],
+           NOW(), NOW(), $5)
+         RETURNING id`,
+        [
+          record.organization_id, title.length > 80 ? `${title.slice(0, 77)}...` : title,
+          userId, record.created_by || userId, record.transaction_date,
+        ]
+      );
+      actionId = rows[0].id;
+      await client.query('UPDATE financial_records SET action_id = $1 WHERE id = $2', [actionId, record.id]);
+    }
     if (record.state_id) {
       await client.query(
         `INSERT INTO state_links (state_id, entity_type, entity_id) VALUES ($1, 'action', $2)`,
@@ -209,7 +217,7 @@ async function handleTransactionAction({ httpMethod, recordId, isDraft, body, au
       return { statusCode: 200, data: { ...validateDraft(input, orgs, record.organization_id), llm_generation_config_id: configId } };
     }
 
-    const otherOrgId = body.other_org_id;
+    const otherOrgId = body.other_org_id || record.vendor_organization_id;
     const orgs = await loadOrgs(client);
     if (!orgs.some(o => o.id === otherOrgId) || otherOrgId === record.organization_id) {
       throw new HttpError(400, 'Choose the other organization in this transaction');

@@ -132,6 +132,13 @@ exports.handler = async (event) => {
 
 // --- Stub route handlers (to be implemented in subsequent tasks) ---
 
+// The action's title is the record's description, cut to 80 characters.
+function actionTitle(description, transactionDate) {
+  const text = typeof description === 'string' ? description.trim() : '';
+  const title = text || `Transaction ${new Date(transactionDate).toISOString().slice(0, 10)}`;
+  return title.length > 80 ? `${title.slice(0, 77)}...` : title;
+}
+
 async function createRecord(event, authContext) {
   const { organizationId, cognitoUserId } = authContext;
 
@@ -212,6 +219,22 @@ async function createRecord(event, authContext) {
        VALUES ($1, 'financial_record', $2)`,
       [createdState.id, createdRecord.id]
     );
+
+    // 3b. The purchase is an action (completed, dated the transaction date,
+    // assigned to whoever recorded it). Experiences, rewards and Positive Sum
+    // analysis hang off it; the record keeps the money. It carries no states of
+    // its own and no rewards are built until someone asks for them.
+    const actionResult = await client.query(
+      `INSERT INTO actions (id, organization_id, title, status,
+         created_by, updated_by, assigned_to, participants, required_tools, attachments,
+         created_at, updated_at, completed_at)
+       VALUES (gen_random_uuid(), $1, $2, 'completed', $3, $3, $3, '{}'::uuid[], '{}'::text[], '{}'::text[],
+         NOW(), NOW(), $4)
+       RETURNING id`,
+      [organizationId, actionTitle(description, transaction_date), cognitoUserId, transaction_date]
+    );
+    await client.query('UPDATE financial_records SET action_id = $1 WHERE id = $2', [actionResult.rows[0].id, createdRecord.id]);
+    createdRecord.action_id = actionResult.rows[0].id;
 
     // 4. INSERT state_photos for each photo (if any)
     const photoRows = [];
@@ -597,6 +620,22 @@ async function updateRecord(event, id, authContext) {
       );
     }
 
+    // The record's action follows its description (title) and date (completed_at)
+    if (existing.action_id) {
+      if (hasDescriptionChange && stateId) {
+        await client.query(
+          'UPDATE actions SET title = $1, updated_at = NOW() WHERE id = $2',
+          [actionTitle(body.description, existing.transaction_date), existing.action_id]
+        );
+      }
+      if (changes.some(c => c.field === 'transaction_date')) {
+        await client.query(
+          'UPDATE actions SET completed_at = $1, updated_at = NOW() WHERE id = $2',
+          [body.transaction_date, existing.action_id]
+        );
+      }
+    }
+
     // Manage state_photos if photos provided: photos are matched by URL, so
     // those kept stay as they are (and keep what is attached to them), changed
     // descriptions or order are updated, new ones added and removed ones deleted
@@ -900,6 +939,25 @@ async function deleteRecord(id, authContext) {
       'DELETE FROM states WHERE id = $1',
       [stateId]
     );
+  }
+
+  // Its action goes too, as when an action is deleted: experiences lose that
+  // leg (and are deleted when nothing is left in them), and its links go
+  if (record.action_id) {
+    const affected = await pool.query(
+      'DELETE FROM experience_components WHERE action_id = $1 RETURNING experience_id',
+      [record.action_id]
+    );
+    const experienceIds = [...new Set(affected.rows.map(r => r.experience_id))];
+    if (experienceIds.length > 0) {
+      await pool.query(
+        `DELETE FROM experiences e WHERE e.id = ANY($1::uuid[])
+           AND NOT EXISTS (SELECT 1 FROM experience_components ec WHERE ec.experience_id = e.id)`,
+        [experienceIds]
+      );
+    }
+    await pool.query(`DELETE FROM state_links WHERE entity_type = 'action' AND entity_id = $1`, [record.action_id]);
+    await pool.query('DELETE FROM actions WHERE id = $1', [record.action_id]);
   }
 
   // Embedding cleanup: financial_record embeddings are cascade-deleted by the
