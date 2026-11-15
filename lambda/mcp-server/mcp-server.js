@@ -2317,14 +2317,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const role = await memberRole(cognitoUserId, accessibleOrgIds[0]);
         if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can add organizations.');
         if (!create_anyway) {
+          // Never creates: the person confirms the name first, whether or not anything is similar.
           const similar = await findSimilarOrganizations({ cognitoUserId, name });
-          if (similar.length > 0) {
-            return { content: [{ type: 'text', text: JSON.stringify({
-              created: false,
-              similar_organizations: similar,
-              next: 'Nothing was created. If one of these is it, use its id. Otherwise ask the person, then call again with create_anyway true.',
-            }, null, 2) }] };
-          }
+          return { content: [{ type: 'text', text: JSON.stringify({
+            created: false,
+            similar_organizations: similar,
+            next: similar.length > 0
+              ? 'Nothing was created. If one of these is it, use its id. Otherwise ask the person, then call again with create_anyway true.'
+              : 'Nothing similar exists and nothing was created. Ask the person to confirm the name, then call again with create_anyway true.',
+          }, null, 2) }] };
         }
         const created = await createOrganization({ cognitoUserId, name });
         console.log('create_organization: created', created.id);

@@ -94,14 +94,14 @@ export async function deleteFinancialRecord({ cognitoUserId, orgId, recordId }) 
 
 // Organizations with a name like this one (id and name only, across all
 // organizations), and a new one when none has the same name. The actions
-// service refuses an exact repeat and does not make the creator a member
-// (a super-admin is seeded as in the admin flow).
+// service refuses an exact repeat. A vendor's organization has no people of ours,
+// so the creator is never made a member of it (seed_member: false), even a super-admin.
 export async function findSimilarOrganizations({ cognitoUserId, name }) {
   return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', {}, { cognitoUserId }, { method: 'GET', query: { name } })).data;
 }
 
 export async function createOrganization({ cognitoUserId, name }) {
-  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name }, { cognitoUserId })).data;
+  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name, seed_member: false }, { cognitoUserId })).data;
 }
 
 // The items given become the record's line items, in the record's org (orgId):

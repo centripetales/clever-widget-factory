@@ -223,7 +223,7 @@ async function handleTransactionAction({ httpMethod, recordId, isDraft, body, au
 
 // GET  /positive-sum/organizations?name= — similar names from all organizations, names only
 // POST /positive-sum/organizations       — create one that does not exist yet
-async function handleOrganizations({ httpMethod, name, auth, dbConfig }) {
+async function handleOrganizations({ httpMethod, name, auth, dbConfig, seedMember = true }) {
   const wanted = text(name);
   if (!wanted) throw new HttpError(400, 'name is required');
   return withClient(dbConfig, async client => {
@@ -242,8 +242,9 @@ async function handleOrganizations({ httpMethod, name, auth, dbConfig }) {
          VALUES ($1, NULL, true, $2, NOW(), NOW()) RETURNING id, name`,
         [wanted, JSON.stringify({ created_by: auth.userId })]
       );
-      // The creator is not made a member; a super-admin is seeded as in the admin flow.
-      if (auth.isSuperAdmin) {
+      // The creator is not made a member; a super-admin is seeded as in the admin flow,
+      // unless the caller says not to (a vendor's organization has no people of ours).
+      if (auth.isSuperAdmin && seedMember) {
         await client.query(
           `INSERT INTO organization_members
              (organization_id, user_id, cognito_user_id, role, super_admin, is_active, full_name, email, favorite_color, created_at)

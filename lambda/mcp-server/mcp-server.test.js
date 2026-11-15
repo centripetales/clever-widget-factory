@@ -1045,16 +1045,17 @@ describe('create_organization', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
   const role = (r) => (sql) => (sql.includes('SELECT role') && r ? [{ role: r }] : []);
 
-  test('creates an organization when no similar name exists', async () => {
+  test('the first call creates nothing even when no similar name exists; create_anyway creates', async () => {
     rows = role('contributor');
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
-    const result = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince' } });
-    assert.strictEqual(result.isError, undefined);
+    const first = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince' } });
+    assert.strictEqual(first.isError, undefined);
+    assert.strictEqual(JSON.parse(first.content[0].text).created, false);
+    assert.deepStrictEqual(invocations.map((i) => i.event.httpMethod), ['GET']);
+    const result = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince', create_anyway: true } });
     assert.deepStrictEqual(JSON.parse(result.content[0].text), { created: true, organization_id: 'org-new', name: 'Prince' });
-    assert.deepStrictEqual(invocations.map((i) => [i.event.httpMethod, i.event.path]), [
-      ['GET', '/api/positive-sum/organizations'], ['POST', '/api/positive-sum/organizations'],
-    ]);
-    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { name: 'Prince' });
+    assert.deepStrictEqual(invocations.map((i) => i.event.httpMethod), ['GET', 'POST']);
+    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { name: 'Prince', seed_member: false });
   });
 
   test('similar names come back and nothing is created until create_anyway', async () => {

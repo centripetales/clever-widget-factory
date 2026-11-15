@@ -157,7 +157,7 @@ exports.handler = async (event) => {
           isSuperAdmin: hasPermission(authContext, 'data:read:all'),
         };
         const { statusCode, data } = organizationsRoute
-          ? await handleOrganizations({ httpMethod, name: httpMethod === 'GET' ? queryStringParameters?.name : body.name, auth, dbConfig })
+          ? await handleOrganizations({ httpMethod, name: httpMethod === 'GET' ? queryStringParameters?.name : body.name, auth, dbConfig, seedMember: body.seed_member !== false })
           : await handleTransactionAction({ httpMethod, recordId: transactionRoute[1], isDraft: !!transactionRoute[2], body, auth, dbConfig });
         // A new action from a transaction gets its rewards built straight away;
         // the action is saved either way, and the person can rebuild.
