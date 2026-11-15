@@ -16,11 +16,12 @@ async function invoke(functionName, payload) {
   return reply;
 }
 
-async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId } = {}) {
+async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId, query } = {}) {
   const authorizer = await invoke(AUTHORIZER, { contextFor: cognitoUserId });
   const reply = await invoke(functionName, {
     httpMethod: method,
     path,
+    queryStringParameters: query,
     pathParameters: id ? { id } : snapshotId ? { snapshot_id: snapshotId } : undefined,
     headers: orgId ? { 'X-Organization-Id': orgId } : {},
     body: JSON.stringify(body),
@@ -89,6 +90,18 @@ export async function updateFinancialRecord({ cognitoUserId, orgId, recordId, ch
 
 export async function deleteFinancialRecord({ cognitoUserId, orgId, recordId }) {
   return invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', id: recordId });
+}
+
+// Organizations with a name like this one (id and name only, across all
+// organizations), and a new one when none has the same name. The actions
+// service refuses an exact repeat and does not make the creator a member
+// (a super-admin is seeded as in the admin flow).
+export async function findSimilarOrganizations({ cognitoUserId, name }) {
+  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', {}, { cognitoUserId }, { method: 'GET', query: { name } })).data;
+}
+
+export async function createOrganization({ cognitoUserId, name }) {
+  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name }, { cognitoUserId })).data;
 }
 
 // A new tool or part, through the parts and tools service as the app's add

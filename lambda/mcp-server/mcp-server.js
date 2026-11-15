@@ -8,6 +8,7 @@ import {
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
   createModel, linkModel, createMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
+  findSimilarOrganizations, createOrganization,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -1928,6 +1929,54 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       } catch (err) {
         console.log('create_asset failed:', err.message);
         return { content: [{ type: 'text', text: `Could not add the asset: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_organization',
+    {
+      title: 'Add an organization',
+      description:
+        'Add an organization the farm deals with, e.g. a seller like "Prince" or a community or agency. ' +
+        'It starts with no members; you are not made a member of it. Organizations are shared across CWF, ' +
+        'so first call with create_anyway unset: organizations with a similar name come back and nothing is ' +
+        'created. If one of them is the same organization, use it. Otherwise read the name back to the ' +
+        'person and only call again with create_anyway true once they say yes.',
+      inputSchema: {
+        name: z.string().min(1).describe('The organization\'s name as people call it, e.g. "Prince Sand and Gravel"'),
+        create_anyway: z.boolean().optional().describe('true once the person has confirmed none of the similar organizations is the one'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ name, create_anyway }) => {
+      console.log('create_organization called with:', JSON.stringify({ name, create_anyway }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return {
+          content: [{ type: 'text', text: 'This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow adding organizations.' }],
+          isError: true,
+        };
+      }
+      try {
+        const role = await memberRole(cognitoUserId, accessibleOrgIds[0]);
+        if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can add organizations.');
+        if (!create_anyway) {
+          const similar = await findSimilarOrganizations({ cognitoUserId, name });
+          if (similar.length > 0) {
+            return { content: [{ type: 'text', text: JSON.stringify({
+              created: false,
+              similar_organizations: similar,
+              next: 'Nothing was created. If one of these is it, use its id. Otherwise ask the person, then call again with create_anyway true.',
+            }, null, 2) }] };
+          }
+        }
+        const created = await createOrganization({ cognitoUserId, name });
+        console.log('create_organization: created', created.id);
+        return { content: [{ type: 'text', text: JSON.stringify({ created: true, organization_id: created.id, name: created.name }, null, 2) }] };
+      } catch (err) {
+        console.log('create_organization failed:', err.message);
+        return { content: [{ type: 'text', text: `Could not add the organization: ${err.message}` }], isError: true };
       }
     }
   );

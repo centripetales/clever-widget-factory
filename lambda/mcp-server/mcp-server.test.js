@@ -64,6 +64,12 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   if (command.input.FunctionName === 'cwf-core-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'h-1' }, part: { id: body.part_id, current_quantity: '8.000' } }) })) };
   }
+  if (event.path.endsWith('/positive-sum/organizations')) {
+    if (event.httpMethod === 'GET') {
+      return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: event.queryStringParameters.name === 'Prince Sand' ? [{ id: 'org-prince', name: 'Prince' }] : [] }) })) };
+    }
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ data: { id: 'org-new', name: body.name } }) })) };
+  }
   if (event.httpMethod === 'PUT') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ data: { id: event.pathParameters.id, title: body.title ?? 'Old title' } }) })) };
   }
@@ -812,6 +818,43 @@ describe('get_asset', () => {
     const client = await connect(['org-a']);
     const result = await client.callTool({ name: 'get_asset', arguments: { asset_id: 'x' } });
     assert.strictEqual(result.isError, true);
+  });
+});
+
+describe('create_organization', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const role = (r) => (sql) => (sql.includes('SELECT role') && r ? [{ role: r }] : []);
+
+  test('creates an organization when no similar name exists', async () => {
+    rows = role('contributor');
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince' } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), { created: true, organization_id: 'org-new', name: 'Prince' });
+    assert.deepStrictEqual(invocations.map((i) => [i.event.httpMethod, i.event.path]), [
+      ['GET', '/api/positive-sum/organizations'], ['POST', '/api/positive-sum/organizations'],
+    ]);
+    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { name: 'Prince' });
+  });
+
+  test('similar names come back and nothing is created until create_anyway', async () => {
+    rows = role('admin');
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const first = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince Sand' } });
+    assert.strictEqual(JSON.parse(first.content[0].text).created, false);
+    assert.strictEqual(invocations.length, 1);
+    const second = await client.callTool({ name: 'create_organization', arguments: { name: 'Prince Sand', create_anyway: true } });
+    assert.strictEqual(JSON.parse(second.content[0].text).created, true);
+    assert.strictEqual(invocations[1].event.httpMethod, 'POST');
+  });
+
+  test('refused for a viewer and for a read-only connection', async () => {
+    rows = role('viewer');
+    const viewer = await connect(['org-a'], 'Stefan Hamilton', writer);
+    assert.strictEqual((await viewer.callTool({ name: 'create_organization', arguments: { name: 'Prince' } })).isError, true);
+    const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    assert.strictEqual((await reader.callTool({ name: 'create_organization', arguments: { name: 'Prince' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
   });
 });
 
