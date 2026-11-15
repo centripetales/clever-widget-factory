@@ -53,11 +53,11 @@ async function queryJSON(sql) {
 
 // Actions made from a transaction are reached only via the transaction, so
 // they stay out of action lists (docs/design/POSITIVE_SUM.md §2.6).
-const NOT_FROM_TRANSACTION = `NOT EXISTS (
+const NOT_FROM_TRANSACTION = `(NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id) AND NOT EXISTS (
   SELECT 1 FROM state_links tl JOIN states ts ON ts.id = tl.state_id
   WHERE tl.entity_type = 'action' AND tl.entity_id = a.id
     AND ts.state_text LIKE '{"type":"positive_sum.transaction_context"%'
-)`;
+))`;
 
 // Positive Sum helpers shared by the web routes and the Maxwell action group.
 function queueActionEmbedding(action) {

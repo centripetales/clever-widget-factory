@@ -807,6 +807,7 @@ async function handlePositiveSum({ event, authContext, dbConfig, queueEmbedding,
       const { rows: mineRows } = await client.query(
         `SELECT ${ACTION_COLUMNS} FROM actions
           WHERE organization_id = ANY($1::uuid[]) AND created_by = $2 AND NOT (id = ANY($3::uuid[]))
+            AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = actions.id)
           ORDER BY created_at DESC`,
         [orgIds, userId, Object.keys(records.contexts)]
       );

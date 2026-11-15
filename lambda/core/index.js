@@ -2285,7 +2285,7 @@ exports.handler = async (event) => {
       const impact = {};
       const impactQueries = [
         { key: 'members',  sql: 'SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND is_active = true' },
-        { key: 'actions',  sql: 'SELECT COUNT(*) FROM actions WHERE organization_id = $1' },
+        { key: 'actions',  sql: 'SELECT COUNT(*) FROM actions a WHERE a.organization_id = $1 AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)' },
         { key: 'missions', sql: 'SELECT COUNT(*) FROM missions WHERE organization_id = $1' },
         { key: 'tools',    sql: 'SELECT COUNT(*) FROM tools WHERE organization_id = $1' },
         { key: 'issues',   sql: 'SELECT COUNT(*) FROM issues WHERE organization_id = $1' },
@@ -3775,8 +3775,8 @@ exports.handler = async (event) => {
     // Actions endpoint with full details
     if (httpMethod === 'GET' && path.endsWith('/actions')) {
       const { limit, offset = 0, assigned_to, status, id, is_exploration } = event.queryStringParameters || {};
-      
-      let whereConditions = [];
+
+      let whereConditions = [`NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`];
       if (id) {
         whereConditions.push(`a.id = '${id}'`);
       }
@@ -4430,7 +4430,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) {
@@ -4510,7 +4511,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) whereConditions.push(`a.location = '${escapeLiteral(location)}'`);
@@ -4711,7 +4713,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) whereConditions.push(`a.location = '${escapeLiteral(location)}'`);
