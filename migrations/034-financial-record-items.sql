@@ -26,21 +26,8 @@ CREATE TABLE financial_record_items (
 CREATE INDEX financial_record_items_record_idx ON financial_record_items (financial_record_id);
 CREATE INDEX financial_record_items_org_idx ON financial_record_items (organization_id);
 
--- Embeddings of item_text, keyed by the item id like every other entity type.
--- The constraint is rebuilt from the types already in the table plus the known
--- ones, so a type added by an earlier migration is not lost.
-DO $$
-DECLARE types text[];
-BEGIN
-  SELECT array_agg(DISTINCT t) INTO types FROM (
-    SELECT entity_type AS t FROM unified_embeddings
-    UNION SELECT unnest(ARRAY['part', 'tool', 'action', 'issue', 'policy', 'action_existing_state', 'state',
-                              'financial_record', 'state_space_model', 'action_policy', 'financial_record_item'])
-  ) s;
-  ALTER TABLE unified_embeddings DROP CONSTRAINT IF EXISTS unified_embeddings_entity_type_check;
-  EXECUTE format('ALTER TABLE unified_embeddings ADD CONSTRAINT unified_embeddings_entity_type_check CHECK (entity_type = ANY (%L::text[]))', types);
-END $$;
-
+-- Embeddings of item_text are keyed by the item id like every other entity
+-- type; unified_embeddings has no entity_type constraint to extend.
 CREATE TRIGGER financial_record_items_delete_embedding
   AFTER DELETE ON financial_record_items
   FOR EACH ROW
