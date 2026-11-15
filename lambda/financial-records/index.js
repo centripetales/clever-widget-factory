@@ -470,8 +470,14 @@ async function updateRecord(event, id, authContext) {
     }
   }
 
+  // The vendor is an organization (any active one), or null to clear it
+  if (body.vendor_organization_id) {
+    const vendor = await pool.query('SELECT 1 FROM organizations WHERE id = $1 AND is_active', [body.vendor_organization_id]);
+    if (vendor.rows.length === 0) return error('vendor_organization_id is not an organization', 400);
+  }
+
   // Editable fields on financial_records table ONLY
-  const editableFields = ['transaction_date', 'amount', 'payment_method'];
+  const editableFields = ['transaction_date', 'amount', 'payment_method', 'vendor_organization_id'];
 
   // Collect changed fields for audit trail
   const changes = [];

@@ -2,9 +2,13 @@
 -- with quantity, unit, the line's amount and its unit price, so prices can be
 -- searched (semantic search on item_text) and compared. A shared cost such as
 -- delivery is its own row with no quantity. The receipt photo stays on the
--- record's observation as the evidence. See the Price Models spec.
+-- record's observation as the evidence. The seller belongs to the transaction,
+-- so a record gets one optional vendor organization that all its items share.
+-- See the Price Models spec.
 
 BEGIN;
+
+ALTER TABLE financial_records ADD COLUMN vendor_organization_id uuid REFERENCES organizations(id);
 
 CREATE TABLE financial_record_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

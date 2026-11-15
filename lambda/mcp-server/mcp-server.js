@@ -960,6 +960,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       // lambda/financial-records).
       const columns = `
         fr.id, fr.transaction_date::text AS transaction_date, fr.amount, fr.payment_method,
+        fr.vendor_organization_id::text AS vendor_organization_id,
+        (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
         d.id AS description_state_id, d.state_text AS description,
         (SELECT om.full_name FROM organization_members om
           WHERE om.cognito_user_id::text = fr.created_by::text AND om.organization_id = fr.organization_id LIMIT 1) AS recorded_by`;
@@ -1020,6 +1022,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             direction: amount < 0 ? 'in' : 'out',
             amount_php: Math.abs(amount),
             payment_method: r.payment_method,
+            ...(r.vendor_organization_id && { vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name } }),
             description: r.description,
             observation_id: r.description_state_id,
             recorded_by: r.recorded_by,
@@ -1108,10 +1111,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         amount_php: z.number().refine((n) => n !== 0, 'Amount cannot be zero').optional().describe('Amount in pesos: positive for money paid out, negative for money coming in (a sale or addition)'),
         payment_method: z.enum(['Cash', 'SCash', 'GCash', 'Wise']).optional(),
         description: z.string().min(1).optional().describe('What it was for'),
+        vendor_organization_id: z.string().nullable().optional().describe('The organization it was paid to, e.g. the seller. Its id comes from create_organization, which lists organizations with similar names without creating one; null clears it'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ financial_record_id, transaction_date, amount_php, payment_method, description }) => {
+    async ({ financial_record_id, transaction_date, amount_php, payment_method, description, vendor_organization_id }) => {
       console.log('update_financial_record called with:', JSON.stringify({ financial_record_id, transaction_date, amount_php, payment_method }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -1125,9 +1129,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         ...(amount_php !== undefined && { amount: amount_php }),
         ...(payment_method !== undefined && { payment_method }),
         ...(description !== undefined && { description }),
+        ...(vendor_organization_id !== undefined && { vendor_organization_id }),
       };
       if (Object.keys(changes).length === 0) {
-        return { content: [{ type: 'text', text: 'Nothing to change — give at least one of transaction_date, amount_php, payment_method, description.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Nothing to change — give at least one of transaction_date, amount_php, payment_method, description, vendor_organization_id.' }], isError: true };
       }
       try {
         const record = await findFinancialRecord(financial_record_id);
@@ -1141,6 +1146,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           amount_php: Number(updated.amount),
           payment_method: updated.payment_method,
           description: updated.description,
+          vendor_organization_id: updated.vendor_organization_id ?? null,
         }, null, 2) }] };
       } catch (err) {
         console.log('update_financial_record failed:', err.message);
@@ -1261,6 +1267,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     item_id: r.id,
     financial_record_id: r.financial_record_id,
     ...(r.transaction_date && { transaction_date: String(r.transaction_date).slice(0, 10) }),
+    ...(r.vendor_organization_id && { vendor: { organization_id: r.vendor_organization_id, name: r.vendor_name } }),
     item_text: r.item_text,
     quantity: r.quantity === null ? null : Number(r.quantity),
     unit: r.unit,
@@ -1292,6 +1299,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         return { content: [{ type: 'text', text: 'Give a query to search, or a financial_record_id to list one expense\'s items.' }], isError: true };
       }
       const columns = `i.id::text AS id, i.financial_record_id::text AS financial_record_id, fr.transaction_date::text AS transaction_date,
+        fr.vendor_organization_id::text AS vendor_organization_id,
+        (SELECT vo.name FROM organizations vo WHERE vo.id = fr.vendor_organization_id) AS vendor_name,
         i.item_text, i.quantity, i.unit, i.amount, i.unit_price`;
       try {
         const results = await withDbClient(async (client) => {

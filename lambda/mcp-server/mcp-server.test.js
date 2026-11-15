@@ -350,6 +350,14 @@ describe('update_financial_record and delete_financial_record', () => {
     assert.match(result.content[0].text, /stargazer-farm\.com\/financial-records\/fr-1/);
   });
 
+  test('an edit can set the vendor organization, or clear it with null', async () => {
+    rows = [{ id: 'fr-1', organization_id: 'org-a' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1', vendor_organization_id: 'org-prince' } });
+    await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1', vendor_organization_id: null } });
+    assert.deepStrictEqual(invocations.map((i) => JSON.parse(i.event.body)), [{ vendor_organization_id: 'org-prince' }, { vendor_organization_id: null }]);
+  });
+
   test('an edit with nothing to change is refused', async () => {
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
     const result = await client.callTool({ name: 'update_financial_record', arguments: { financial_record_id: 'fr-1' } });
@@ -453,6 +461,13 @@ describe('set_financial_record_items and search_prices', () => {
       item_id: 'i-1', financial_record_id: 'fr-1', transaction_date: '2023-06-23', item_text: 'fine sand', quantity: 6, unit: 'bag', amount_php: 270, unit_price_php: 45,
     }]);
     assert.strictEqual((await client.callTool({ name: 'search_prices', arguments: {} })).isError, true);
+  });
+
+  test('search_prices shows the expense\'s vendor when it has one', async () => {
+    rows = [{ id: 'i-1', financial_record_id: 'fr-1', transaction_date: '2026-11-01', vendor_organization_id: 'org-prince', vendor_name: 'Prince', item_text: 'screened sand', quantity: '1', unit: 'truck', amount: '3000', unit_price: '3000' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const [item] = JSON.parse((await client.callTool({ name: 'search_prices', arguments: { financial_record_id: 'fr-1' } })).content[0].text);
+    assert.deepStrictEqual(item.vendor, { organization_id: 'org-prince', name: 'Prince' });
   });
 });
 
