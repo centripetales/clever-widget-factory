@@ -10,6 +10,8 @@
 import { apiService } from '../lib/apiService';
 import type {
   FinancialRecord,
+  FinancialRecordFuelFill,
+  FinancialRecordMachine,
   FinancialRecordFilters,
   FinancialRecordListResponse,
 } from '../types/financialRecords';
@@ -31,6 +33,9 @@ export interface UpdateFinancialRecordRequest {
 }
 
 export interface ExtractedPurchase {
+  /** Set for a purchase already saved: it is updated, not replaced, and keeps its part */
+  id?: string;
+  part_id?: string | null;
   purchase_text: string;
   quantity: number | null;
   unit: string | null;
@@ -39,40 +44,47 @@ export interface ExtractedPurchase {
 }
 
 /** A fuel fill read from the photos: what the model observed, and the rate it gives (km/l, or L/h on an hour meter) */
-export interface ExtractedMachine {
-  id: string;
-  name: string;
-  meter_name: string;
-  meter_unit: string;
-  rate_unit: string;
-  meter_metric_id: string;
-  rate_metric_id: string | null;
-  fuel_metric_id: string | null;
-}
+export type ExtractedMachine = FinancialRecordMachine;
 
 export interface ExtractedFuelFill {
   machine: ExtractedMachine;
   meter_reading: number | null;
+  /** What the model read, when it was corrected to fit the previous reading */
+  meter_reading_read: number | null;
   liters: number | null;
   octane: string | null;
-  observed: { meter_photo: boolean; pump_photo: boolean; receipt_photo: boolean; full_tank: boolean };
   previous: { meter_reading: number; date: string } | null;
   rate: number | null;
 }
 
-/** A policy the record follows, and what it asks for that was not observed in the photos */
+/** A policy the record follows */
 export interface FollowedPolicy {
   id: string;
   title: string;
-  not_observed: string[];
+}
+
+/** What the model could see in the photos: the odometer, the receipt, the fuel pump */
+export interface ObservedParts {
+  odometer: boolean;
+  receipt: boolean;
+  pump: boolean;
 }
 
 export interface ExtractedReading {
   purchases: ExtractedPurchase[];
   fuel: ExtractedFuelFill | null;
+  observed: ObservedParts;
   machines: ExtractedMachine[];
   policies: FollowedPolicy[];
 }
+
+const toReading = (data: ExtractedReading): ExtractedReading => ({
+  purchases: data.purchases,
+  fuel: data.fuel ?? null,
+  observed: data.observed,
+  machines: data.machines ?? [],
+  policies: data.policies ?? [],
+});
 
 export class FinancialRecordsService {
   /**
@@ -186,24 +198,31 @@ export class FinancialRecordsService {
   }
 
   /**
-   * Purchases read from the record's photos (a draft: nothing is saved)
+   * What is read from a saved record's photos (a draft to confirm: the reading is kept as a perspective)
    */
   async extractPurchases(id: string): Promise<ExtractedReading> {
     const response = await apiService.post(`/financial-records/${id}/purchases/extract`, {});
-    const { purchases, fuel, machines, policies } = response.data || response;
-    return { purchases, fuel: fuel ?? null, machines: machines ?? [], policies: policies ?? [] };
+    return toReading(response.data || response);
   }
 
   /**
-   * The policies an action follows
+   * What is read from photos before the expense is saved (nothing is written)
    */
-  async getActionPolicyIds(actionId: string): Promise<string[]> {
-    const response = await apiService.get(`/actions/${actionId}/policies`);
-    return ((response.data || response).policies as { id: string }[]).map((policy) => policy.id);
+  async readPhotos(data: { photo_urls: string[]; description: string; amount: number; transaction_date: string }): Promise<ExtractedReading> {
+    const response = await apiService.post('/financial-records/read-photos', data);
+    return toReading(response.data || response);
   }
 
-  async setActionPolicyIds(actionId: string, policyIds: string[]): Promise<void> {
-    await apiService.put(`/actions/${actionId}/policies`, { policy_ids: policyIds });
+  /**
+   * The fuel fill the person confirmed or corrected: the vehicle and its readings. With no vehicle
+   * the record is not a fuel fill. The policies given are added to those its action follows.
+   */
+  async saveFuelFill(
+    id: string,
+    fill: { machine_id: string | null; meter_reading: number | null; liters: number | null; policy_ids?: string[] }
+  ): Promise<FinancialRecordFuelFill | null> {
+    const response = await apiService.put(`/financial-records/${id}/fuel-fill`, fill);
+    return (response.data || response).fuel_fill ?? null;
   }
 
   /**

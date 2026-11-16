@@ -27,8 +27,6 @@ import {
 import { ArrowLeft, Loader2, Pencil, Trash2, X, Save, ScanText } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { financialRecordsService, type ExtractedReading } from '@/services/financialRecordsService';
-import { apiService } from '@/lib/apiService';
-import { snapshotService } from '@/services/snapshotService';
 import { financialRecordKeys } from '@/hooks/useFinancialRecords';
 import { useAuth } from '@/hooks/useCognitoAuth';
 import {
@@ -44,6 +42,8 @@ import {
 } from '@/components/shared/PhotoUploadPanel';
 import { getImageUrl, getThumbnailUrl, openImage } from '@/lib/imageUtils';
 import { ReadingReview } from '@/components/ReadingReview';
+import { FuelingPerspective } from '@/components/FuelingPerspective';
+import { FuelFillFields } from '@/components/FuelFillFields';
 import { TransactionRewards } from '@/components/positiveSum/TransactionRewards';
 import type { FinancialRecordEdit } from '@/types/financialRecords';
 
@@ -192,7 +192,21 @@ export default function FinancialRecordDetail() {
     if (!id) return;
     setIsExtracting(true);
     try {
-      setReading(await financialRecordsService.extractPurchases(id));
+      const result = await financialRecordsService.extractPurchases(id);
+      // Purchases already saved are kept as they are: only what else was read (fuel fill, policies) is added
+      const saved = record?.purchases ?? [];
+      setReading(saved.length === 0 ? result : {
+        ...result,
+        purchases: saved.map((purchase) => ({
+          id: purchase.id,
+          part_id: purchase.part_id,
+          purchase_text: purchase.purchase_text,
+          quantity: purchase.quantity === null ? null : Number(purchase.quantity),
+          unit: purchase.unit,
+          unit_price: purchase.unit_price === null ? null : Number(purchase.unit_price),
+          amount: Number(purchase.amount),
+        })),
+      });
     } catch (err) {
       console.error('Failed to read purchases from photos:', err);
       toast({
@@ -205,47 +219,29 @@ export default function FinancialRecordDetail() {
     }
   };
 
-  // The policies the expense follows are linked to its action, and one note records what was observed in
-  // the photos: the fuel fill's readings (on the vehicle) and what each policy asks for that was not observed
-  const saveReading = async (result: ExtractedReading, recordId: string, actionId: string | null | undefined, transactionDate: string) => {
+  // What the person confirmed of the reading: the fuel fill (the vehicle and its readings, saved on the
+  // expense's description) and the policy the expense follows
+  const saveReading = async (result: ExtractedReading, recordId: string) => {
     const { fuel, policies } = result;
-    if (actionId && policies.length > 0) {
-      const followed = await financialRecordsService.getActionPolicyIds(actionId);
-      await financialRecordsService.setActionPolicyIds(actionId, [...new Set([...followed, ...policies.map((policy) => policy.id)])]);
-    }
     if (!fuel && policies.length === 0) return;
-
-    const seen = (label: string, observed: boolean, detail?: string) =>
-      `${label}: ${observed ? ['Observed', detail].filter(Boolean).join(', ') : 'Not observed'}`;
-    const lines = ['Read from the photos by Bedrock. What was observed, not a judgement:'];
-    if (fuel) {
-      lines.push(
-        seen(`${fuel.machine.meter_name} photo`, fuel.observed.meter_photo, fuel.meter_reading !== null ? `${fuel.meter_reading} ${fuel.machine.meter_unit}` : undefined),
-        seen('Pump photo', fuel.observed.pump_photo, [fuel.liters !== null ? `${fuel.liters} L` : '', fuel.octane ? `octane ${fuel.octane}` : ''].filter(Boolean).join(', ')),
-        seen('Receipt photo', fuel.observed.receipt_photo),
-        seen('Full tank', fuel.observed.full_tank),
-      );
-    }
-    for (const policy of policies) {
-      lines.push(`Policy "${policy.title}": ${policy.not_observed.length > 0 ? `not observed: ${policy.not_observed.join(', ')}` : 'everything it asks for was observed'}`);
-    }
-    const created = await apiService.post<{ data: { id: string } }>('/states', {
-      state_text: lines.join('\n'),
-      photos: [],
-      captured_at: transactionDate,
-      links: [
-        ...(fuel ? [{ entity_type: 'tool', entity_id: fuel.machine.id }] : []),
-        { entity_type: 'financial_record', entity_id: recordId },
-      ],
+    await financialRecordsService.saveFuelFill(recordId, {
+      machine_id: fuel?.machine.id ?? null,
+      meter_reading: fuel?.meter_reading ?? null,
+      liters: fuel?.liters ?? null,
+      policy_ids: policies.map((policy) => policy.id),
     });
-    const stateId = created?.data?.id;
-    if (!stateId || !fuel) return;
-    // Only the raw readings are saved: km/l is worked out from them, not a reading of its own
-    if (fuel.meter_reading !== null) {
-      await snapshotService.createSnapshot(stateId, { metric_id: fuel.machine.meter_metric_id, value: String(fuel.meter_reading) });
-    }
-    if (fuel.liters !== null && fuel.machine.fuel_metric_id) {
-      await snapshotService.createSnapshot(stateId, { metric_id: fuel.machine.fuel_metric_id, value: String(fuel.liters) });
+  };
+
+  // A correction to the fuel fill, made in its fields
+  const handleSaveFuelFill = async (fill: { machine_id: string | null; meter_reading: number | null; liters: number | null }) => {
+    if (!id) return;
+    try {
+      await financialRecordsService.saveFuelFill(id, fill);
+      await queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(id) });
+      toast({ title: 'Fuel fill saved' });
+    } catch (err) {
+      console.error('Failed to save the fuel fill:', err);
+      toast({ title: 'Error', description: 'Failed to save the fuel fill. Please try again.', variant: 'destructive' });
     }
   };
 
@@ -254,7 +250,7 @@ export default function FinancialRecordDetail() {
     setIsSaving(true);
     try {
       await financialRecordsService.savePurchases(id, extracted);
-      if (reading && record) await saveReading(reading, id, record.action_id, record.transaction_date);
+      if (reading) await saveReading(reading, id);
       await queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(id) });
       setReading(null);
       toast({ title: 'Purchases saved' });
@@ -539,6 +535,19 @@ export default function FinancialRecordDetail() {
                   <p className="font-medium">{record.vendor.name}</p>
                 </div>
               )}
+              {record.policies && record.policies.length > 0 && (
+                <div className="sm:col-span-2">
+                  <p className="text-sm text-muted-foreground">{record.policies.length === 1 ? 'Policy' : 'Policies'}</p>
+                  <div className="space-y-2">
+                    {record.policies.map((policy) => (
+                      <div key={policy.id}>
+                        <p className="font-medium">{policy.title}</p>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{policy.description_text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -568,8 +577,20 @@ export default function FinancialRecordDetail() {
         </Card>
       )}
 
-      {/* Read purchases from the photos (only when none are saved yet), confirmed before saving */}
-      {!isEditing && canEdit && (!record.purchases || record.purchases.length === 0) && record.photos && record.photos.length > 0 && (
+      {/* The fuel fill: what was read from the photos fills it, and a mistake is corrected here */}
+      {!isEditing && record.machines && record.machines.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Fuel fill</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FuelFillFields fuelFill={record.fuel_fill ?? null} machines={record.machines} onSave={handleSaveFuelFill} disabled={!canEdit} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Read purchases, the fuel fill and policies from the photos (until confirmed once) */}
+      {!isEditing && canEdit && (!record.purchases || record.purchases.length === 0 || !record.policies || record.policies.length === 0) && record.photos && record.photos.length > 0 && (
         <Card className="mt-4">
           <CardHeader>
             <CardTitle>Purchases</CardTitle>
@@ -602,11 +623,25 @@ export default function FinancialRecordDetail() {
         </Card>
       )}
 
-      {/* Notes: observations added after the description, e.g. what Claude found reading the receipt */}
+      {/* Perspectives: what a model read from the photos, and which one */}
+      {!isEditing && record.perspectives && record.perspectives.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Perspectives</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {record.perspectives.map((perspective) => (
+              <FuelingPerspective key={perspective.id} perspective={perspective} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Observations added after the description */}
       {!isEditing && record.notes && record.notes.length > 0 && (
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>Notes</CardTitle>
+            <CardTitle>Observations</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {record.notes.map((note) => (

@@ -9,6 +9,8 @@ const error = (message, statusCode = 500) => errorResponse(statusCode, message);
 
 const sqs = new SQSClient({ region: 'us-west-2' });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
+// The queue observations are analyzed from (rsp-worker): saving an expense with photos queues its reading
+const PERSPECTIVES_QUEUE_URL = process.env.PERSPECTIVES_QUEUE_URL;
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -63,6 +65,11 @@ async function recomputeCashBalances(dbClient, organizationId) {
 }
 
 exports.handler = async (event) => {
+  // The automatic reading, asked for by rsp-worker when an expense with photos is saved (not an HTTP call)
+  if (event.internal === 'analyze_expense_photos' && !event.httpMethod) {
+    return await analyzeExpensePhotos(event.recordId, event.organizationId);
+  }
+
   console.log('cwf-financial-records-lambda invoked:', {
     httpMethod: event.httpMethod,
     path: event.path,
@@ -91,6 +98,16 @@ exports.handler = async (event) => {
   const permissions = authContext.permissions || [];
 
   try {
+    // POST /api/financial-records/read-photos - the reading of photos before the expense is saved
+    if (httpMethod === 'POST' && path === '/api/financial-records/read-photos') {
+      return await readPhotosBeforeSave(event, { organizationId });
+    }
+
+    // PUT /api/financial-records/:id/fuel-fill - the fuel fill the person confirmed or corrected
+    if (httpMethod === 'PUT' && pathParameters?.id && path.endsWith('/fuel-fill')) {
+      return await saveFuelFill(event, pathParameters.id, { organizationId, cognitoUserId, permissions });
+    }
+
     // POST /api/financial-records/:id/purchases/extract - purchases read from the photos (a draft, nothing saved)
     if (httpMethod === 'POST' && pathParameters?.id && path.endsWith('/purchases/extract')) {
       return await extractPurchases(pathParameters.id, { organizationId });
@@ -277,6 +294,19 @@ async function createRecord(event, authContext) {
       }))
       .then(() => console.log('Queued embedding for financial_record', createdRecord.id))
       .catch(err => console.error('Failed to queue embedding:', err));
+    }
+
+    // Its photos are read in the background (rsp-worker, as observations are analyzed): purchases,
+    // the fuel fill and its policy fill in what is still empty
+    if (photoRows.length > 0 && PERSPECTIVES_QUEUE_URL) {
+      try {
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: PERSPECTIVES_QUEUE_URL,
+          MessageBody: JSON.stringify({ stateId: createdState.id, perspective: 'EXPENSE_PHOTOS', recordId: createdRecord.id, organizationId })
+        }));
+      } catch (queueErr) {
+        console.error('Failed to queue the reading of the photos:', queueErr);
+      }
     }
 
     // Return the created record with description and photos populated from the state
@@ -475,7 +505,31 @@ async function getRecord(id, authContext) {
     [id, record.state_id]
   );
 
-  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, purchases: purchasesResult.rows, notes: notesResult.rows, vendor: vendorResult.rows[0] || null });
+  // The policies its action follows
+  const policiesResult = record.action_id
+    ? await pool.query(
+        'SELECT p.id, p.title, p.description_text, p.status FROM action_policies ap JOIN policy p ON p.id = ap.policy_id WHERE ap.action_id = $1 ORDER BY p.title',
+        [record.action_id]
+      )
+    : { rows: [] };
+
+  // Perspectives of its description: what was read from the photos, and by which model
+  const perspectivesResult = record.state_id
+    ? await pool.query(
+        'SELECT sp.id, sp.perspective_type, sp.content, sp.created_at, c.model_id, c.version FROM state_perspectives sp' +
+        ' JOIN llm_generation_configs c ON c.id = sp.llm_generation_config_id' +
+        ' WHERE sp.state_id = $1 AND sp.perspective_type = $2 AND sp.status = \'SUCCESS\' ORDER BY sp.created_at',
+        [record.state_id, EXPENSE_PHOTOS_PERSPECTIVE]
+      )
+    : { rows: [] };
+
+  // The fuel fill saved on it (the vehicle and its readings), editable; the vehicles to choose from
+  // are listed when it has one or its photos were read as a fuel fill
+  const fuelFill = await getFuelFill(id, organizationId);
+  const isFuel = fuelFill || perspectivesResult.rows.some((row) => row.content?.vehicle || row.content?.policy_ids?.length > 0);
+  const machines = isFuel ? (await vehiclesOf(organizationId)).map(machineInfo) : [];
+
+  return success({ ...record, photos: photosResult.rows, edits: editsResult.rows, purchases: purchasesResult.rows, notes: notesResult.rows, policies: policiesResult.rows, perspectives: perspectivesResult.rows, fuel_fill: fuelFill, machines, vendor: vendorResult.rows[0] || null });
 }
 
 async function updateRecord(event, id, authContext) {
@@ -793,6 +847,18 @@ const bedrock = new BedrockRuntimeClient({ region: 'us-west-2' });
 const MAX_EXTRACT_PHOTOS = 4;
 const ASSETS_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
 
+// What produced a perspective is kept with it: this model and these instructions (a new
+// version when they change) are an llm_generation_configs row each perspective points to.
+const EXTRACT_VERSION = 'expense-photos-v3';
+const EXTRACT_INFERENCE = { maxTokens: 1000, temperature: 0 };
+const EXTRACT_SYSTEM_PROMPT = `You read the photos attached to a financial record in the Philippines (amounts in ₱ pesos). You are given the person's description of it, the record's total, the machines we track (each with its meter) and our policies.
+Purchases: read the purchase lines from the receipt. Use the description only as context to help read unclear handwriting: the receipt is the source. Each line: purchase_text is the item as named, with any detail from the description that identifies it (e.g. the type of cement); quantity and unit as written; amount is the line's total price; unit_price only if written. Use null for what is not written. If the receipt shows only a total and no lines, give one line for the whole expense: the item the description names, with the record's total as its amount.
+Fuel: if this is fuel bought for one of the machines, fuel gives machine_id (chosen from the description and the photos), meter_reading, liters and octane; otherwise fuel is null. meter_reading is the machine's meter reading in the unit given (for an odometer, whole kilometers: leave out a last digit shown separately in a box or a different colour, that is tenths). liters is the amount dispensed, from the pump display or the receipt's quantity written with its decimals. Each is taken from the photos (null when not visible). octane is the grade shown, if any.
+Observed: report only what you can see in the photos, it is not a judgement. odometer is true if a photo shows a machine's meter, receipt if one shows a receipt, pump if one shows the pump's display. false means not observed.
+Policies: policy_ids lists each policy whose title or text describes what this record is (for example, fuel bought for one of the machines follows a policy about fueling a vehicle); none if no policy applies.
+Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|null,"unit":string|null,"unit_price":number|null,"amount":number}],"fuel":{"machine_id":string|null,"meter_reading":number|null,"liters":number|null,"octane":string|null}|null,"observed":{"odometer":boolean,"receipt":boolean,"pump":boolean},"policy_ids":[string]}`;
+const EXPENSE_PHOTOS_PERSPECTIVE = 'EXPENSE_PHOTOS';
+
 function imageFormat(bytes) {
   if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
   if (bytes[0] === 0xFF && bytes[1] === 0xD8) return 'jpeg';
@@ -800,19 +866,10 @@ function imageFormat(bytes) {
   return null;
 }
 
-// The purchases Bedrock reads from the record's photos, using the description
-// as context for unclear writing. A draft for the person to confirm: nothing
-// is saved here (confirming goes through PUT .../purchases).
-async function extractPurchases(recordId, { organizationId }) {
-  const recordResult = await pool.query(
-    'SELECT amount, transaction_date FROM financial_records WHERE id = $1 AND organization_id = $2',
-    [recordId, organizationId]
-  );
-  if (recordResult.rows.length === 0) return error('Record not found', 404);
-
-  // Vehicles are the tools that track an Odometer (km); the result goes to their km/l metric,
-  // and the liters to Fuel Consumed
-  const machines = (await pool.query(
+// The vehicles: tools that track an Odometer (km). The rate goes to their km/l metric
+// (a view, not saved), and the liters to Fuel Consumed.
+async function vehiclesOf(organizationId) {
+  return (await pool.query(
     `SELECT t.id, t.name, mm.metric_id AS meter_metric_id, mm.name AS meter_name, mm.unit AS meter_unit,
             CASE WHEN lower(mm.name) = 'odometer' THEN 'km/l' ELSE 'L/h' END AS rate_unit,
             (SELECT k.metric_id FROM metrics k WHERE k.entity_type = 'tool' AND k.entity_id = t.id AND k.active
@@ -822,55 +879,55 @@ async function extractPurchases(recordId, { organizationId }) {
       WHERE t.organization_id = $1 AND t.status != 'removed'`,
     [organizationId]
   )).rows;
+}
 
-  // The policies this organization has in force: what an action follows
-  const policies = (await pool.query(
+// The policies this organization has in force: what an action follows
+async function activePolicies(organizationId) {
+  return (await pool.query(
     `SELECT id, title, description_text FROM policy
       WHERE organization_id = $1 AND status = 'active'
         AND (effective_from IS NULL OR effective_from <= CURRENT_DATE) AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)`,
     [organizationId]
   )).rows;
+}
 
-  const stateLink = await pool.query(DESCRIPTION_STATE_LOOKUP, [recordId]);
-  const stateId = stateLink.rows[0]?.state_id;
-  const description = stateId
-    ? (await pool.query('SELECT state_text FROM states WHERE id = $1', [stateId])).rows[0]?.state_text
-    : null;
-  const photoRows = stateId
-    ? (await pool.query('SELECT photo_url FROM state_photos WHERE state_id = $1 ORDER BY photo_order LIMIT $2', [stateId, MAX_EXTRACT_PHOTOS])).rows
-    : [];
-  if (photoRows.length === 0) return error('This record has no photos to read', 400);
+// Reads the photos (nothing is written): the purchases, the fuel fill, what was observed and the
+// policies the record follows. The record may not exist yet (read before it is saved).
+async function readExpensePhotos({ organizationId, description, amount, transactionDate, photoUrls, excludeRecordId }) {
+  const machines = await vehiclesOf(organizationId);
+  const policies = await activePolicies(organizationId);
 
   const images = [];
-  for (const { photo_url } of photoRows) {
+  for (const photoUrl of photoUrls.slice(0, MAX_EXTRACT_PHOTOS)) {
     // Photos are stored as a full URL or as a key in the assets bucket (as the app reads them)
-    const url = /^https?:\/\//.test(photo_url) ? photo_url : `${ASSETS_BUCKET_URL}/${photo_url.replace(/^\//, '')}`;
+    const url = /^https?:\/\//.test(photoUrl) ? photoUrl : `${ASSETS_BUCKET_URL}/${photoUrl.replace(/^\//, '')}`;
     const response = await fetch(url);
-    if (!response.ok) return error(`Could not load photo ${photo_url}`, 502);
+    if (!response.ok) return { failure: error(`Could not load photo ${photoUrl}`, 502) };
     const bytes = new Uint8Array(await response.arrayBuffer());
     const format = imageFormat(bytes);
     if (format) images.push({ image: { format, source: { bytes } } });
   }
-  if (images.length === 0) return error('The photos are not in a format that can be read', 400);
+  if (images.length === 0) return { failure: error('The photos are not in a format that can be read', 400) };
 
-  const prompt = `These photos are attached to a financial record in the Philippines (amounts in ₱ pesos). The person described it as: "${description || ''}"
-The record's total is ₱${Number(recordResult.rows[0].amount)}.
-Read the purchase lines from the receipt in the photos. Use the description only as context to help read unclear handwriting: the receipt is the source. Each line: purchase_text is the item as named, with any detail from the description that identifies it (e.g. the type of cement); quantity and unit as written; amount is the line's total price; unit_price only if written. Use null for what is not written.${machines.length > 0 ? FUEL_PROMPT(machines) : ''}${policies.length > 0 ? POLICY_PROMPT(policies) : ''}
-Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|null,"unit":string|null,"unit_price":number|null,"amount":number}]${machines.length > 0 ? ',"fuel":{"machine_id":string|null,"meter_reading":number|null,"liters":number|null,"octane":string|null,"observed":{"meter_photo":boolean,"pump_photo":boolean,"receipt_photo":boolean,"full_tank":boolean}}|null' : ''}${policies.length > 0 ? ',"policies":[{"policy_id":string,"not_observed":[string]}]' : ''}}`;
+  const context = `The person described it as: "${description || ''}"
+The record's total is ₱${Number(amount)}.
+Machines: ${JSON.stringify(machines.map((m) => ({ id: m.id, name: m.name, meter: `${m.meter_name} (${m.meter_unit})` })))}
+Policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: policy.title, policy: policy.description_text })))}`;
 
-  const result = await bedrock.send(new ConverseCommand({
+  const reply = await bedrock.send(new ConverseCommand({
     modelId: EXTRACT_MODEL_ID,
-    messages: [{ role: 'user', content: [...images, { text: prompt }] }],
-    inferenceConfig: { maxTokens: 1000, temperature: 0 }
+    system: [{ text: EXTRACT_SYSTEM_PROMPT }],
+    messages: [{ role: 'user', content: [...images, { text: context }] }],
+    inferenceConfig: EXTRACT_INFERENCE
   }));
-  const text = result.output.message.content.map((part) => part.text || '').join('');
+  const text = reply.output.message.content.map((part) => part.text || '').join('');
 
   let parsed;
   try {
     parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
   } catch (parseErr) {
     console.error('Unreadable extraction reply:', text);
-    return error('The photos could not be read into purchases', 502);
+    return { failure: error('The photos could not be read into purchases', 502) };
   }
   const purchases = (Array.isArray(parsed.purchases) ? parsed.purchases : [])
     .filter((purchase) => typeof purchase.purchase_text === 'string' && purchase.purchase_text.trim() && isNumber(purchase.amount))
@@ -882,20 +939,266 @@ Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|nu
       amount: purchase.amount
     }));
 
-  const fuel = machines.length > 0 ? await fuelFill(parsed.fuel, machines, recordId, recordResult.rows[0].transaction_date) : null;
-
-  // The policies the record follows, and what each asks for that was not observed (a gap)
-  const followed = (Array.isArray(parsed.policies) ? parsed.policies : [])
-    .map((entry) => ({ policy: policies.find((policy) => policy.id === entry?.policy_id), entry }))
-    .filter(({ policy }) => policy)
-    .map(({ policy, entry }) => ({
-      id: policy.id,
-      title: policy.title,
-      not_observed: (Array.isArray(entry.not_observed) ? entry.not_observed : []).filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
-    }));
+  const fuel = machines.length > 0 ? await fuelFill(parsed.fuel, machines, excludeRecordId, transactionDate) : null;
+  const followed = policies
+    .filter((policy) => Array.isArray(parsed.policy_ids) && parsed.policy_ids.includes(policy.id))
+    .map((policy) => ({ id: policy.id, title: policy.title }));
+  const seen = parsed.observed || {};
+  const observed = { odometer: seen.odometer === true, receipt: seen.receipt === true, pump: seen.pump === true };
 
   // The vehicles are listed too, so the person can correct which one it was
-  return success({ purchases, fuel, machines: machines.map(machineInfo), policies: followed, model: EXTRACT_MODEL_ID, usage: result.usage });
+  return {
+    result: { purchases, fuel, observed, machines: machines.map(machineInfo), policies: followed, model: EXTRACT_MODEL_ID, usage: reply.usage },
+    raw: parsed.fuel || {}
+  };
+}
+
+// Reads a saved record's photos, with its description as context, and keeps the reading as a
+// perspective of its description (what was seen in each part, as the model returned it)
+async function readRecordPhotos(recordId, organizationId) {
+  const recordResult = await pool.query(
+    'SELECT amount, transaction_date FROM financial_records WHERE id = $1 AND organization_id = $2',
+    [recordId, organizationId]
+  );
+  if (recordResult.rows.length === 0) return { failure: error('Record not found', 404) };
+
+  const stateLink = await pool.query(DESCRIPTION_STATE_LOOKUP, [recordId]);
+  const stateId = stateLink.rows[0]?.state_id;
+  const description = stateId
+    ? (await pool.query('SELECT state_text FROM states WHERE id = $1', [stateId])).rows[0]?.state_text
+    : null;
+  const photoRows = stateId
+    ? (await pool.query('SELECT photo_url FROM state_photos WHERE state_id = $1 ORDER BY photo_order LIMIT $2', [stateId, MAX_EXTRACT_PHOTOS])).rows
+    : [];
+  if (photoRows.length === 0) return { failure: error('This record has no photos to read', 400) };
+
+  const read = await readExpensePhotos({
+    organizationId, description, amount: recordResult.rows[0].amount, transactionDate: recordResult.rows[0].transaction_date,
+    photoUrls: photoRows.map((row) => row.photo_url), excludeRecordId: recordId
+  });
+  if (read.failure) return read;
+
+  const { result, raw } = read;
+  await saveExpensePerspective(stateId, {
+    vehicle: result.fuel ? { id: result.fuel.machine.id, name: result.fuel.machine.name.trim() } : null,
+    odometer: { observed: result.observed.odometer, reading: isNumber(raw.meter_reading) ? raw.meter_reading : null },
+    receipt: { observed: result.observed.receipt, purchases: result.purchases },
+    pump: { observed: result.observed.pump, liters: isNumber(raw.liters) ? raw.liters : null, octane: typeof raw.octane === 'string' && raw.octane.trim() ? raw.octane.trim() : null },
+    policy_ids: result.policies.map((policy) => policy.id)
+  });
+  return { result, stateId };
+}
+
+// The reading as a draft for the person to confirm (the perspective is kept; nothing else is written)
+async function extractPurchases(recordId, { organizationId }) {
+  const read = await readRecordPhotos(recordId, organizationId);
+  return read.failure || success(read.result);
+}
+
+// The reading of photos before the expense is saved: nothing is written
+async function readPhotosBeforeSave(event, { organizationId }) {
+  let body;
+  try {
+    body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+  } catch (parseErr) {
+    return error('Invalid JSON in request body', 400);
+  }
+  const photoUrls = body?.photo_urls;
+  if (!Array.isArray(photoUrls) || photoUrls.length === 0 || !photoUrls.every((url) => typeof url === 'string')) return error('photo_urls must be a list of photos', 400);
+  if (!isNumber(body.amount)) return error('amount is required', 400);
+  const read = await readExpensePhotos({
+    organizationId, description: typeof body.description === 'string' ? body.description : '', amount: body.amount,
+    transactionDate: body.transaction_date || new Date().toISOString(), photoUrls, excludeRecordId: null
+  });
+  return read.failure || success(read.result);
+}
+
+// The automatic reading when an expense is saved: its photos are read and what was read fills the
+// fields that are still empty (purchases, the vehicle's readings, the policy the action follows).
+// What a person has already entered or confirmed is left as it is.
+async function analyzeExpensePhotos(recordId, organizationId) {
+  const read = await readRecordPhotos(recordId, organizationId);
+  if (read.failure) {
+    console.error('Automatic reading failed for', recordId, read.failure.body);
+    return { ok: false };
+  }
+  const { result } = read;
+
+  const purchaseCount = Number((await pool.query('SELECT count(*) FROM financial_record_purchases WHERE financial_record_id = $1', [recordId])).rows[0].count);
+  if (purchaseCount === 0 && result.purchases.length > 0) {
+    const failure = await writePurchases(recordId, organizationId, result.purchases);
+    if (failure) console.error('Could not save the purchases read for', recordId, failure.body);
+  }
+  await linkPolicies(recordId, organizationId, result.policies.map((policy) => policy.id));
+  if (result.fuel && !(await getFuelFill(recordId, organizationId))) {
+    const failure = await writeFuelFill(recordId, organizationId, {
+      machine_id: result.fuel.machine.id, meter_reading: result.fuel.meter_reading, liters: result.fuel.liters
+    });
+    if (failure) console.error('Could not save the fuel fill read for', recordId, failure.body);
+  }
+  return { ok: true };
+}
+
+// The policies the record's action follows, with these added
+async function linkPolicies(recordId, organizationId, policyIds) {
+  if (policyIds.length === 0) return;
+  await pool.query(
+    `INSERT INTO action_policies (action_id, policy_id)
+     SELECT fr.action_id, p.id FROM financial_records fr, policy p
+      WHERE fr.id = $1 AND fr.organization_id = $2 AND fr.action_id IS NOT NULL AND p.organization_id = $2 AND p.id = ANY($3::uuid[])
+     ON CONFLICT DO NOTHING`,
+    [recordId, organizationId, policyIds]
+  );
+}
+
+const ratePerUnit = (machine, reading, liters, previous) => {
+  const used = reading !== null && previous && reading > previous.meter_reading ? reading - previous.meter_reading : null;
+  if (used === null || liters === null) return null;
+  return Math.round((machine.rate_unit === 'km/l' ? used / liters : liters / used) * 100) / 100;
+};
+
+// The machine's previous reading, not counting any this record already made
+async function previousReading(machine, recordId, transactionDate) {
+  const row = (await pool.query(
+    `SELECT ms.value, s.captured_at FROM metric_snapshots ms JOIN states s ON s.id = ms.state_id
+      WHERE ms.metric_id = $1 AND s.captured_at < $2
+        AND NOT EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'financial_record' AND sl.entity_id = $3)
+      ORDER BY s.captured_at DESC LIMIT 1`,
+    [machine.meter_metric_id, transactionDate, recordId]
+  )).rows[0];
+  return row ? { meter_reading: Number(row.value), date: row.captured_at } : null;
+}
+
+// The fuel fill saved on the record's description: the vehicle it was for, with its readings.
+// The rate (km/l) is worked out from them, not saved.
+async function getFuelFill(recordId, organizationId) {
+  const stateId = (await pool.query(DESCRIPTION_STATE_LOOKUP, [recordId])).rows[0]?.state_id;
+  const machines = await vehiclesOf(organizationId);
+  if (!stateId || machines.length === 0) return null;
+  const link = (await pool.query(
+    `SELECT entity_id FROM state_links WHERE state_id = $1 AND entity_type = 'tool' AND entity_id = ANY($2::uuid[]) LIMIT 1`,
+    [stateId, machines.map((m) => m.id)]
+  )).rows[0];
+  if (!link) return null;
+  const machine = machines.find((m) => m.id === link.entity_id);
+  const values = (await pool.query(
+    'SELECT metric_id, value FROM metric_snapshots WHERE state_id = $1 AND metric_id = ANY($2::uuid[])',
+    [stateId, [machine.meter_metric_id, machine.fuel_metric_id].filter(Boolean)]
+  )).rows;
+  const meter = values.find((row) => row.metric_id === machine.meter_metric_id);
+  const fuel = values.find((row) => row.metric_id === machine.fuel_metric_id);
+  const reading = meter ? Number(meter.value) : null;
+  const liters = fuel ? Number(fuel.value) : null;
+  const date = (await pool.query('SELECT transaction_date FROM financial_records WHERE id = $1', [recordId])).rows[0]?.transaction_date;
+  const previous = await previousReading(machine, recordId, date);
+  return { machine: machineInfo(machine), meter_reading: reading, liters, previous, rate: ratePerUnit(machine, reading, liters, previous) };
+}
+
+// Saves the fuel fill on the record's description: the vehicle (a link to it) and its readings
+// (the odometer and the liters). Readings not given are removed; another vehicle's are cleared.
+// With no machine_id the record is not a fuel fill.
+async function writeFuelFill(recordId, organizationId, fill) {
+  const stateId = (await pool.query(DESCRIPTION_STATE_LOOKUP, [recordId])).rows[0]?.state_id;
+  if (!stateId) return error('The record has no description to hold the fuel fill', 400);
+  const machines = await vehiclesOf(organizationId);
+  const machine = fill.machine_id ? machines.find((m) => m.id === fill.machine_id) : null;
+  if (fill.machine_id && !machine) return error('That is not a vehicle of this organization', 400);
+  const others = machines.filter((m) => m.id !== machine?.id);
+  const reading = fill.meter_reading ?? null;
+  const liters = fill.liters ?? null;
+  if ((reading !== null && !isNumber(reading)) || (liters !== null && !isNumber(liters))) return error('The readings must be numbers', 400);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Another vehicle's link and readings on this description are removed
+    if (others.length > 0) {
+      await client.query(`DELETE FROM state_links WHERE state_id = $1 AND entity_type = 'tool' AND entity_id = ANY($2::uuid[])`, [stateId, others.map((m) => m.id)]);
+      await client.query(
+        'DELETE FROM metric_snapshots WHERE state_id = $1 AND metric_id = ANY($2::uuid[])',
+        [stateId, others.flatMap((m) => [m.meter_metric_id, m.fuel_metric_id]).filter(Boolean)]
+      );
+    }
+    if (machine) {
+      await client.query(
+        `INSERT INTO state_links (state_id, entity_type, entity_id) VALUES ($1, 'tool', $2) ON CONFLICT (state_id, entity_type, entity_id) DO NOTHING`,
+        [stateId, machine.id]
+      );
+      for (const [metricId, value] of [[machine.meter_metric_id, reading], [machine.fuel_metric_id, liters]]) {
+        if (!metricId) continue;
+        if (value === null) {
+          await client.query('DELETE FROM metric_snapshots WHERE state_id = $1 AND metric_id = $2', [stateId, metricId]);
+        } else {
+          await client.query(
+            `INSERT INTO metric_snapshots (state_id, metric_id, value) VALUES ($1, $2, $3)
+             ON CONFLICT (state_id, metric_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+            [stateId, metricId, String(value)]
+          );
+        }
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+  return null;
+}
+
+// PUT /api/financial-records/:id/fuel-fill - the fuel fill the person confirmed or corrected
+async function saveFuelFill(event, recordId, { organizationId, cognitoUserId, permissions }) {
+  let body;
+  try {
+    body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+  } catch (parseErr) {
+    return error('Invalid JSON in request body', 400);
+  }
+  const recordResult = await pool.query('SELECT created_by FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId]);
+  if (recordResult.rows.length === 0) return error('Record not found', 404);
+  const createdBy = recordResult.rows[0].created_by;
+  const isOwner = createdBy && createdBy.toString() === cognitoUserId.toString();
+  if (!isOwner && !hasPermission({ permissions }, 'data:write:all') && !hasPermission({ permissions }, 'data:write:org')) {
+    return error('Not authorized to edit this record', 403);
+  }
+  const failure = await writeFuelFill(recordId, organizationId, body || {});
+  if (failure) return failure;
+  if (Array.isArray(body?.policy_ids) && body.policy_ids.every((id) => typeof id === 'string' && UUID.test(id))) {
+    await linkPolicies(recordId, organizationId, body.policy_ids);
+  }
+  return success({ fuel_fill: await getFuelFill(recordId, organizationId) });
+}
+
+// The config (model and instructions) the reader runs with, created the first time
+async function getExtractConfig() {
+  const existing = await pool.query('SELECT id FROM llm_generation_configs WHERE model_id = $1 AND version = $2 LIMIT 1', [EXTRACT_MODEL_ID, EXTRACT_VERSION]);
+  if (existing.rows.length > 0) return existing.rows[0].id;
+  const inserted = await pool.query(
+    'INSERT INTO llm_generation_configs (model_id, version, system_prompt, inference_config) VALUES ($1, $2, $3, $4) RETURNING id',
+    [EXTRACT_MODEL_ID, EXTRACT_VERSION, EXTRACT_SYSTEM_PROMPT, JSON.stringify({ max_tokens: EXTRACT_INFERENCE.maxTokens, temperature: EXTRACT_INFERENCE.temperature })]
+  );
+  return inserted.rows[0].id;
+}
+
+// One perspective of the photos per description: reading the photos again updates it
+async function saveExpensePerspective(stateId, content) {
+  const configId = await getExtractConfig();
+  const existing = await pool.query(
+    'SELECT id FROM state_perspectives WHERE state_id = $1 AND perspective_type = $2 ORDER BY created_at DESC LIMIT 1',
+    [stateId, EXPENSE_PHOTOS_PERSPECTIVE]
+  );
+  if (existing.rows.length > 0) {
+    await pool.query(
+      `UPDATE state_perspectives SET content = $2, llm_generation_config_id = $3, status = 'SUCCESS', error_message = NULL, created_at = NOW() WHERE id = $1`,
+      [existing.rows[0].id, JSON.stringify(content), configId]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO state_perspectives (state_id, perspective_type, llm_generation_config_id, status, content) VALUES ($1, $2, $3, 'SUCCESS', $4)`,
+      [stateId, EXPENSE_PHOTOS_PERSPECTIVE, configId, JSON.stringify(content)]
+    );
+  }
 }
 
 const machineInfo = (machine) => ({
@@ -903,13 +1206,23 @@ const machineInfo = (machine) => ({
   meter_metric_id: machine.meter_metric_id, rate_metric_id: machine.rate_metric_id, fuel_metric_id: machine.fuel_metric_id
 });
 
-const POLICY_PROMPT = (policies) => `
-These are our policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: policy.title, policy: policy.description_text })))}. In policies, list each one this record follows by its id as policy_id (none if it follows none). For each, not_observed lists what that policy asks for that you could not observe in the photos and the description does not say, as short phrases such as "odometer photo". What the person's description says counts as given. Do not list what the policy does not ask for.`;
+// The farthest a machine goes between two fills
+const MAX_METER_BETWEEN_FILLS = 1000;
 
-const FUEL_PROMPT = (machines) => `
-If this is fuel bought for one of these machines, also read the fill-up: ${JSON.stringify(machines.map((m) => ({ id: m.id, name: m.name, meter: `${m.meter_name} (${m.meter_unit})` })))}. Choose the machine from the description and the photos and give its id as machine_id, or null if none fits; if the purchase is not fuel for a machine, fuel is null.
-meter_reading is the machine's meter reading in the unit given (for an odometer, whole kilometers: leave out a last digit shown separately in a box or a different colour, that is tenths). liters is the amount dispensed, from the pump display or the receipt's quantity written with its decimals. Each is taken from the photos (null when not visible). octane is the grade shown, if any.
-observed only reports what you can see in the photos, it is not a judgement: meter_photo is true if a photo shows the machine's meter, pump_photo if one shows the pump's display, receipt_photo if one shows a receipt, full_tank if one shows the tank full. false means not observed.`;
+// A drum odometer is often misread: a last digit that is tenths, a part-rolled drum read
+// as a leading digit, or a leading digit missed. Given the previous reading, the candidate
+// that is above it and within a plausible distance is the reading (the one nearest to
+// it); when none fits, the reading stays as it was read. On photos the reader got wrong,
+// this brought odometers from 1 in 10 right to 7 in 10.
+function fitMeterReading(read, previous) {
+  const digits = String(Math.trunc(read));
+  const candidates = new Set([read, Math.trunc(read / 10), Number(`1${digits}`)]);
+  for (let i = 1; i < digits.length; i++) candidates.add(Number(digits.slice(i)));
+  const fits = [...candidates]
+    .filter((candidate) => candidate >= previous - 1 && candidate <= previous + MAX_METER_BETWEEN_FILLS)
+    .sort((a, b) => Math.abs(a - previous) - Math.abs(b - previous));
+  return fits.length > 0 ? fits[0] : read;
+}
 
 // What was read of a fill-up, with the rate it gives: distance since the machine's previous
 // odometer reading per liter added (km/l), or liters added per hour on its hour meter (L/h).
@@ -917,35 +1230,21 @@ observed only reports what you can see in the photos, it is not a judgement: met
 async function fuelFill(fuel, machines, recordId, transactionDate) {
   const machine = machines.find((m) => m.id === fuel?.machine_id);
   if (!machine) return null;
-  const reading = isNumber(fuel.meter_reading) ? fuel.meter_reading : null;
+  const readAs = isNumber(fuel.meter_reading) ? fuel.meter_reading : null;
   const liters = isNumber(fuel.liters) && fuel.liters > 0 ? fuel.liters : null;
 
-  // The machine's previous reading, not counting any this record already made
-  const previousRow = (await pool.query(
-    `SELECT ms.value, s.captured_at FROM metric_snapshots ms JOIN states s ON s.id = ms.state_id
-      WHERE ms.metric_id = $1 AND s.captured_at < $2
-        AND NOT EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'financial_record' AND sl.entity_id = $3)
-      ORDER BY s.captured_at DESC LIMIT 1`,
-    [machine.meter_metric_id, transactionDate, recordId]
-  )).rows[0];
-  const previous = previousRow ? { meter_reading: Number(previousRow.value), date: previousRow.captured_at } : null;
-  const used = reading !== null && previous && reading > previous.meter_reading ? reading - previous.meter_reading : null;
-  const rate = used === null || liters === null ? null : (machine.rate_unit === 'km/l' ? used / liters : liters / used);
+  const previous = await previousReading(machine, recordId, transactionDate);
+  const reading = readAs !== null && previous ? fitMeterReading(readAs, previous.meter_reading) : readAs;
 
-  const observed = fuel.observed || {};
   return {
     machine: machineInfo(machine),
     meter_reading: reading,
+    // What was read, when it was corrected to fit the previous reading
+    meter_reading_read: reading !== readAs ? readAs : null,
     liters,
     octane: typeof fuel.octane === 'string' && fuel.octane.trim() ? fuel.octane.trim() : null,
-    observed: {
-      meter_photo: observed.meter_photo === true,
-      pump_photo: observed.pump_photo === true,
-      receipt_photo: observed.receipt_photo === true,
-      full_tank: observed.full_tank === true
-    },
     previous,
-    rate: rate === null ? null : Math.round(rate * 100) / 100
+    rate: ratePerUnit(machine, reading, liters, previous)
   };
 }
 
@@ -978,7 +1277,7 @@ async function savePurchases(event, recordId, { organizationId, cognitoUserId, p
   if (problem) return error(problem, 400);
 
   const recordResult = await pool.query(
-    'SELECT created_by, vendor_organization_id FROM financial_records WHERE id = $1 AND organization_id = $2',
+    'SELECT created_by FROM financial_records WHERE id = $1 AND organization_id = $2',
     [recordId, organizationId]
   );
   if (recordResult.rows.length === 0) return error('Record not found', 404);
@@ -989,6 +1288,22 @@ async function savePurchases(event, recordId, { organizationId, cognitoUserId, p
   if (!isOwner && !hasPermission({ permissions }, 'data:write:all') && !hasPermission({ permissions }, 'data:write:org')) {
     return error('Not authorized to edit this record', 403);
   }
+
+  const failure = await writePurchases(recordId, organizationId, purchases);
+  if (failure) return failure;
+  return await getPurchases(recordId, { organizationId });
+}
+
+// Writes the purchases (as savePurchases describes), for the HTTP route and for the automatic
+// reading alike; returns an error response, or null when they were saved.
+async function writePurchases(recordId, organizationId, purchases) {
+  const problem = purchases.map(purchaseProblem).find(Boolean);
+  if (problem) return error(problem, 400);
+  const recordResult = await pool.query(
+    'SELECT vendor_organization_id FROM financial_records WHERE id = $1 AND organization_id = $2',
+    [recordId, organizationId]
+  );
+  if (recordResult.rows.length === 0) return error('Record not found', 404);
 
   const partIds = [...new Set(purchases.map((purchase) => purchase.part_id).filter(Boolean))];
   if (partIds.length > 0) {
@@ -1073,7 +1388,7 @@ async function savePurchases(event, recordId, { organizationId, cognitoUserId, p
     .catch(err => console.error('Failed to queue embedding:', err));
   }
 
-  return await getPurchases(recordId, { organizationId });
+  return null;
 }
 
 async function deleteRecord(id, authContext) {

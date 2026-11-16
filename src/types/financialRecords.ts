@@ -8,6 +8,51 @@ export interface FinancialRecordNote {
   captured_by_name: string;
 }
 
+/** What a model read from the record's photos (a perspective of its description), and which model. */
+export interface FinancialRecordPerspective {
+  id: string;
+  perspective_type: string;
+  created_at: string;
+  model_id: string;
+  version: string;
+  content: {
+    vehicle: { id: string; name: string } | null;
+    odometer: { observed: boolean; reading: number | null };
+    receipt: { observed: boolean; purchases: { purchase_text: string; amount: number }[] };
+    pump: { observed: boolean; liters: number | null; octane: string | null };
+    policy_ids: string[];
+  };
+}
+
+/** A vehicle fuel can be bought for: a tool that tracks an odometer. */
+export interface FinancialRecordMachine {
+  id: string;
+  name: string;
+  meter_name: string;
+  meter_unit: string;
+  rate_unit: string;
+  meter_metric_id: string;
+  rate_metric_id: string | null;
+  fuel_metric_id: string | null;
+}
+
+/** The fuel fill saved on a record: the vehicle and its readings. The rate is worked out from them. */
+export interface FinancialRecordFuelFill {
+  machine: FinancialRecordMachine;
+  meter_reading: number | null;
+  liters: number | null;
+  previous: { meter_reading: number; date: string } | null;
+  rate: number | null;
+}
+
+/** A policy the record's action follows. */
+export interface FinancialRecordPolicy {
+  id: string;
+  title: string;
+  description_text: string;
+  status: string;
+}
+
 export interface FinancialRecordPurchase {
   id: string;
   purchase_text: string;
@@ -31,6 +76,10 @@ export interface FinancialRecord {
   photos?: ObservationPhoto[];
   purchases?: FinancialRecordPurchase[];
   notes?: FinancialRecordNote[];
+  policies?: FinancialRecordPolicy[];
+  perspectives?: FinancialRecordPerspective[];
+  fuel_fill?: FinancialRecordFuelFill | null;
+  machines?: FinancialRecordMachine[];
   vendor?: { id: string; name: string } | null;
   state_id?: string;
   action_id?: string | null;

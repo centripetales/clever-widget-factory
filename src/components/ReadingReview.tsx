@@ -1,5 +1,4 @@
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -15,6 +14,9 @@ interface ReadingReviewProps {
 
 const NO_VEHICLE = 'none';
 
+// What the reader looks for in the photos
+const PARTS: [keyof ExtractedReading['observed'], string][] = [['odometer', 'Odometer'], ['receipt', 'Receipt'], ['pump', 'Fuel pump']];
+
 // An empty or non-numeric entry is no value
 const toNumber = (text: string): number | null => (text.trim() === '' || Number.isNaN(Number(text)) ? null : Number(text));
 
@@ -23,7 +25,7 @@ const toNumber = (text: string): number | null => (text.trim() === '' || Number.
  * every value can be changed, since the reading is a starting point.
  */
 export function ReadingReview({ reading, onChange, recordAmount, disabled }: ReadingReviewProps) {
-  const { purchases, fuel, machines, policies } = reading;
+  const { purchases, fuel, observed, machines, policies } = reading;
 
   const setPurchase = (index: number, changes: Partial<ExtractedPurchase>) =>
     onChange({ ...reading, purchases: purchases.map((purchase, i) => (i === index ? { ...purchase, ...changes } : purchase)) });
@@ -36,8 +38,7 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
     onChange({
       ...reading,
       fuel: {
-        meter_reading: null, liters: null, octane: null, rate: null,
-        observed: { meter_photo: false, pump_photo: false, receipt_photo: false, full_tank: false },
+        meter_reading: null, meter_reading_read: null, liters: null, octane: null, rate: null,
         ...fuel,
         machine,
         previous: fuel?.machine.id === machine.id ? fuel.previous : null,
@@ -52,10 +53,6 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
     : null;
 
   const total = purchases.reduce((sum, purchase) => sum + purchase.amount, 0);
-
-  const observed: [keyof ExtractedFuelFill['observed'], string][] = fuel
-    ? [['meter_photo', `${fuel.machine.meter_name} photo`], ['pump_photo', 'Pump photo'], ['receipt_photo', 'Receipt photo'], ['full_tank', 'Full tank']]
-    : [];
 
   return (
     <div className="space-y-3">
@@ -75,7 +72,7 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
             placeholder="Qty"
             inputMode="decimal"
             value={purchase.quantity ?? ''}
-            onChange={(e) => setPurchase(index, { quantity: toNumber(e.target.value) })}
+            onChange={(e) => setPurchase(index, { quantity: toNumber(e.target.value), unit_price: null })}
             disabled={disabled}
           />
           <Input
@@ -92,7 +89,7 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
             placeholder="₱"
             inputMode="decimal"
             value={purchase.amount}
-            onChange={(e) => setPurchase(index, { amount: toNumber(e.target.value) ?? 0 })}
+            onChange={(e) => setPurchase(index, { amount: toNumber(e.target.value) ?? 0, unit_price: null })}
             disabled={disabled}
           />
           <Button
@@ -149,6 +146,9 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
                     onChange={(e) => setFuel({ meter_reading: toNumber(e.target.value) })}
                     disabled={disabled}
                   />
+                  {fuel.meter_reading_read !== null && (
+                    <p className="text-xs text-muted-foreground">read as {fuel.meter_reading_read}</p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label>Liters</Label>
@@ -176,51 +176,21 @@ export function ReadingReview({ reading, onChange, recordAmount, disabled }: Rea
                   <span className="text-muted-foreground"> since {fuel.previous.meter_reading} {fuel.machine.meter_unit} on {new Date(fuel.previous.date).toLocaleDateString()}</span>
                 </p>
               )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {observed.map(([key, label]) => (
-                  <label key={key} className="flex items-center gap-2">
-                    <Checkbox
-                      checked={fuel.observed[key]}
-                      onCheckedChange={(checked) => setFuel({ observed: { ...fuel.observed, [key]: checked === true } })}
-                      disabled={disabled}
-                    />
-                    <span>{label}: {fuel.observed[key] ? 'Observed' : 'Not observed'}</span>
-                  </label>
-                ))}
-              </div>
             </>
           )}
         </div>
       )}
 
-      {policies.map((policy, policyIndex) => (
-        <div key={policy.id} className="rounded border p-3 text-sm space-y-2">
-          <p className="font-medium">Policy: {policy.title}</p>
-          {policy.not_observed.length === 0 ? (
-            <p className="text-muted-foreground">Everything it asks for was observed</p>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-muted-foreground">Not observed:</span>
-              {policy.not_observed.map((item, itemIndex) => (
-                <span key={itemIndex} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5">
-                  {item}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${item}`}
-                    disabled={disabled}
-                    onClick={() => onChange({
-                      ...reading,
-                      policies: policies.map((p, i) => (i === policyIndex ? { ...p, not_observed: p.not_observed.filter((_, j) => j !== itemIndex) } : p)),
-                    })}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
+      {(policies.length > 0 || fuel) && (
+        <div className="rounded border p-3 text-sm space-y-1">
+          {policies.map((policy) => (
+            <p key={policy.id} className="font-medium">Policy: {policy.title}</p>
+          ))}
+          <p className="text-muted-foreground">
+            {PARTS.map(([key, label]) => `${label}: ${observed[key] ? 'Observed' : 'Not observed'}`).join(' · ')}
+          </p>
         </div>
-      ))}
+      )}
     </div>
   );
 }

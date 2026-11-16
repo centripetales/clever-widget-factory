@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './useWebSocket';
+import { financialRecordKeys } from './useFinancialRecords';
 import {
   toolsQueryKey,
   partsQueryKey,
@@ -108,6 +109,12 @@ export function useCacheInvalidation() {
 
         case 'policy':
           queryClient.invalidateQueries({ queryKey: explorationsQueryKey() });
+          break;
+
+        case 'financial_record':
+          // Its photos were read: purchases, the fuel fill and its policy changed
+          queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(entityId) });
+          queryClient.invalidateQueries({ queryKey: financialRecordKeys.lists() });
           break;
 
         default:
