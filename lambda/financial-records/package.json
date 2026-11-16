@@ -5,6 +5,8 @@
   "main": "index.js",
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1169.0",
-    "pg": "^8.11.3"
+    "jpeg-js": "^0.4.4",
+    "pg": "^8.11.3",
+    "pngjs": "^7.0.0"
   }
 }

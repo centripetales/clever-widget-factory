@@ -1,6 +1,9 @@
 const { Pool } = require('pg');
+const { randomUUID } = require('crypto');
+const jpeg = require('jpeg-js');
+const { PNG } = require('pngjs');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { BedrockRuntimeClient, ConverseCommand, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { getAuthorizerContext, hasPermission } = require('/opt/nodejs/authorizerContext');
 const { successResponse, errorResponse } = require('/opt/nodejs/response');
 const { composeFinancialRecordEmbeddingSource } = require('/opt/nodejs/embedding-composition');
@@ -849,15 +852,47 @@ const ASSETS_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
 
 // What produced a perspective is kept with it: this model and these instructions (a new
 // version when they change) are an llm_generation_configs row each perspective points to.
-const EXTRACT_VERSION = 'expense-photos-v3';
+const EXTRACT_VERSION = 'expense-photos-v4';
+const UNKNOWN_VENDOR_NAME = 'Unknown vendor';
+// Looks things up on the web (Bedrock's web grounding), cheapest model that has it
+const WEB_LOOKUP_MODEL_ID = 'us.amazon.nova-2-lite-v1:0';
 const EXTRACT_INFERENCE = { maxTokens: 1000, temperature: 0 };
 const EXTRACT_SYSTEM_PROMPT = `You read the photos attached to a financial record in the Philippines (amounts in ₱ pesos). You are given the person's description of it, the record's total, the machines we track (each with its meter) and our policies.
 Purchases: read the purchase lines from the receipt. Use the description only as context to help read unclear handwriting: the receipt is the source. Each line: purchase_text is the item as named, with any detail from the description that identifies it (e.g. the type of cement); quantity and unit as written; amount is the line's total price; unit_price only if written. Use null for what is not written. If the receipt shows only a total and no lines, give one line for the whole expense: the item the description names, with the record's total as its amount.
 Fuel: if this is fuel bought for one of the machines, fuel gives machine_id (chosen from the description and the photos), meter_reading, liters and octane; otherwise fuel is null. meter_reading is the machine's meter reading in the unit given (for an odometer, whole kilometers: leave out a last digit shown separately in a box or a different colour, that is tenths). liters is the amount dispensed, from the pump display or the receipt's quantity written with its decimals. Each is taken from the photos (null when not visible). octane is the grade shown, if any.
 Observed: report only what you can see in the photos, it is not a judgement. odometer is true if a photo shows a machine's meter, receipt if one shows a receipt, pump if one shows the pump's display. false means not observed.
+Vendor: vendor.organization_id is the id of the vendor from the list whose business name is printed on the receipt as the seller (the same business, even if abbreviated); null if the receipt does not clearly name one of them. Do not guess. vendor.printed_name is the seller's name as printed, or null.
 Policies: policy_ids lists each policy whose title or text describes what this record is (for example, fuel bought for one of the machines follows a policy about fueling a vehicle); none if no policy applies.
-Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|null,"unit":string|null,"unit_price":number|null,"amount":number}],"fuel":{"machine_id":string|null,"meter_reading":number|null,"liters":number|null,"octane":string|null}|null,"observed":{"odometer":boolean,"receipt":boolean,"pump":boolean},"policy_ids":[string]}`;
+Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|null,"unit":string|null,"unit_price":number|null,"amount":number}],"fuel":{"machine_id":string|null,"meter_reading":number|null,"liters":number|null,"octane":string|null}|null,"observed":{"odometer":boolean,"receipt":boolean,"pump":boolean},"vendor":{"organization_id":string|null,"printed_name":string|null},"policy_ids":[string]}`;
 const EXPENSE_PHOTOS_PERSPECTIVE = 'EXPENSE_PHOTOS';
+
+// The model takes images up to 5 MB once they are base64-encoded (a third larger), so about 3.9 MB as they are, and a
+// phone's original can be larger: halve its sides until it is small enough (a receipt stays readable at a quarter
+// of the pixels). A shrunk image is a JPEG.
+const MAX_IMAGE_BYTES = 3500000;
+function shrinkForModel(bytes, format) {
+  if (bytes.length <= MAX_IMAGE_BYTES || (format !== 'jpeg' && format !== 'png')) return { bytes, format };
+  let image = format === 'png'
+    ? (() => { const png = PNG.sync.read(Buffer.from(bytes)); return { width: png.width, height: png.height, data: png.data }; })()
+    : jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 512 });
+  for (let pass = 0; pass < 3; pass++) {
+    const width = image.width >> 1;
+    const height = image.height >> 1;
+    const data = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        for (let c = 0; c < 4; c++) {
+          const at = (row, col) => image.data[((y * 2 + row) * image.width + (x * 2 + col)) * 4 + c];
+          data[(y * width + x) * 4 + c] = (at(0, 0) + at(0, 1) + at(1, 0) + at(1, 1)) >> 2;
+        }
+      }
+    }
+    image = { width, height, data };
+    const encoded = jpeg.encode(image, 85).data;
+    if (encoded.length <= MAX_IMAGE_BYTES) return { bytes: new Uint8Array(encoded), format: 'jpeg' };
+  }
+  return { bytes, format };
+}
 
 function imageFormat(bytes) {
   if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
@@ -896,6 +931,7 @@ async function activePolicies(organizationId) {
 async function readExpensePhotos({ organizationId, description, amount, transactionDate, photoUrls, excludeRecordId }) {
   const machines = await vehiclesOf(organizationId);
   const policies = await activePolicies(organizationId);
+  const vendors = await knownVendors(organizationId);
 
   const images = [];
   for (const photoUrl of photoUrls.slice(0, MAX_EXTRACT_PHOTOS)) {
@@ -903,15 +939,17 @@ async function readExpensePhotos({ organizationId, description, amount, transact
     const url = /^https?:\/\//.test(photoUrl) ? photoUrl : `${ASSETS_BUCKET_URL}/${photoUrl.replace(/^\//, '')}`;
     const response = await fetch(url);
     if (!response.ok) return { failure: error(`Could not load photo ${photoUrl}`, 502) };
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const format = imageFormat(bytes);
-    if (format) images.push({ image: { format, source: { bytes } } });
+    const original = new Uint8Array(await response.arrayBuffer());
+    const detected = imageFormat(original);
+    const { bytes, format } = detected ? shrinkForModel(original, detected) : { bytes: original, format: null };
+    if (format && bytes.length <= 3900000) images.push({ image: { format, source: { bytes } } });
   }
   if (images.length === 0) return { failure: error('The photos are not in a format that can be read', 400) };
 
   const context = `The person described it as: "${description || ''}"
 The record's total is ₱${Number(amount)}.
 Machines: ${JSON.stringify(machines.map((m) => ({ id: m.id, name: m.name, meter: `${m.meter_name} (${m.meter_unit})` })))}
+Vendors: ${JSON.stringify(vendors.map((vendor) => ({ id: vendor.id, name: vendor.name })))}
 Policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: policy.title, policy: policy.description_text })))}`;
 
   const reply = await bedrock.send(new ConverseCommand({
@@ -943,12 +981,17 @@ Policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: pol
   const followed = policies
     .filter((policy) => Array.isArray(parsed.policy_ids) && parsed.policy_ids.includes(policy.id))
     .map((policy) => ({ id: policy.id, title: policy.title }));
+  const printed = parsed.vendor || {};
+  const vendor = {
+    organization_id: vendors.some((v) => v.id === printed.organization_id) ? printed.organization_id : null,
+    printed_name: typeof printed.printed_name === 'string' && printed.printed_name.trim() ? printed.printed_name.trim() : null
+  };
   const seen = parsed.observed || {};
   const observed = { odometer: seen.odometer === true, receipt: seen.receipt === true, pump: seen.pump === true };
 
   // The vehicles are listed too, so the person can correct which one it was
   return {
-    result: { purchases, fuel, observed, machines: machines.map(machineInfo), policies: followed, model: EXTRACT_MODEL_ID, usage: reply.usage },
+    result: { purchases, fuel, observed, vendor, machines: machines.map(machineInfo), policies: followed, model: EXTRACT_MODEL_ID, usage: reply.usage },
     raw: parsed.fuel || {}
   };
 }
@@ -984,6 +1027,7 @@ async function readRecordPhotos(recordId, organizationId) {
     odometer: { observed: result.observed.odometer, reading: isNumber(raw.meter_reading) ? raw.meter_reading : null },
     receipt: { observed: result.observed.receipt, purchases: result.purchases },
     pump: { observed: result.observed.pump, liters: isNumber(raw.liters) ? raw.liters : null, octane: typeof raw.octane === 'string' && raw.octane.trim() ? raw.octane.trim() : null },
+    vendor: result.vendor,
     policy_ids: result.policies.map((policy) => policy.id)
   });
   return { result, stateId };
@@ -1029,6 +1073,15 @@ async function analyzeExpensePhotos(recordId, organizationId) {
     const failure = await writePurchases(recordId, organizationId, result.purchases);
     if (failure) console.error('Could not save the purchases read for', recordId, failure.body);
   }
+  await assignVendor(recordId, organizationId, result.vendor);
+  const lookups = await linkPurchaseParts(recordId, organizationId);
+  if (lookups.length > 0 && read.stateId) {
+    await pool.query(
+      `UPDATE state_perspectives SET content = content || jsonb_build_object('part_lookups', $3::jsonb)
+        WHERE state_id = $1 AND perspective_type = $2`,
+      [read.stateId, EXPENSE_PHOTOS_PERSPECTIVE, JSON.stringify(lookups)]
+    );
+  }
   await linkPolicies(recordId, organizationId, result.policies.map((policy) => policy.id));
   if (result.fuel && !(await getFuelFill(recordId, organizationId))) {
     const failure = await writeFuelFill(recordId, organizationId, {
@@ -1037,6 +1090,162 @@ async function analyzeExpensePhotos(recordId, organizationId) {
     if (failure) console.error('Could not save the fuel fill read for', recordId, failure.body);
   }
   return { ok: true };
+}
+
+// Vendors this organization has dealt with: organizations with no people, from its receipts and parts
+async function knownVendors(organizationId) {
+  return (await pool.query(
+    `SELECT o.id, o.name FROM organizations o
+      WHERE o.is_active AND o.name <> $2
+        AND NOT EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.is_active)
+        AND (o.id IN (SELECT vendor_organization_id FROM financial_records WHERE organization_id = $1 AND vendor_organization_id IS NOT NULL)
+             OR o.id IN (SELECT organization_id FROM parts WHERE created_by_organization_id = $1))
+      ORDER BY o.name`,
+    [organizationId, UNKNOWN_VENDOR_NAME]
+  )).rows;
+}
+
+// Where a receipt goes when we cannot tell who it is from: moving it to the right vendor later is easier than
+// undoing a vendor made from a guess
+async function unknownVendorId() {
+  return (await pool.query('SELECT id FROM organizations WHERE name = $1 AND is_active LIMIT 1', [UNKNOWN_VENDOR_NAME])).rows[0]?.id ?? null;
+}
+
+// The record's vendor when it has none: the one its receipt clearly names, else Unknown vendor
+async function assignVendor(recordId, organizationId, vendor) {
+  const record = (await pool.query('SELECT vendor_organization_id FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId])).rows[0];
+  if (!record || record.vendor_organization_id) return;
+  const vendorId = vendor?.organization_id || await unknownVendorId();
+  if (!vendorId) {
+    console.error(`No "${UNKNOWN_VENDOR_NAME}" organization to give expense ${recordId}`);
+    return;
+  }
+  await pool.query('UPDATE financial_records SET vendor_organization_id = $1, updated_at = NOW() WHERE id = $2 AND vendor_organization_id IS NULL', [vendorId, recordId]);
+}
+
+async function titanEmbedding(text) {
+  const reply = await bedrock.send(new InvokeModelCommand({
+    modelId: 'amazon.titan-embed-text-v1', contentType: 'application/json', accept: 'application/json', body: JSON.stringify({ inputText: text })
+  }));
+  return JSON.parse(new TextDecoder().decode(reply.body)).embedding;
+}
+
+const JSON_IN = (text) => {
+  try { return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)); } catch (parseErr) { return null; }
+};
+
+const SAME_PRODUCT_PROMPT = 'You match a purchase line from a receipt to the vendor\'s catalog. Reply with JSON only: {"part_id": string|null}. Give a part_id only when the line is clearly the same product as that part: same kind, grade, brand and size. Similar is not enough. If none is clearly the same, part_id is null.';
+
+// The vendor's part this line clearly is, or null. Search proposes the closest parts by meaning, and a strict
+// check decides: on lines already linked by hand it linked the right part 88% of the time and merged a new
+// item into another part 3% of the time (search alone merged about 30%).
+async function matchVendorPart(line, vendorId, organizationId) {
+  const exact = (await pool.query(
+    `SELECT id FROM parts WHERE organization_id = $1 AND created_by_organization_id = $2 AND lower(btrim(name)) = lower(btrim($3)) LIMIT 1`,
+    [vendorId, organizationId, line.purchase_text]
+  )).rows[0];
+  if (exact) return exact.id;
+
+  const vector = `[${(await titanEmbedding(line.purchase_text)).join(',')}]`;
+  const candidates = (await pool.query(
+    `SELECT p.id, p.name, p.description, p.unit, 1 - (ue.embedding <=> $3::vector) AS similarity
+       FROM unified_embeddings ue JOIN parts p ON ue.entity_type = 'part' AND p.id = ue.entity_id
+      WHERE p.organization_id = $1 AND p.created_by_organization_id = $2
+      ORDER BY ue.embedding <=> $3::vector LIMIT 3`,
+    [vendorId, organizationId, vector]
+  )).rows.filter((candidate) => Number(candidate.similarity) >= 0.3);
+  if (candidates.length === 0) return null;
+
+  const reply = await bedrock.send(new ConverseCommand({
+    modelId: EXTRACT_MODEL_ID,
+    system: [{ text: SAME_PRODUCT_PROMPT }],
+    messages: [{ role: 'user', content: [{ text: `Receipt line: ${JSON.stringify(line.purchase_text)}${line.unit ? `, sold by the ${line.unit}` : ''}\nVendor parts: ${JSON.stringify(candidates.map((c) => ({ part_id: c.id, name: c.name, description: c.description, unit: c.unit })))}` }] }],
+    inferenceConfig: { maxTokens: 100, temperature: 0 }
+  }));
+  const answer = JSON_IN(reply.output.message.content.map((part) => part.text || '').join(''));
+  return candidates.some((c) => c.id === answer?.part_id) ? answer.part_id : null;
+}
+
+// What an unfamiliar item is. What we already know comes first (a part of ours with that name and a description,
+// from any vendor); otherwise the web, through Bedrock's web grounding. Not found: null, and nothing is guessed.
+async function whatItemIs(line, vendorName, organizationId) {
+  const known = (await pool.query(
+    `SELECT description, category FROM parts WHERE created_by_organization_id = $1 AND lower(btrim(name)) = lower(btrim($2)) AND description IS NOT NULL ORDER BY updated_at DESC LIMIT 1`,
+    [organizationId, line.purchase_text]
+  )).rows[0];
+  if (known) return { description: known.description, category: known.category, source: null };
+
+  const categories = (await pool.query(
+    'SELECT DISTINCT category FROM parts WHERE created_by_organization_id = $1 AND category IS NOT NULL ORDER BY category LIMIT 60', [organizationId]
+  )).rows.map((row) => row.category);
+  const reply = await bedrock.send(new ConverseCommand({
+    modelId: WEB_LOOKUP_MODEL_ID,
+    messages: [{ role: 'user', content: [{ text:
+      `A receipt from ${vendorName} (Philippines) has the line "${line.purchase_text}"${line.unit ? `, sold by the ${line.unit}` : ''}${line.unit_price ? ` at ₱${line.unit_price}` : ''}. Look up what this product is. Reply with JSON only: {"what_it_is": "a plain short description: the generic product first, then brand or grade if any", "found": boolean, "category": "one or two words, the generic kind of product", "source": "the website (domain) that says what this exact product is, or null"}. ${categories.length > 0 ? `Use one of these existing categories if it fits: ${JSON.stringify(categories)}. ` : ''}found is true only when what you find clearly says what this exact product is. If you are guessing or the sources are unclear, found is false. It is also false for anything that is not a product (a discount, a return, a fee, a note).` }] }],
+    toolConfig: { tools: [{ systemTool: { name: 'nova_grounding' } }] },
+    inferenceConfig: { maxTokens: 600, temperature: 0 }
+  }));
+  const answer = JSON_IN(reply.output.message.content.map((part) => part.text || '').join(''));
+  if (!answer || answer.found !== true || typeof answer.what_it_is !== 'string' || !answer.what_it_is.trim()) return null;
+  // Nothing is believed that no page says
+  if (typeof answer.source !== 'string' || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(answer.source.trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0])) return null;
+  // A description that hedges is a guess
+  if (/\b(likely|possibly|probably|perhaps|may be|might|appears to|seems|could be|unclear)\b/i.test(answer.what_it_is)) return null;
+  // The description says only what the item is; where the web said so is kept on the expense's perspective,
+  // since a source in the part's text would be embedded with it
+  return {
+    description: answer.what_it_is.trim().replace(/[.\s]+$/, ''),
+    category: typeof answer.category === 'string' && answer.category.trim() ? answer.category.trim() : null,
+    source: answer.source.trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0]
+  };
+}
+
+// A new part of the vendor's: named as the receipt writes it, described in plain words
+async function createVendorPart(line, what, vendorId, organizationId) {
+  const partId = randomUUID();
+  const price = line.unit_price ?? (line.quantity ? Math.round((line.amount / line.quantity) * 100) / 100 : null);
+  await pool.query(
+    `INSERT INTO parts (id, name, description, category, current_quantity, minimum_quantity, unit, organization_id, sellable, cost_per_unit, created_by_organization_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, 0, 0, $5, $6, false, $7, $8, NOW(), NOW())`,
+    [partId, line.purchase_text.trim(), what.description, what.category, line.unit, vendorId, price, organizationId]
+  );
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: EMBEDDINGS_QUEUE_URL,
+    MessageBody: JSON.stringify({ entity_type: 'part', entity_id: partId, embedding_source: [line.purchase_text.trim(), what.description].filter(Boolean).join('. '), organization_id: vendorId })
+  })).catch((err) => console.error('Failed to queue embedding for part:', err));
+  return partId;
+}
+
+// Links each of the record's purchases to the vendor's part: the one it clearly is, else a new part when we can
+// tell what it is. Under Unknown vendor, or when nothing is clear, a line stays unlinked: nothing is guessed.
+// Returns the parts made from a web lookup, with the site that said what each is.
+async function linkPurchaseParts(recordId, organizationId) {
+  const record = (await pool.query('SELECT vendor_organization_id FROM financial_records WHERE id = $1 AND organization_id = $2', [recordId, organizationId])).rows[0];
+  const vendorId = record?.vendor_organization_id;
+  if (!vendorId || vendorId === await unknownVendorId()) return [];
+  const vendorName = (await pool.query('SELECT name FROM organizations WHERE id = $1', [vendorId])).rows[0]?.name || 'a vendor';
+
+  const lines = (await pool.query(
+    'SELECT id, purchase_text, quantity, unit, unit_price, amount FROM financial_record_purchases WHERE financial_record_id = $1 AND part_id IS NULL ORDER BY created_at, id',
+    [recordId]
+  )).rows;
+  const lookups = [];
+  for (const line of lines) {
+    try {
+      let partId = await matchVendorPart(line, vendorId, organizationId);
+      if (!partId) {
+        const what = await whatItemIs(line, vendorName, organizationId);
+        if (what) {
+          partId = await createVendorPart(line, what, vendorId, organizationId);
+          if (what.source) lookups.push({ line: line.purchase_text, part_id: partId, source: what.source });
+        }
+      }
+      if (partId) await pool.query('UPDATE financial_record_purchases SET part_id = $1, updated_at = NOW() WHERE id = $2', [partId, line.id]);
+    } catch (err) {
+      console.error(`Could not link "${line.purchase_text}" of ${recordId} to a part:`, err.message);
+    }
+  }
+  return lookups;
 }
 
 // The policies the record's action follows, with these added
