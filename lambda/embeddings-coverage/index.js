@@ -63,7 +63,7 @@ exports.handler = async (event) => {
       UNION ALL
       SELECT 'tool', COUNT(*) FROM tools WHERE organization_id = '${escapedOrgId}'
       UNION ALL
-      SELECT 'action', COUNT(*) FROM actions WHERE organization_id = '${escapedOrgId}'
+      SELECT 'action', COUNT(*) FROM actions a WHERE a.organization_id = '${escapedOrgId}' AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)
       UNION ALL
       SELECT 'issue', COUNT(*) FROM issues WHERE organization_id = '${escapedOrgId}'
       UNION ALL

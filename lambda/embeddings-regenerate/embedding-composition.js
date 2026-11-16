@@ -18,28 +18,27 @@
 /**
  * Compose embedding source for a part
  * 
- * Parts include name, description (physical characteristics), and policy
- * (use case, benefits, operational context).
+ * Parts include their name and description (what it is, what it is used for, what it looks like).
+ * The policy is not part of it.
  * 
  * @param {Object} part - Part entity
  * @param {string} part.name - Part name
  * @param {string} [part.description] - Physical/anatomical description
- * @param {string} [part.policy] - Use case, benefits, operational context
  * @returns {string} - Composed embedding source text
  * 
  * @example
  * composePartEmbeddingSource({
  *   name: 'Banana Wine',
- *   description: 'Fermented banana beverage',
- *   policy: 'Rich in potassium and B vitamins. May support heart health.'
+ *   description: 'Fermented banana beverage'
  * })
- * // Returns: "Banana Wine. Fermented banana beverage. Rich in potassium and B vitamins. May support heart health."
+ * // Returns: "Banana Wine. Fermented banana beverage"
  */
 function composePartEmbeddingSource(part) {
+  // The policy (how to handle it) is not embedded: it says nothing about what the item is, and editing
+  // it should not mean embedding the item again.
   const parts = [
     part.name,
-    part.description,
-    part.policy
+    part.description
   ].filter(Boolean);
   
   return parts.join('. ');

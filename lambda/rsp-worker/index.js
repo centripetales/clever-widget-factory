@@ -1,6 +1,7 @@
 const { Client } = require('pg');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const https = require('https');
 
 const { broadcastInvalidation } = require('/opt/nodejs/broadcastInvalidation');
@@ -26,6 +27,22 @@ const dbConfig = {
 };
 
 const bedrockRuntime = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION });
+
+// The reading of an expense's photos (purchases, the fuel fill, the policy it follows) is the
+// financial-records lambda's: it knows how to save them. The worker only asks for it, as it does
+// for the other readings of an observation, and tells the page it has changed.
+async function runExpensePhotosReading(recordId, organizationId) {
+  const response = await lambdaClient.send(new InvokeCommand({
+    FunctionName: 'cwf-financial-records-lambda',
+    Payload: JSON.stringify({ internal: 'analyze_expense_photos', recordId, organizationId })
+  }));
+  if (response.FunctionError) {
+    throw new Error(`Reading the photos of expense ${recordId} failed: ${Buffer.from(response.Payload).toString()}`);
+  }
+  await broadcastInvalidation({ entityType: 'financial_record', entityId: recordId, mutationType: 'updated', organizationId });
+}
+
 const sqs = new SQSClient({ region: process.env.AWS_REGION });
 const EMBEDDINGS_QUEUE_URL = 'https://sqs.us-west-2.amazonaws.com/131745734428/cwf-embeddings-queue';
 
@@ -930,7 +947,11 @@ exports.handler = async (event) => {
     if (Array.isArray(event.Records) && event.Records.length > 0) {
       console.log(`[RSP] SQS trigger: processing ${event.Records.length} record(s)`);
       for (const sqsRecord of event.Records) {
-        const { stateId, perspective } = JSON.parse(sqsRecord.body);
+        const { stateId, perspective, recordId, organizationId } = JSON.parse(sqsRecord.body);
+        if (perspective === 'EXPENSE_PHOTOS') {
+          await runExpensePhotosReading(recordId, organizationId);
+          continue;
+        }
         const offersOnly = perspective === 'OFFERS';
         const claimsOnly = perspective === 'CLAIMS';
         // Find or create the pending_perspectives row for this state. An

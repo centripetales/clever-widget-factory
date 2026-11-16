@@ -93,3 +93,7 @@ out.json
 lambda/**/test-*.js
 lambda/**/run-worker-local.js
 !lambda/**/*.example.js
+
+# Local setup
+.venv-charts/
+.claude/

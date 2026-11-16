@@ -10,6 +10,8 @@
 import { apiService } from '../lib/apiService';
 import type {
   FinancialRecord,
+  FinancialRecordFuelFill,
+  FinancialRecordMachine,
   FinancialRecordFilters,
   FinancialRecordListResponse,
 } from '../types/financialRecords';
@@ -29,6 +31,60 @@ export interface UpdateFinancialRecordRequest {
   description?: string;
   photos?: { photo_url: string; photo_description?: string; photo_order: number }[];
 }
+
+export interface ExtractedPurchase {
+  /** Set for a purchase already saved: it is updated, not replaced, and keeps its part */
+  id?: string;
+  part_id?: string | null;
+  purchase_text: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  amount: number;
+}
+
+/** A fuel fill read from the photos: what the model observed, and the rate it gives (km/l, or L/h on an hour meter) */
+export type ExtractedMachine = FinancialRecordMachine;
+
+export interface ExtractedFuelFill {
+  machine: ExtractedMachine;
+  meter_reading: number | null;
+  /** What the model read, when it was corrected to fit the previous reading */
+  meter_reading_read: number | null;
+  liters: number | null;
+  octane: string | null;
+  previous: { meter_reading: number; date: string } | null;
+  rate: number | null;
+}
+
+/** A policy the record follows */
+export interface FollowedPolicy {
+  id: string;
+  title: string;
+}
+
+/** What the model could see in the photos: the odometer, the receipt, the fuel pump */
+export interface ObservedParts {
+  odometer: boolean;
+  receipt: boolean;
+  pump: boolean;
+}
+
+export interface ExtractedReading {
+  purchases: ExtractedPurchase[];
+  fuel: ExtractedFuelFill | null;
+  observed: ObservedParts;
+  machines: ExtractedMachine[];
+  policies: FollowedPolicy[];
+}
+
+const toReading = (data: ExtractedReading): ExtractedReading => ({
+  purchases: data.purchases,
+  fuel: data.fuel ?? null,
+  observed: data.observed,
+  machines: data.machines ?? [],
+  policies: data.policies ?? [],
+});
 
 export class FinancialRecordsService {
   /**
@@ -139,6 +195,41 @@ export class FinancialRecordsService {
       console.error('Error deleting financial record:', error);
       throw error;
     }
+  }
+
+  /**
+   * What is read from a saved record's photos (a draft to confirm: the reading is kept as a perspective)
+   */
+  async extractPurchases(id: string): Promise<ExtractedReading> {
+    const response = await apiService.post(`/financial-records/${id}/purchases/extract`, {});
+    return toReading(response.data || response);
+  }
+
+  /**
+   * What is read from photos before the expense is saved (nothing is written)
+   */
+  async readPhotos(data: { photo_urls: string[]; description: string; amount: number; transaction_date: string }): Promise<ExtractedReading> {
+    const response = await apiService.post('/financial-records/read-photos', data);
+    return toReading(response.data || response);
+  }
+
+  /**
+   * The fuel fill the person confirmed or corrected: the vehicle and its readings. With no vehicle
+   * the record is not a fuel fill. The policies given are added to those its action follows.
+   */
+  async saveFuelFill(
+    id: string,
+    fill: { machine_id: string | null; meter_reading: number | null; liters: number | null; policy_ids?: string[] }
+  ): Promise<FinancialRecordFuelFill | null> {
+    const response = await apiService.put(`/financial-records/${id}/fuel-fill`, fill);
+    return (response.data || response).fuel_fill ?? null;
+  }
+
+  /**
+   * Save the record's purchases
+   */
+  async savePurchases(id: string, purchases: ExtractedPurchase[]): Promise<void> {
+    await apiService.put(`/financial-records/${id}/purchases`, { purchases });
   }
 }
 

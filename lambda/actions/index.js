@@ -53,11 +53,11 @@ async function queryJSON(sql) {
 
 // Actions made from a transaction are reached only via the transaction, so
 // they stay out of action lists (docs/design/POSITIVE_SUM.md §2.6).
-const NOT_FROM_TRANSACTION = `NOT EXISTS (
+const NOT_FROM_TRANSACTION = `(NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id) AND NOT EXISTS (
   SELECT 1 FROM state_links tl JOIN states ts ON ts.id = tl.state_id
   WHERE tl.entity_type = 'action' AND tl.entity_id = a.id
     AND ts.state_text LIKE '{"type":"positive_sum.transaction_context"%'
-)`;
+))`;
 
 // Positive Sum helpers shared by the web routes and the Maxwell action group.
 function queueActionEmbedding(action) {
@@ -157,7 +157,7 @@ exports.handler = async (event) => {
           isSuperAdmin: hasPermission(authContext, 'data:read:all'),
         };
         const { statusCode, data } = organizationsRoute
-          ? await handleOrganizations({ httpMethod, name: httpMethod === 'GET' ? queryStringParameters?.name : body.name, auth, dbConfig })
+          ? await handleOrganizations({ httpMethod, name: httpMethod === 'GET' ? queryStringParameters?.name : body.name, auth, dbConfig, seedMember: body.seed_member !== false })
           : await handleTransactionAction({ httpMethod, recordId: transactionRoute[1], isDraft: !!transactionRoute[2], body, auth, dbConfig });
         // A new action from a transaction gets its rewards built straight away;
         // the action is saved either way, and the person can rebuild.

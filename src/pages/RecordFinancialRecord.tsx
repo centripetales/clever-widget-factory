@@ -13,13 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, Loader2, Info } from 'lucide-react';
+import { ArrowLeft, Loader2, Info, ScanText } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useFileUpload } from '@/hooks/useFileUpload';
 import { useCreateFinancialRecord } from '@/hooks/useFinancialRecords';
 import { useToast } from '@/components/ui/use-toast';
 import { StockSelector } from '@/components/StockSelector';
 import { processStockAdjustment } from '@/lib/utils';
+import { ReadingReview } from '@/components/ReadingReview';
+import { financialRecordsService, type ExtractedReading } from '@/services/financialRecordsService';
 import {
   PhotoUploadPanel,
   type PhotoItem,
@@ -52,6 +54,11 @@ export default function RecordFinancialRecord() {
   });
   const [isSaving, setIsSaving] = useState(false);
 
+  // What was read from the photos before saving, for the person to check and correct. If they do not
+  // check, the photos are read once the expense is saved.
+  const [reading, setReading] = useState<ExtractedReading | null>(null);
+  const [isReading, setIsReading] = useState(false);
+
   const handleEagerUpload = useCallback(async (file: File) => {
     const result = await uploadFiles(file, { bucket: 'mission-attachments' });
     const r = Array.isArray(result) ? result[0] : result;
@@ -68,6 +75,26 @@ export default function RecordFinancialRecord() {
     !isSaving &&
     !isUploading &&
     !photos.some(p => p.isUploading);
+
+  const uploadedPhotoUrls = photos.filter((p) => p.photo_url && !p.isUploading).map((p) => p.photo_url as string);
+  const canCheckPhotos = uploadedPhotoUrls.length > 0 && isAmountValid && !isReading && !isSaving && !isUploading;
+
+  const handleCheckPhotos = async () => {
+    setIsReading(true);
+    try {
+      setReading(await financialRecordsService.readPhotos({
+        photo_urls: uploadedPhotoUrls,
+        description: description.trim(),
+        amount: parsedAmount,
+        transaction_date: transactionDate,
+      }));
+    } catch (error) {
+      console.error('Failed to read the photos:', error);
+      toast({ title: 'Could not read the photos', description: 'You can still save; they will be read afterwards.', variant: 'destructive' });
+    } finally {
+      setIsReading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -103,7 +130,7 @@ export default function RecordFinancialRecord() {
       // Reindex photo_order
       uploadedPhotos = uploadedPhotos.map((p, i) => ({ ...p, photo_order: i }));
 
-      await createRecord.mutateAsync({
+      const created = await createRecord.mutateAsync({
         transaction_date: transactionDate,
         description: description.trim(),
         amount: parsedAmount,
@@ -114,6 +141,23 @@ export default function RecordFinancialRecord() {
           photo_order: i,
         })) : undefined,
       });
+
+      // What the person checked is saved with it; otherwise the photos are read in the background
+      if (reading) {
+        try {
+          await financialRecordsService.savePurchases(created.id, reading.purchases);
+          if (reading.fuel || reading.policies.length > 0) {
+            await financialRecordsService.saveFuelFill(created.id, {
+              machine_id: reading.fuel?.machine.id ?? null,
+              meter_reading: reading.fuel?.meter_reading ?? null,
+              liters: reading.fuel?.liters ?? null,
+              policy_ids: reading.policies.map((policy) => policy.id),
+            });
+          }
+        } catch (readingError) {
+          console.error('Failed to save what was read from the photos:', readingError);
+        }
+      }
 
       if (selectedStock.length > 0) {
         try {
@@ -260,7 +304,26 @@ export default function RecordFinancialRecord() {
               onEagerUpload={handleEagerUpload}
               disabled={isSaving}
             />
+            {uploadedPhotoUrls.length > 0 && reading === null && (
+              <Button variant="outline" size="sm" onClick={handleCheckPhotos} disabled={!canCheckPhotos}>
+                {isReading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanText className="h-4 w-4 mr-2" />}
+                {isReading ? 'Reading photos...' : 'Check photos'}
+              </Button>
+            )}
           </div>
+
+          {/* What was read: checked and corrected here, or left for the background reading after saving */}
+          {reading !== null && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm text-muted-foreground">Read from the photos</Label>
+                <Button variant="ghost" size="sm" onClick={() => setReading(null)} disabled={isSaving}>
+                  Discard
+                </Button>
+              </div>
+              <ReadingReview reading={reading} onChange={setReading} recordAmount={parsedAmount} disabled={isSaving} />
+            </div>
+          )}
         </CardContent>
       </Card>
 

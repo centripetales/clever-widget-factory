@@ -218,7 +218,7 @@ exports.handler = async (event) => {
       const memberRows = await queryParams('SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND is_active = true', [orgId]);
       impact.members = parseInt(memberRows[0].count, 10);
       // Actions (no is_active column — count all)
-      const actionRows = await queryParams('SELECT COUNT(*) FROM actions WHERE organization_id = $1', [orgId]);
+      const actionRows = await queryParams('SELECT COUNT(*) FROM actions a WHERE a.organization_id = $1 AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)', [orgId]);
       impact.actions = parseInt(actionRows[0].count, 10);
       // Missions (no is_active column — count all)
       const missionRows = await queryParams('SELECT COUNT(*) FROM missions WHERE organization_id = $1', [orgId]);

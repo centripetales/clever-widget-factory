@@ -16,11 +16,12 @@ async function invoke(functionName, payload) {
   return reply;
 }
 
-async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId } = {}) {
+async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId, query } = {}) {
   const authorizer = await invoke(AUTHORIZER, { contextFor: cognitoUserId });
   const reply = await invoke(functionName, {
     httpMethod: method,
     path,
+    queryStringParameters: query,
     pathParameters: id ? { id } : snapshotId ? { snapshot_id: snapshotId } : undefined,
     headers: orgId ? { 'X-Organization-Id': orgId } : {},
     body: JSON.stringify(body),
@@ -91,6 +92,37 @@ export async function deleteFinancialRecord({ cognitoUserId, orgId, recordId }) 
   return invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', id: recordId });
 }
 
+// Organizations with a name like this one (id and name only, across all
+// organizations), and a new one when none has the same name. The actions
+// service refuses an exact repeat. A vendor's organization has no people of ours,
+// so the creator is never made a member of it (seed_member: false), even a super-admin.
+export async function findSimilarOrganizations({ cognitoUserId, name }) {
+  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', {}, { cognitoUserId }, { method: 'GET', query: { name } })).data;
+}
+
+export async function createOrganization({ cognitoUserId, name }) {
+  return (await invokeApp('cwf-actions-lambda', '/api/positive-sum/organizations', { name, seed_member: false }, { cognitoUserId })).data;
+}
+
+// The purchases given become the record's line purchases, in the record's org (orgId):
+// those with an id are updated, those without are added, and its others are
+// removed. The service decides who may edit the record.
+export async function saveFinancialRecordPurchases({ cognitoUserId, orgId, recordId, purchases }) {
+  return (await invokeApp('cwf-financial-records-lambda', `/api/financial-records/${recordId}/purchases`, { purchases }, { cognitoUserId, orgId }, { method: 'PUT', id: recordId })).purchases;
+}
+
+// The action behind a financial record (the app's reward flow): null when it
+// has none. Creating one is idempotent; the actions service makes it assigned to
+// whoever recorded the transaction, dated the transaction date, naming the other
+// organization, and starts building its rewards in the background.
+export async function getTransactionAction({ cognitoUserId, orgId, recordId }) {
+  return (await invokeApp('cwf-actions-lambda', `/api/financial-records/${recordId}/action`, {}, { cognitoUserId, orgId }, { method: 'GET' })).data;
+}
+
+export async function createTransactionAction({ cognitoUserId, orgId, recordId, otherOrgId }) {
+  return (await invokeApp('cwf-actions-lambda', `/api/financial-records/${recordId}/action`, { other_org_id: otherOrgId }, { cognitoUserId, orgId })).data;
+}
+
 // A new tool or part, through the parts and tools service as the app's add
 // form does, in the primary org (none given).
 export async function createAsset({ cognitoUserId, type, asset }) {
@@ -123,6 +155,12 @@ export async function deleteExperience({ cognitoUserId, orgId, experienceId }) {
 // files them under the caller's primary org, whatever org is asked for.
 export async function createMetric({ cognitoUserId, toolId, metric }) {
   return (await invokeApp('cwf-metrics-lambda', `/api/tools/${toolId}/metrics`, metric, { cognitoUserId }, { id: toolId })).metric;
+}
+
+// A metric of an organization, action, part or state, through the metrics
+// service; it files it under the caller's primary org.
+export async function createEntityMetric({ cognitoUserId, entityType, entityId, metric }) {
+  return (await invokeApp('cwf-metrics-lambda', '/api/metrics', { entity_type: entityType, entity_id: entityId, ...metric }, { cognitoUserId })).metric;
 }
 
 // Expectation models are saved through the state-space service, which

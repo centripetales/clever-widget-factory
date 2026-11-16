@@ -28,7 +28,6 @@ replaced by capabilities + open options), *board*/*post*.
 
 ## Principles
 
-- **Information is always free**; resources are what's coordinated.
 - **Low friction, natural language.** Don't define structure for things that
   may go a different direction; let people write naturally and have an LLM
   pull out what's needed when it's needed.

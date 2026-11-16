@@ -18,6 +18,13 @@ describe('useFeatureFlag', () => {
     expect(isFeatureEnabled()).toBe(true);
   });
 
+  it('is still loading while the active organization is being fetched', () => {
+    mockUseOrganization.mockReturnValue({ organization: null, loading: false, organizationsLoading: true });
+    expect(useFeatureFlag().isLoading).toBe(true);
+    mockUseOrganization.mockReturnValue({ organization: { id: 'org-1', settings: {} }, loading: false, organizationsLoading: true });
+    expect(useFeatureFlag().isLoading).toBe(false);
+  });
+
   it('should enable all features by default if enabled_features is not defined', () => {
     mockUseOrganization.mockReturnValue({
       organization: { id: 'org-1', settings: {} },

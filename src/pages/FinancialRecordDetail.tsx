@@ -24,7 +24,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { ArrowLeft, Loader2, Pencil, Trash2, X, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Trash2, X, Save, ScanText } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { financialRecordsService, type ExtractedReading } from '@/services/financialRecordsService';
+import { financialRecordKeys } from '@/hooks/useFinancialRecords';
 import { useAuth } from '@/hooks/useCognitoAuth';
 import {
   useFinancialRecord,
@@ -38,6 +41,9 @@ import {
   type PhotoItem,
 } from '@/components/shared/PhotoUploadPanel';
 import { getImageUrl, getThumbnailUrl, openImage } from '@/lib/imageUtils';
+import { ReadingReview } from '@/components/ReadingReview';
+import { FuelingPerspective } from '@/components/FuelingPerspective';
+import { FuelFillFields } from '@/components/FuelFillFields';
 import { TransactionRewards } from '@/components/positiveSum/TransactionRewards';
 import type { FinancialRecordEdit } from '@/types/financialRecords';
 
@@ -60,6 +66,12 @@ export default function FinancialRecordDetail() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Purchases read from the photos, held for the person to confirm
+  const queryClient = useQueryClient();
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [reading, setReading] = useState<ExtractedReading | null>(null);
+  const extracted = reading?.purchases ?? null;
 
   // Edit form state
   const [editAmount, setEditAmount] = useState('');
@@ -87,6 +99,7 @@ export default function FinancialRecordDetail() {
           id: `existing-${i}`,
           photo_url: p.photo_url,
           photo_type: 'receipt',
+          photo_description: p.photo_description || '',
           photo_order: p.photo_order || i,
           isExisting: true,
           previewUrl: getImageUrl(p.photo_url) || p.photo_url,
@@ -117,10 +130,11 @@ export default function FinancialRecordDetail() {
       const photosToUpload = editPhotos.filter((p) => p.file && !p.photo_url);
       const existingPhotos = editPhotos.filter((p) => p.photo_url && !p.file);
 
-      let uploadedPhotos: { photo_url: string; photo_type: string; photo_order: number }[] =
+      let uploadedPhotos: { photo_url: string; photo_type: string; photo_description: string; photo_order: number }[] =
         existingPhotos.map((p) => ({
           photo_url: p.photo_url!,
           photo_type: p.photo_type || 'receipt',
+          photo_description: p.photo_description || '',
           photo_order: p.photo_order,
         }));
 
@@ -132,6 +146,7 @@ export default function FinancialRecordDetail() {
         const newUploaded = resultsArray.map((result, index) => ({
           photo_url: result.url,
           photo_type: photosToUpload[index].photo_type || 'receipt',
+          photo_description: photosToUpload[index].photo_description || '',
           photo_order: existingPhotos.length + index,
         }));
 
@@ -150,7 +165,7 @@ export default function FinancialRecordDetail() {
           payment_method: editPaymentMethod,
           photos: uploadedPhotos.length > 0 ? uploadedPhotos.map((p, i) => ({
             photo_url: p.photo_url,
-            photo_description: undefined,
+            photo_description: p.photo_description,
             photo_order: i,
           })) : undefined,
         },
@@ -166,6 +181,84 @@ export default function FinancialRecordDetail() {
       toast({
         title: 'Error',
         description: 'Failed to save changes. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleExtract = async () => {
+    if (!id) return;
+    setIsExtracting(true);
+    try {
+      const result = await financialRecordsService.extractPurchases(id);
+      // Purchases already saved are kept as they are: only what else was read (fuel fill, policies) is added
+      const saved = record?.purchases ?? [];
+      setReading(saved.length === 0 ? result : {
+        ...result,
+        purchases: saved.map((purchase) => ({
+          id: purchase.id,
+          part_id: purchase.part_id,
+          purchase_text: purchase.purchase_text,
+          quantity: purchase.quantity === null ? null : Number(purchase.quantity),
+          unit: purchase.unit,
+          unit_price: purchase.unit_price === null ? null : Number(purchase.unit_price),
+          amount: Number(purchase.amount),
+        })),
+      });
+    } catch (err) {
+      console.error('Failed to read purchases from photos:', err);
+      toast({
+        title: 'Could not read the photos',
+        description: 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  // What the person confirmed of the reading: the fuel fill (the vehicle and its readings, saved on the
+  // expense's description) and the policy the expense follows
+  const saveReading = async (result: ExtractedReading, recordId: string) => {
+    const { fuel, policies } = result;
+    if (!fuel && policies.length === 0) return;
+    await financialRecordsService.saveFuelFill(recordId, {
+      machine_id: fuel?.machine.id ?? null,
+      meter_reading: fuel?.meter_reading ?? null,
+      liters: fuel?.liters ?? null,
+      policy_ids: policies.map((policy) => policy.id),
+    });
+  };
+
+  // A correction to the fuel fill, made in its fields
+  const handleSaveFuelFill = async (fill: { machine_id: string | null; meter_reading: number | null; liters: number | null }) => {
+    if (!id) return;
+    try {
+      await financialRecordsService.saveFuelFill(id, fill);
+      await queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(id) });
+      toast({ title: 'Fuel fill saved' });
+    } catch (err) {
+      console.error('Failed to save the fuel fill:', err);
+      toast({ title: 'Error', description: 'Failed to save the fuel fill. Please try again.', variant: 'destructive' });
+    }
+  };
+
+  const handleSaveExtracted = async () => {
+    if (!id || !extracted) return;
+    setIsSaving(true);
+    try {
+      await financialRecordsService.savePurchases(id, extracted);
+      if (reading) await saveReading(reading, id);
+      await queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(id) });
+      setReading(null);
+      toast({ title: 'Purchases saved' });
+    } catch (err) {
+      console.error('Failed to save purchases:', err);
+      toast({
+        title: 'Error',
+        description: 'Failed to save purchases. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -333,18 +426,17 @@ export default function FinancialRecordDetail() {
                           />
                         </div>
 
-                        {/* Right part: AI description details */}
+                        {/* Right part: the person's description of the photo */}
                         <div className="flex-1 flex flex-col justify-start min-w-0">
-                          {photo.transcription?.trim() ? (
-                            <div className="p-3 rounded bg-indigo-50/30 dark:bg-indigo-950/15 border border-indigo-100/50 dark:border-indigo-900/20 h-full">
-                              <span className="block font-semibold text-xs text-indigo-900 dark:text-indigo-400 mb-1">AI Description:</span>
+                          {photo.photo_description?.trim() ? (
+                            <div className="p-3 rounded bg-zinc-100/50 dark:bg-zinc-800/20 border border-zinc-200/50 dark:border-zinc-750/30 h-full">
                               <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed font-normal whitespace-pre-wrap">
-                                {photo.transcription.replace(/^\[photo_analysis\]\s*/, '')}
+                                {photo.photo_description}
                               </p>
                             </div>
                           ) : (
                             <div className="p-3 rounded bg-zinc-100/50 dark:bg-zinc-800/20 border border-zinc-200/50 dark:border-zinc-750/30 h-full flex items-center justify-center">
-                              <p className="text-xs text-muted-foreground italic">AI description not yet available.</p>
+                              <p className="text-xs text-muted-foreground italic">No description.</p>
                             </div>
                           )}
                         </div>
@@ -437,10 +529,132 @@ export default function FinancialRecordDetail() {
                 <p className="text-sm text-muted-foreground">Payment Method</p>
                 <Badge variant="outline">{record.payment_method}</Badge>
               </div>
+              {record.vendor && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Vendor</p>
+                  <p className="font-medium">{record.vendor.name}</p>
+                </div>
+              )}
+              {record.policies && record.policies.length > 0 && (
+                <div className="sm:col-span-2">
+                  <p className="text-sm text-muted-foreground">{record.policies.length === 1 ? 'Policy' : 'Policies'}</p>
+                  <div className="space-y-2">
+                    {record.policies.map((policy) => (
+                      <div key={policy.id}>
+                        <p className="font-medium">{policy.title}</p>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{policy.description_text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Purchases: the actual prices paid, saved through Claude from the receipt */}
+      {!isEditing && record.purchases && record.purchases.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Purchases</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {record.purchases.map((purchase) => (
+              <div key={purchase.id} className="flex items-start justify-between gap-4 text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium">{purchase.purchase_text}</p>
+                  <p className="text-muted-foreground">
+                    {purchase.quantity !== null && `${Number(purchase.quantity)}${purchase.unit ? ` ${purchase.unit}` : ''}`}
+                    {purchase.unit_price !== null && ` at ₱${Number(purchase.unit_price).toFixed(2)}`}
+                    {purchase.part_name && ` · ${purchase.part_name}`}
+                  </p>
+                </div>
+                <p className="font-medium whitespace-nowrap">₱{Number(purchase.amount).toFixed(2)}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* The fuel fill: what was read from the photos fills it, and a mistake is corrected here */}
+      {!isEditing && record.machines && record.machines.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Fuel fill</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FuelFillFields fuelFill={record.fuel_fill ?? null} machines={record.machines} onSave={handleSaveFuelFill} disabled={!canEdit} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Read purchases, the fuel fill and policies from the photos (until confirmed once) */}
+      {!isEditing && canEdit && (!record.purchases || record.purchases.length === 0 || !record.policies || record.policies.length === 0) && record.photos && record.photos.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Purchases</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {reading === null || extracted === null ? (
+              <Button variant="outline" size="sm" onClick={handleExtract} disabled={isExtracting}>
+                {isExtracting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <ScanText className="h-4 w-4 mr-2" />
+                )}
+                {isExtracting ? 'Reading photos...' : 'Read purchases from photos'}
+              </Button>
+            ) : (
+              <>
+                <ReadingReview reading={reading} onChange={setReading} recordAmount={Number(record.amount)} disabled={isSaving} />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveExtracted} disabled={isSaving || extracted.some((purchase) => !purchase.purchase_text.trim())}>
+                    {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save purchases
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setReading(null)} disabled={isSaving}>
+                    Discard
+                  </Button>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Perspectives: what a model read from the photos, and which one */}
+      {!isEditing && record.perspectives && record.perspectives.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Perspectives</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {record.perspectives.map((perspective) => (
+              <FuelingPerspective key={perspective.id} perspective={perspective} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Observations added after the description */}
+      {!isEditing && record.notes && record.notes.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Observations</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {record.notes.map((note) => (
+              <div key={note.id} className="text-sm">
+                <p className="whitespace-pre-wrap">{note.state_text}</p>
+                <p className="text-muted-foreground mt-1">
+                  {note.captured_by_name} · {new Date(note.captured_at).toLocaleDateString()}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Rewards — expenses only for now (docs/design/POSITIVE_SUM.md §2.6) */}
       {Number(record.amount) > 0 && <TransactionRewards recordId={record.id} organizationId={record.organization_id} descriptionStateId={record.state_id} />}

@@ -149,6 +149,7 @@ exports.handler = async (event) => {
         JOIN actions a ON sl.entity_id = a.id
         WHERE sl.entity_type = 'action'
           AND a.organization_id = $1
+          AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)
           AND s.created_at >= $2::timestamp
           AND s.created_at <= $3::timestamp
           ${userFilter.replace('aiu.updated_by', 's.captured_by')}

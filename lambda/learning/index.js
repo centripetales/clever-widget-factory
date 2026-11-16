@@ -499,6 +499,7 @@ async function fetchCapabilityLevels(db, actionIdSafe, userIdSafe, orgIdSafe, sk
        INNER JOIN actions a ON a.id = sl.entity_id
        WHERE s.id IN (${stateIdsList})
          AND s.organization_id = '${orgIdSafe}'
+         AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)
          AND (
            a.assigned_to = '${userIdSafe}'
            OR a.created_by = '${userIdSafe}'
@@ -1304,6 +1305,7 @@ async function fetchEvidenceObservations(db, actionIdSafe, userIdSafe, orgIdSafe
        WHERE s.id IN (${stateIdsList})
          AND s.organization_id = '${orgIdSafe}'
          AND s.state_text NOT LIKE '[learning_objective]%'
+         AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)
          AND (
            a.assigned_to = '${userIdSafe}'
            OR a.created_by = '${userIdSafe}'

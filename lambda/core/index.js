@@ -465,8 +465,8 @@ exports.handler = async (event) => {
           }
         }
         
-        // Trigger embedding regeneration if name, description, or policy changed
-        if (body.name !== undefined || body.description !== undefined || body.policy !== undefined) {
+        // Trigger embedding regeneration if name or description changed (the policy is not embedded)
+        if (body.name !== undefined || body.description !== undefined) {
           const tool = result[0];
           const embeddingSource = composeToolEmbeddingSource(tool);
           
@@ -739,13 +739,33 @@ exports.handler = async (event) => {
         };
       }
       
+      // A vendor's part: one in the vendor's organization, which has no people
+      // to keep it, recorded as added by the caller's org (which can see it)
+      let partOrganizationId = organizationId;
+      if (body.vendor_organization_id) {
+        const vendor = await queryJSON(
+          `SELECT 1 FROM organizations o
+            WHERE o.id::text = $1 AND o.is_active
+              AND NOT EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.is_active)`,
+          [String(body.vendor_organization_id)]
+        );
+        if (vendor.length === 0) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: 'vendor_organization_id must be an active organization with no members' })
+          };
+        }
+        partOrganizationId = body.vendor_organization_id;
+      }
+
       const partId = randomUUID();
       const sql = `
         INSERT INTO parts (
           id, name, description, category, current_quantity, minimum_quantity,
           unit, parent_structure_id, storage_location, legacy_storage_vicinity,
           accountable_person_id, image_url, policy, organization_id, sellable, cost_per_unit,
-          created_at, updated_at
+          created_by_organization_id, created_at, updated_at
         ) VALUES (
           '${partId}',
           ${formatSqlValue(body.name)},
@@ -760,9 +780,10 @@ exports.handler = async (event) => {
           ${formatSqlValue(body.accountable_person_id)},
           ${formatSqlValue(body.image_url)},
           ${formatSqlValue(body.policy)},
-          ${formatSqlValue(organizationId)},
+          ${formatSqlValue(partOrganizationId)},
           ${body.sellable !== undefined ? body.sellable : false},
           ${body.cost_per_unit !== undefined ? body.cost_per_unit : 'NULL'},
+          ${body.vendor_organization_id ? formatSqlValue(organizationId) : 'NULL'},
           NOW(),
           NOW()
         ) RETURNING *
@@ -782,7 +803,7 @@ exports.handler = async (event) => {
               entity_type: 'part',
               entity_id: partId,
               embedding_source: embeddingSource,
-              organization_id: organizationId
+              organization_id: partOrganizationId
             })
           }));
           console.log('Queued embedding generation for part', partId);
@@ -927,8 +948,8 @@ exports.handler = async (event) => {
         };
       }
       
-      // Trigger embedding regeneration if name, description, or policy changed
-      if (body.name !== undefined || body.description !== undefined || body.policy !== undefined) {
+      // Trigger embedding regeneration if name or description changed (the policy is not embedded)
+      if (body.name !== undefined || body.description !== undefined) {
         const part = result[0];
         const embeddingSource = composePartEmbeddingSource(part);
         
@@ -2264,7 +2285,7 @@ exports.handler = async (event) => {
       const impact = {};
       const impactQueries = [
         { key: 'members',  sql: 'SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND is_active = true' },
-        { key: 'actions',  sql: 'SELECT COUNT(*) FROM actions WHERE organization_id = $1' },
+        { key: 'actions',  sql: 'SELECT COUNT(*) FROM actions a WHERE a.organization_id = $1 AND NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)' },
         { key: 'missions', sql: 'SELECT COUNT(*) FROM missions WHERE organization_id = $1' },
         { key: 'tools',    sql: 'SELECT COUNT(*) FROM tools WHERE organization_id = $1' },
         { key: 'issues',   sql: 'SELECT COUNT(*) FROM issues WHERE organization_id = $1' },
@@ -3754,8 +3775,8 @@ exports.handler = async (event) => {
     // Actions endpoint with full details
     if (httpMethod === 'GET' && path.endsWith('/actions')) {
       const { limit, offset = 0, assigned_to, status, id, is_exploration } = event.queryStringParameters || {};
-      
-      let whereConditions = [];
+
+      let whereConditions = [`NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`];
       if (id) {
         whereConditions.push(`a.id = '${id}'`);
       }
@@ -4409,7 +4430,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) {
@@ -4489,7 +4511,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) whereConditions.push(`a.location = '${escapeLiteral(location)}'`);
@@ -4690,7 +4713,8 @@ exports.handler = async (event) => {
         try {
           let whereConditions = [
             `a.created_at >= '${start_date}'`,
-            `a.created_at <= '${end_date}'`
+            `a.created_at <= '${end_date}'`,
+            `NOT EXISTS (SELECT 1 FROM financial_records fr WHERE fr.action_id = a.id)`
           ];
           
           if (location) whereConditions.push(`a.location = '${escapeLiteral(location)}'`);
