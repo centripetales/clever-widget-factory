@@ -35,7 +35,8 @@ function getKey(header, callback) {
 // from being usable here and vice versa.
 export function checkClaims(decoded) {
   if (decoded.token_use !== 'access') return false;
-  if (decoded.client_id !== process.env.CLAUDE_APP_CLIENT_ID) return false;
+  const allowedClients = [process.env.CLAUDE_APP_CLIENT_ID, process.env.GEMINI_APP_CLIENT_ID].filter(Boolean);
+  if (!allowedClients.includes(decoded.client_id)) return false;
   const scopes = (decoded.scope || '').split(' ');
   return scopes.includes(REQUIRED_SCOPE);
 }
