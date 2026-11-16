@@ -43,6 +43,7 @@ import {
   type PhotoItem,
 } from '@/components/shared/PhotoUploadPanel';
 import { getImageUrl, getThumbnailUrl, openImage } from '@/lib/imageUtils';
+import { ReadingReview } from '@/components/ReadingReview';
 import { TransactionRewards } from '@/components/positiveSum/TransactionRewards';
 import type { FinancialRecordEdit } from '@/types/financialRecords';
 
@@ -585,54 +586,9 @@ export default function FinancialRecordDetail() {
               </Button>
             ) : (
               <>
-                {extracted.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No purchases could be read from the photos.</p>
-                )}
-                {extracted.map((purchase, index) => (
-                  <div key={index} className="flex items-start justify-between gap-4 text-sm">
-                    <div className="min-w-0">
-                      <p className="font-medium">{purchase.purchase_text}</p>
-                      <p className="text-muted-foreground">
-                        {purchase.quantity !== null && `${purchase.quantity}${purchase.unit ? ` ${purchase.unit}` : ''}`}
-                        {purchase.unit_price !== null && ` at ₱${purchase.unit_price.toFixed(2)}`}
-                      </p>
-                    </div>
-                    <p className="font-medium whitespace-nowrap">₱{purchase.amount.toFixed(2)}</p>
-                  </div>
-                ))}
-                {reading?.fuel && (
-                  <div className="rounded border p-3 text-sm space-y-1">
-                    <p className="font-medium">Fuel fill: {reading.fuel.machine.name}</p>
-                    <p>
-                      {reading.fuel.meter_reading !== null ? `${reading.fuel.meter_reading} ${reading.fuel.machine.meter_unit}` : `${reading.fuel.machine.meter_name} not read`}
-                      {reading.fuel.liters !== null && ` · ${reading.fuel.liters} L`}
-                      {reading.fuel.rate !== null && reading.fuel.previous && (
-                        <> · <span className="font-medium">{reading.fuel.rate} {reading.fuel.machine.rate_unit}</span> since {reading.fuel.previous.meter_reading} {reading.fuel.machine.meter_unit} on {new Date(reading.fuel.previous.date).toLocaleDateString()}</>
-                      )}
-                    </p>
-                    <ul className="text-muted-foreground">
-                      <li>{reading.fuel.machine.meter_name} photo: {reading.fuel.observed.meter_photo ? 'Observed' : 'Not observed'}</li>
-                      <li>Pump photo: {reading.fuel.observed.pump_photo ? 'Observed' : 'Not observed'}</li>
-                      <li>Receipt photo: {reading.fuel.observed.receipt_photo ? 'Observed' : 'Not observed'}</li>
-                      <li>Full tank: {reading.fuel.observed.full_tank ? 'Observed' : 'Not observed'}</li>
-                    </ul>
-                  </div>
-                )}
-                {reading?.policies.map((policy) => (
-                  <div key={policy.id} className="rounded border p-3 text-sm">
-                    <p className="font-medium">Policy: {policy.title}</p>
-                    <p className="text-muted-foreground">
-                      {policy.not_observed.length > 0 ? `Not observed: ${policy.not_observed.join(', ')}` : 'Everything it asks for was observed'}
-                    </p>
-                  </div>
-                ))}
-                {extracted.length > 0 && Math.abs(extracted.reduce((sum, p) => sum + p.amount, 0) - Number(record.amount)) > 0.005 && (
-                  <p className="text-sm text-amber-600">
-                    These add up to ₱{extracted.reduce((sum, p) => sum + p.amount, 0).toFixed(2)}, not the record's ₱{Number(record.amount).toFixed(2)}.
-                  </p>
-                )}
+                <ReadingReview reading={reading} onChange={setReading} recordAmount={Number(record.amount)} disabled={isSaving} />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveExtracted} disabled={isSaving || extracted.length === 0}>
+                  <Button size="sm" onClick={handleSaveExtracted} disabled={isSaving || extracted.some((purchase) => !purchase.purchase_text.trim())}>
                     {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Save purchases
                   </Button>

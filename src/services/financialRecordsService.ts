@@ -39,17 +39,19 @@ export interface ExtractedPurchase {
 }
 
 /** A fuel fill read from the photos: what the model observed, and the rate it gives (km/l, or L/h on an hour meter) */
+export interface ExtractedMachine {
+  id: string;
+  name: string;
+  meter_name: string;
+  meter_unit: string;
+  rate_unit: string;
+  meter_metric_id: string;
+  rate_metric_id: string | null;
+  fuel_metric_id: string | null;
+}
+
 export interface ExtractedFuelFill {
-  machine: {
-    id: string;
-    name: string;
-    meter_name: string;
-    meter_unit: string;
-    rate_unit: string;
-    meter_metric_id: string;
-    rate_metric_id: string | null;
-    fuel_metric_id: string | null;
-  };
+  machine: ExtractedMachine;
   meter_reading: number | null;
   liters: number | null;
   octane: string | null;
@@ -68,6 +70,7 @@ export interface FollowedPolicy {
 export interface ExtractedReading {
   purchases: ExtractedPurchase[];
   fuel: ExtractedFuelFill | null;
+  machines: ExtractedMachine[];
   policies: FollowedPolicy[];
 }
 
@@ -187,8 +190,8 @@ export class FinancialRecordsService {
    */
   async extractPurchases(id: string): Promise<ExtractedReading> {
     const response = await apiService.post(`/financial-records/${id}/purchases/extract`, {});
-    const { purchases, fuel, policies } = response.data || response;
-    return { purchases, fuel: fuel ?? null, policies: policies ?? [] };
+    const { purchases, fuel, machines, policies } = response.data || response;
+    return { purchases, fuel: fuel ?? null, machines: machines ?? [], policies: policies ?? [] };
   }
 
   /**

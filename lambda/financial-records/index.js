@@ -894,8 +894,14 @@ Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|nu
       not_observed: (Array.isArray(entry.not_observed) ? entry.not_observed : []).filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
     }));
 
-  return success({ purchases, fuel, policies: followed, model: EXTRACT_MODEL_ID, usage: result.usage });
+  // The vehicles are listed too, so the person can correct which one it was
+  return success({ purchases, fuel, machines: machines.map(machineInfo), policies: followed, model: EXTRACT_MODEL_ID, usage: result.usage });
 }
+
+const machineInfo = (machine) => ({
+  id: machine.id, name: machine.name, meter_name: machine.meter_name, meter_unit: machine.meter_unit, rate_unit: machine.rate_unit,
+  meter_metric_id: machine.meter_metric_id, rate_metric_id: machine.rate_metric_id, fuel_metric_id: machine.fuel_metric_id
+});
 
 const POLICY_PROMPT = (policies) => `
 These are our policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: policy.title, policy: policy.description_text })))}. In policies, list each one this record follows by its id as policy_id (none if it follows none). For each, not_observed lists what that policy asks for that you could not observe in the photos and the description does not say, as short phrases such as "odometer photo". What the person's description says counts as given. Do not list what the policy does not ask for.`;
@@ -928,10 +934,7 @@ async function fuelFill(fuel, machines, recordId, transactionDate) {
 
   const observed = fuel.observed || {};
   return {
-    machine: {
-      id: machine.id, name: machine.name, meter_name: machine.meter_name, meter_unit: machine.meter_unit, rate_unit: machine.rate_unit,
-      meter_metric_id: machine.meter_metric_id, rate_metric_id: machine.rate_metric_id, fuel_metric_id: machine.fuel_metric_id
-    },
+    machine: machineInfo(machine),
     meter_reading: reading,
     liters,
     octane: typeof fuel.octane === 'string' && fuel.octane.trim() ? fuel.octane.trim() : null,
