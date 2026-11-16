@@ -1,0 +1,9 @@
+{
+  "name": "cwf-policies-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function for policies (what an action follows) and the policies each action follows",
+  "main": "index.js",
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}

@@ -4,6 +4,7 @@
   "description": "Lambda function for financial record CRUD operations",
   "main": "index.js",
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1169.0",
     "pg": "^8.11.3"
   }
 }

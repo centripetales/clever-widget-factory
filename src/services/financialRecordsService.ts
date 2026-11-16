@@ -30,6 +30,47 @@ export interface UpdateFinancialRecordRequest {
   photos?: { photo_url: string; photo_description?: string; photo_order: number }[];
 }
 
+export interface ExtractedPurchase {
+  purchase_text: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  amount: number;
+}
+
+/** A fuel fill read from the photos: what the model observed, and the rate it gives (km/l, or L/h on an hour meter) */
+export interface ExtractedFuelFill {
+  machine: {
+    id: string;
+    name: string;
+    meter_name: string;
+    meter_unit: string;
+    rate_unit: string;
+    meter_metric_id: string;
+    rate_metric_id: string | null;
+    fuel_metric_id: string | null;
+  };
+  meter_reading: number | null;
+  liters: number | null;
+  octane: string | null;
+  observed: { meter_photo: boolean; pump_photo: boolean; receipt_photo: boolean; full_tank: boolean };
+  previous: { meter_reading: number; date: string } | null;
+  rate: number | null;
+}
+
+/** A policy the record follows, and what it asks for that was not observed in the photos */
+export interface FollowedPolicy {
+  id: string;
+  title: string;
+  not_observed: string[];
+}
+
+export interface ExtractedReading {
+  purchases: ExtractedPurchase[];
+  fuel: ExtractedFuelFill | null;
+  policies: FollowedPolicy[];
+}
+
 export class FinancialRecordsService {
   /**
    * List financial records with optional filters and running balance
@@ -139,6 +180,34 @@ export class FinancialRecordsService {
       console.error('Error deleting financial record:', error);
       throw error;
     }
+  }
+
+  /**
+   * Purchases read from the record's photos (a draft: nothing is saved)
+   */
+  async extractPurchases(id: string): Promise<ExtractedReading> {
+    const response = await apiService.post(`/financial-records/${id}/purchases/extract`, {});
+    const { purchases, fuel, policies } = response.data || response;
+    return { purchases, fuel: fuel ?? null, policies: policies ?? [] };
+  }
+
+  /**
+   * The policies an action follows
+   */
+  async getActionPolicyIds(actionId: string): Promise<string[]> {
+    const response = await apiService.get(`/actions/${actionId}/policies`);
+    return ((response.data || response).policies as { id: string }[]).map((policy) => policy.id);
+  }
+
+  async setActionPolicyIds(actionId: string, policyIds: string[]): Promise<void> {
+    await apiService.put(`/actions/${actionId}/policies`, { policy_ids: policyIds });
+  }
+
+  /**
+   * Save the record's purchases
+   */
+  async savePurchases(id: string, purchases: ExtractedPurchase[]): Promise<void> {
+    await apiService.put(`/financial-records/${id}/purchases`, { purchases });
   }
 }
 

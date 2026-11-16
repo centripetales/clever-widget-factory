@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { getAuthorizerContext, hasPermission } = require('/opt/nodejs/authorizerContext');
 const { successResponse, errorResponse } = require('/opt/nodejs/response');
 const { composeFinancialRecordEmbeddingSource } = require('/opt/nodejs/embedding-composition');
@@ -90,6 +91,11 @@ exports.handler = async (event) => {
   const permissions = authContext.permissions || [];
 
   try {
+    // POST /api/financial-records/:id/purchases/extract - purchases read from the photos (a draft, nothing saved)
+    if (httpMethod === 'POST' && pathParameters?.id && path.endsWith('/purchases/extract')) {
+      return await extractPurchases(pathParameters.id, { organizationId });
+    }
+
     // GET/PUT /api/financial-records/:id/purchases - the record's line purchases
     if (pathParameters?.id && path.endsWith('/purchases')) {
       if (httpMethod === 'GET') return await getPurchases(pathParameters.id, { organizationId });
@@ -778,6 +784,167 @@ async function getPurchases(recordId, { organizationId }) {
 }
 
 const isNumber = (n) => typeof n === 'number' && Number.isFinite(n);
+
+// The cheapest Bedrock model that read both test photos correctly (a handwritten
+// receipt, and a receipt with the odometer in the same photo). Nova Lite and Nova 2
+// Lite misread a line or the odometer; every model fails without the description.
+const EXTRACT_MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+const bedrock = new BedrockRuntimeClient({ region: 'us-west-2' });
+const MAX_EXTRACT_PHOTOS = 4;
+const ASSETS_BUCKET_URL = 'https://cwf-dev-assets.s3.us-west-2.amazonaws.com';
+
+function imageFormat(bytes) {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8) return 'jpeg';
+  if (bytes[0] === 0x52 && bytes[1] === 0x49) return 'webp';
+  return null;
+}
+
+// The purchases Bedrock reads from the record's photos, using the description
+// as context for unclear writing. A draft for the person to confirm: nothing
+// is saved here (confirming goes through PUT .../purchases).
+async function extractPurchases(recordId, { organizationId }) {
+  const recordResult = await pool.query(
+    'SELECT amount, transaction_date FROM financial_records WHERE id = $1 AND organization_id = $2',
+    [recordId, organizationId]
+  );
+  if (recordResult.rows.length === 0) return error('Record not found', 404);
+
+  // Vehicles are the tools that track an Odometer (km); the result goes to their km/l metric,
+  // and the liters to Fuel Consumed
+  const machines = (await pool.query(
+    `SELECT t.id, t.name, mm.metric_id AS meter_metric_id, mm.name AS meter_name, mm.unit AS meter_unit,
+            CASE WHEN lower(mm.name) = 'odometer' THEN 'km/l' ELSE 'L/h' END AS rate_unit,
+            (SELECT k.metric_id FROM metrics k WHERE k.entity_type = 'tool' AND k.entity_id = t.id AND k.active
+                AND lower(k.name) = CASE WHEN lower(mm.name) = 'odometer' THEN 'km/l' ELSE 'l/h' END LIMIT 1) AS rate_metric_id,
+            (SELECT f.metric_id FROM metrics f WHERE f.entity_type = 'tool' AND f.entity_id = t.id AND f.active AND lower(f.name) = 'fuel consumed' LIMIT 1) AS fuel_metric_id
+       FROM tools t JOIN metrics mm ON mm.entity_type = 'tool' AND mm.entity_id = t.id AND mm.active AND lower(mm.name) = 'odometer'
+      WHERE t.organization_id = $1 AND t.status != 'removed'`,
+    [organizationId]
+  )).rows;
+
+  // The policies this organization has in force: what an action follows
+  const policies = (await pool.query(
+    `SELECT id, title, description_text FROM policy
+      WHERE organization_id = $1 AND status = 'active'
+        AND (effective_from IS NULL OR effective_from <= CURRENT_DATE) AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)`,
+    [organizationId]
+  )).rows;
+
+  const stateLink = await pool.query(DESCRIPTION_STATE_LOOKUP, [recordId]);
+  const stateId = stateLink.rows[0]?.state_id;
+  const description = stateId
+    ? (await pool.query('SELECT state_text FROM states WHERE id = $1', [stateId])).rows[0]?.state_text
+    : null;
+  const photoRows = stateId
+    ? (await pool.query('SELECT photo_url FROM state_photos WHERE state_id = $1 ORDER BY photo_order LIMIT $2', [stateId, MAX_EXTRACT_PHOTOS])).rows
+    : [];
+  if (photoRows.length === 0) return error('This record has no photos to read', 400);
+
+  const images = [];
+  for (const { photo_url } of photoRows) {
+    // Photos are stored as a full URL or as a key in the assets bucket (as the app reads them)
+    const url = /^https?:\/\//.test(photo_url) ? photo_url : `${ASSETS_BUCKET_URL}/${photo_url.replace(/^\//, '')}`;
+    const response = await fetch(url);
+    if (!response.ok) return error(`Could not load photo ${photo_url}`, 502);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const format = imageFormat(bytes);
+    if (format) images.push({ image: { format, source: { bytes } } });
+  }
+  if (images.length === 0) return error('The photos are not in a format that can be read', 400);
+
+  const prompt = `These photos are attached to a financial record in the Philippines (amounts in ₱ pesos). The person described it as: "${description || ''}"
+The record's total is ₱${Number(recordResult.rows[0].amount)}.
+Read the purchase lines from the receipt in the photos. Use the description only as context to help read unclear handwriting: the receipt is the source. Each line: purchase_text is the item as named, with any detail from the description that identifies it (e.g. the type of cement); quantity and unit as written; amount is the line's total price; unit_price only if written. Use null for what is not written.${machines.length > 0 ? FUEL_PROMPT(machines) : ''}${policies.length > 0 ? POLICY_PROMPT(policies) : ''}
+Reply with JSON only: {"purchases":[{"purchase_text":string,"quantity":number|null,"unit":string|null,"unit_price":number|null,"amount":number}]${machines.length > 0 ? ',"fuel":{"machine_id":string|null,"meter_reading":number|null,"liters":number|null,"octane":string|null,"observed":{"meter_photo":boolean,"pump_photo":boolean,"receipt_photo":boolean,"full_tank":boolean}}|null' : ''}${policies.length > 0 ? ',"policies":[{"policy_id":string,"not_observed":[string]}]' : ''}}`;
+
+  const result = await bedrock.send(new ConverseCommand({
+    modelId: EXTRACT_MODEL_ID,
+    messages: [{ role: 'user', content: [...images, { text: prompt }] }],
+    inferenceConfig: { maxTokens: 1000, temperature: 0 }
+  }));
+  const text = result.output.message.content.map((part) => part.text || '').join('');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+  } catch (parseErr) {
+    console.error('Unreadable extraction reply:', text);
+    return error('The photos could not be read into purchases', 502);
+  }
+  const purchases = (Array.isArray(parsed.purchases) ? parsed.purchases : [])
+    .filter((purchase) => typeof purchase.purchase_text === 'string' && purchase.purchase_text.trim() && isNumber(purchase.amount))
+    .map((purchase) => ({
+      purchase_text: purchase.purchase_text.trim(),
+      quantity: isNumber(purchase.quantity) && purchase.quantity > 0 ? purchase.quantity : null,
+      unit: typeof purchase.unit === 'string' && purchase.unit.trim() ? purchase.unit.trim() : null,
+      unit_price: isNumber(purchase.unit_price) && purchase.unit_price >= 0 ? purchase.unit_price : null,
+      amount: purchase.amount
+    }));
+
+  const fuel = machines.length > 0 ? await fuelFill(parsed.fuel, machines, recordId, recordResult.rows[0].transaction_date) : null;
+
+  // The policies the record follows, and what each asks for that was not observed (a gap)
+  const followed = (Array.isArray(parsed.policies) ? parsed.policies : [])
+    .map((entry) => ({ policy: policies.find((policy) => policy.id === entry?.policy_id), entry }))
+    .filter(({ policy }) => policy)
+    .map(({ policy, entry }) => ({
+      id: policy.id,
+      title: policy.title,
+      not_observed: (Array.isArray(entry.not_observed) ? entry.not_observed : []).filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
+    }));
+
+  return success({ purchases, fuel, policies: followed, model: EXTRACT_MODEL_ID, usage: result.usage });
+}
+
+const POLICY_PROMPT = (policies) => `
+These are our policies: ${JSON.stringify(policies.map((policy) => ({ id: policy.id, title: policy.title, policy: policy.description_text })))}. In policies, list each one this record follows by its id as policy_id (none if it follows none). For each, not_observed lists what that policy asks for that you could not observe in the photos and the description does not say, as short phrases such as "odometer photo". What the person's description says counts as given. Do not list what the policy does not ask for.`;
+
+const FUEL_PROMPT = (machines) => `
+If this is fuel bought for one of these machines, also read the fill-up: ${JSON.stringify(machines.map((m) => ({ id: m.id, name: m.name, meter: `${m.meter_name} (${m.meter_unit})` })))}. Choose the machine from the description and the photos and give its id as machine_id, or null if none fits; if the purchase is not fuel for a machine, fuel is null.
+meter_reading is the machine's meter reading in the unit given (for an odometer, whole kilometers: leave out a last digit shown separately in a box or a different colour, that is tenths). liters is the amount dispensed, from the pump display or the receipt's quantity written with its decimals. Each is taken from the photos (null when not visible). octane is the grade shown, if any.
+observed only reports what you can see in the photos, it is not a judgement: meter_photo is true if a photo shows the machine's meter, pump_photo if one shows the pump's display, receipt_photo if one shows a receipt, full_tank if one shows the tank full. false means not observed.`;
+
+// What was read of a fill-up, with the rate it gives: distance since the machine's previous
+// odometer reading per liter added (km/l), or liters added per hour on its hour meter (L/h).
+// A fill to full is the policy, so the liters are what was consumed since the last fill.
+async function fuelFill(fuel, machines, recordId, transactionDate) {
+  const machine = machines.find((m) => m.id === fuel?.machine_id);
+  if (!machine) return null;
+  const reading = isNumber(fuel.meter_reading) ? fuel.meter_reading : null;
+  const liters = isNumber(fuel.liters) && fuel.liters > 0 ? fuel.liters : null;
+
+  // The machine's previous reading, not counting any this record already made
+  const previousRow = (await pool.query(
+    `SELECT ms.value, s.captured_at FROM metric_snapshots ms JOIN states s ON s.id = ms.state_id
+      WHERE ms.metric_id = $1 AND s.captured_at < $2
+        AND NOT EXISTS (SELECT 1 FROM state_links sl WHERE sl.state_id = s.id AND sl.entity_type = 'financial_record' AND sl.entity_id = $3)
+      ORDER BY s.captured_at DESC LIMIT 1`,
+    [machine.meter_metric_id, transactionDate, recordId]
+  )).rows[0];
+  const previous = previousRow ? { meter_reading: Number(previousRow.value), date: previousRow.captured_at } : null;
+  const used = reading !== null && previous && reading > previous.meter_reading ? reading - previous.meter_reading : null;
+  const rate = used === null || liters === null ? null : (machine.rate_unit === 'km/l' ? used / liters : liters / used);
+
+  const observed = fuel.observed || {};
+  return {
+    machine: {
+      id: machine.id, name: machine.name, meter_name: machine.meter_name, meter_unit: machine.meter_unit, rate_unit: machine.rate_unit,
+      meter_metric_id: machine.meter_metric_id, rate_metric_id: machine.rate_metric_id, fuel_metric_id: machine.fuel_metric_id
+    },
+    meter_reading: reading,
+    liters,
+    octane: typeof fuel.octane === 'string' && fuel.octane.trim() ? fuel.octane.trim() : null,
+    observed: {
+      meter_photo: observed.meter_photo === true,
+      pump_photo: observed.pump_photo === true,
+      receipt_photo: observed.receipt_photo === true,
+      full_tank: observed.full_tank === true
+    },
+    previous,
+    rate: rate === null ? null : Math.round(rate * 100) / 100
+  };
+}
 
 // Why a purchase is not acceptable, or null.
 function purchaseProblem(purchase) {

@@ -33,6 +33,7 @@ export interface FinancialRecord {
   notes?: FinancialRecordNote[];
   vendor?: { id: string; name: string } | null;
   state_id?: string;
+  action_id?: string | null;
   balance_after?: number | null;
   created_at: string;
   updated_at: string;

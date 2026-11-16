@@ -24,7 +24,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { ArrowLeft, Loader2, Pencil, Trash2, X, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Trash2, X, Save, ScanText } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { financialRecordsService, type ExtractedReading } from '@/services/financialRecordsService';
+import { apiService } from '@/lib/apiService';
+import { snapshotService } from '@/services/snapshotService';
+import { financialRecordKeys } from '@/hooks/useFinancialRecords';
 import { useAuth } from '@/hooks/useCognitoAuth';
 import {
   useFinancialRecord,
@@ -60,6 +65,12 @@ export default function FinancialRecordDetail() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Purchases read from the photos, held for the person to confirm
+  const queryClient = useQueryClient();
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [reading, setReading] = useState<ExtractedReading | null>(null);
+  const extracted = reading?.purchases ?? null;
 
   // Edit form state
   const [editAmount, setEditAmount] = useState('');
@@ -169,6 +180,88 @@ export default function FinancialRecordDetail() {
       toast({
         title: 'Error',
         description: 'Failed to save changes. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleExtract = async () => {
+    if (!id) return;
+    setIsExtracting(true);
+    try {
+      setReading(await financialRecordsService.extractPurchases(id));
+    } catch (err) {
+      console.error('Failed to read purchases from photos:', err);
+      toast({
+        title: 'Could not read the photos',
+        description: 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  // The policies the expense follows are linked to its action, and one note records what was observed in
+  // the photos: the fuel fill's readings (on the vehicle) and what each policy asks for that was not observed
+  const saveReading = async (result: ExtractedReading, recordId: string, actionId: string | null | undefined, transactionDate: string) => {
+    const { fuel, policies } = result;
+    if (actionId && policies.length > 0) {
+      const followed = await financialRecordsService.getActionPolicyIds(actionId);
+      await financialRecordsService.setActionPolicyIds(actionId, [...new Set([...followed, ...policies.map((policy) => policy.id)])]);
+    }
+    if (!fuel && policies.length === 0) return;
+
+    const seen = (label: string, observed: boolean, detail?: string) =>
+      `${label}: ${observed ? ['Observed', detail].filter(Boolean).join(', ') : 'Not observed'}`;
+    const lines = ['Read from the photos by Bedrock. What was observed, not a judgement:'];
+    if (fuel) {
+      lines.push(
+        seen(`${fuel.machine.meter_name} photo`, fuel.observed.meter_photo, fuel.meter_reading !== null ? `${fuel.meter_reading} ${fuel.machine.meter_unit}` : undefined),
+        seen('Pump photo', fuel.observed.pump_photo, [fuel.liters !== null ? `${fuel.liters} L` : '', fuel.octane ? `octane ${fuel.octane}` : ''].filter(Boolean).join(', ')),
+        seen('Receipt photo', fuel.observed.receipt_photo),
+        seen('Full tank', fuel.observed.full_tank),
+      );
+    }
+    for (const policy of policies) {
+      lines.push(`Policy "${policy.title}": ${policy.not_observed.length > 0 ? `not observed: ${policy.not_observed.join(', ')}` : 'everything it asks for was observed'}`);
+    }
+    const created = await apiService.post<{ data: { id: string } }>('/states', {
+      state_text: lines.join('\n'),
+      photos: [],
+      captured_at: transactionDate,
+      links: [
+        ...(fuel ? [{ entity_type: 'tool', entity_id: fuel.machine.id }] : []),
+        { entity_type: 'financial_record', entity_id: recordId },
+      ],
+    });
+    const stateId = created?.data?.id;
+    if (!stateId || !fuel) return;
+    // Only the raw readings are saved: km/l is worked out from them, not a reading of its own
+    if (fuel.meter_reading !== null) {
+      await snapshotService.createSnapshot(stateId, { metric_id: fuel.machine.meter_metric_id, value: String(fuel.meter_reading) });
+    }
+    if (fuel.liters !== null && fuel.machine.fuel_metric_id) {
+      await snapshotService.createSnapshot(stateId, { metric_id: fuel.machine.fuel_metric_id, value: String(fuel.liters) });
+    }
+  };
+
+  const handleSaveExtracted = async () => {
+    if (!id || !extracted) return;
+    setIsSaving(true);
+    try {
+      await financialRecordsService.savePurchases(id, extracted);
+      if (reading && record) await saveReading(reading, id, record.action_id, record.transaction_date);
+      await queryClient.invalidateQueries({ queryKey: financialRecordKeys.detail(id) });
+      setReading(null);
+      toast({ title: 'Purchases saved' });
+    } catch (err) {
+      console.error('Failed to save purchases:', err);
+      toast({
+        title: 'Error',
+        description: 'Failed to save purchases. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -470,6 +563,85 @@ export default function FinancialRecordDetail() {
                 <p className="font-medium whitespace-nowrap">₱{Number(purchase.amount).toFixed(2)}</p>
               </div>
             ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Read purchases from the photos (only when none are saved yet), confirmed before saving */}
+      {!isEditing && canEdit && (!record.purchases || record.purchases.length === 0) && record.photos && record.photos.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Purchases</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {reading === null || extracted === null ? (
+              <Button variant="outline" size="sm" onClick={handleExtract} disabled={isExtracting}>
+                {isExtracting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <ScanText className="h-4 w-4 mr-2" />
+                )}
+                {isExtracting ? 'Reading photos...' : 'Read purchases from photos'}
+              </Button>
+            ) : (
+              <>
+                {extracted.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No purchases could be read from the photos.</p>
+                )}
+                {extracted.map((purchase, index) => (
+                  <div key={index} className="flex items-start justify-between gap-4 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium">{purchase.purchase_text}</p>
+                      <p className="text-muted-foreground">
+                        {purchase.quantity !== null && `${purchase.quantity}${purchase.unit ? ` ${purchase.unit}` : ''}`}
+                        {purchase.unit_price !== null && ` at ₱${purchase.unit_price.toFixed(2)}`}
+                      </p>
+                    </div>
+                    <p className="font-medium whitespace-nowrap">₱{purchase.amount.toFixed(2)}</p>
+                  </div>
+                ))}
+                {reading?.fuel && (
+                  <div className="rounded border p-3 text-sm space-y-1">
+                    <p className="font-medium">Fuel fill: {reading.fuel.machine.name}</p>
+                    <p>
+                      {reading.fuel.meter_reading !== null ? `${reading.fuel.meter_reading} ${reading.fuel.machine.meter_unit}` : `${reading.fuel.machine.meter_name} not read`}
+                      {reading.fuel.liters !== null && ` · ${reading.fuel.liters} L`}
+                      {reading.fuel.rate !== null && reading.fuel.previous && (
+                        <> · <span className="font-medium">{reading.fuel.rate} {reading.fuel.machine.rate_unit}</span> since {reading.fuel.previous.meter_reading} {reading.fuel.machine.meter_unit} on {new Date(reading.fuel.previous.date).toLocaleDateString()}</>
+                      )}
+                    </p>
+                    <ul className="text-muted-foreground">
+                      <li>{reading.fuel.machine.meter_name} photo: {reading.fuel.observed.meter_photo ? 'Observed' : 'Not observed'}</li>
+                      <li>Pump photo: {reading.fuel.observed.pump_photo ? 'Observed' : 'Not observed'}</li>
+                      <li>Receipt photo: {reading.fuel.observed.receipt_photo ? 'Observed' : 'Not observed'}</li>
+                      <li>Full tank: {reading.fuel.observed.full_tank ? 'Observed' : 'Not observed'}</li>
+                    </ul>
+                  </div>
+                )}
+                {reading?.policies.map((policy) => (
+                  <div key={policy.id} className="rounded border p-3 text-sm">
+                    <p className="font-medium">Policy: {policy.title}</p>
+                    <p className="text-muted-foreground">
+                      {policy.not_observed.length > 0 ? `Not observed: ${policy.not_observed.join(', ')}` : 'Everything it asks for was observed'}
+                    </p>
+                  </div>
+                ))}
+                {extracted.length > 0 && Math.abs(extracted.reduce((sum, p) => sum + p.amount, 0) - Number(record.amount)) > 0.005 && (
+                  <p className="text-sm text-amber-600">
+                    These add up to ₱{extracted.reduce((sum, p) => sum + p.amount, 0).toFixed(2)}, not the record's ₱{Number(record.amount).toFixed(2)}.
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveExtracted} disabled={isSaving || extracted.length === 0}>
+                    {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save purchases
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setReading(null)} disabled={isSaving}>
+                    Discard
+                  </Button>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}
