@@ -21,10 +21,10 @@ describe('Core Lambda - Embedding Composition Integration', () => {
       
       const result = composePartEmbeddingSource(part);
       
-      assert.strictEqual(result, 'Banana Wine. Fermented banana beverage. Rich in potassium and B vitamins. May support heart health.');
+      assert.strictEqual(result, 'Banana Wine. Fermented banana beverage');
       assert.ok(result.includes('Banana Wine'), 'should contain name');
       assert.ok(result.includes('Fermented banana beverage'), 'should contain description');
-      assert.ok(result.includes('Rich in potassium'), 'should contain policy');
+      assert.ok(!result.includes('Rich in potassium'), 'the policy is not embedded');
     });
     
     test('composes embedding source from part without policy', () => {

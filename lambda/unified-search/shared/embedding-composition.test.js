@@ -23,10 +23,8 @@ describe('composePartEmbeddingSource', () => {
 
     const result = composePartEmbeddingSource(part);
 
-    assert.strictEqual(
-      result,
-      'Banana Wine. Fermented banana beverage. Rich in potassium and B vitamins. May support heart health.'
-    );
+    // the policy is not embedded
+    assert.strictEqual(result, 'Banana Wine. Fermented banana beverage');
   });
 
   test('should handle missing optional fields', () => {
@@ -72,7 +70,7 @@ describe('composePartEmbeddingSource', () => {
 
     const result = composePartEmbeddingSource(part);
 
-    assert.strictEqual(result, 'Banana Wine. Rich in potassium');
+    assert.strictEqual(result, 'Banana Wine');
   });
 });
 

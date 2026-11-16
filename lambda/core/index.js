@@ -465,8 +465,8 @@ exports.handler = async (event) => {
           }
         }
         
-        // Trigger embedding regeneration if name, description, or policy changed
-        if (body.name !== undefined || body.description !== undefined || body.policy !== undefined) {
+        // Trigger embedding regeneration if name or description changed (the policy is not embedded)
+        if (body.name !== undefined || body.description !== undefined) {
           const tool = result[0];
           const embeddingSource = composeToolEmbeddingSource(tool);
           
@@ -948,8 +948,8 @@ exports.handler = async (event) => {
         };
       }
       
-      // Trigger embedding regeneration if name, description, or policy changed
-      if (body.name !== undefined || body.description !== undefined || body.policy !== undefined) {
+      // Trigger embedding regeneration if name or description changed (the policy is not embedded)
+      if (body.name !== undefined || body.description !== undefined) {
         const part = result[0];
         const embeddingSource = composePartEmbeddingSource(part);
         
