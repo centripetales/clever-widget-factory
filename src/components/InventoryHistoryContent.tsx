@@ -3,6 +3,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { History, TrendingUp, TrendingDown, Edit, Plus, ExternalLink, Camera, Share2 } from 'lucide-react';
 import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useCognitoAuth';
+import { useOrganization } from '@/hooks/useOrganization';
 import { getThumbnailUrl, getImageUrl, openImage } from '@/lib/imageUtils';
 import { usePartHistory, type HistoryEntry, type Observation } from '@/hooks/usePartHistory';
 
@@ -13,6 +16,13 @@ interface InventoryHistoryContentProps {
 
 export function InventoryHistoryContent({ partId, observationsOnly = false }: InventoryHistoryContentProps) {
   const { history, observations, actions, loading } = usePartHistory(partId);
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { isAdmin } = useOrganization();
+
+  // Same rule as a tool's observations: the person who recorded it, or an admin.
+  const canEditObservation = (observation: Observation): boolean =>
+    !!user && (user.userId === observation.observed_by || isAdmin);
 
   const getChangeIcon = (changeType: string) => {
     switch (changeType) {
@@ -120,7 +130,21 @@ export function InventoryHistoryContent({ partId, observationsOnly = false }: In
                               </Badge>
                             )}
                           </div>
-                          <span className="text-sm text-muted-foreground">{format(new Date(observation.observed_at), 'PPpp')}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted-foreground">{format(new Date(observation.observed_at), 'PPpp')}</span>
+                            {!isShare && canEditObservation(observation) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => navigate(`/observations/edit/${observation.id}`)}
+                                className="h-8 px-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100"
+                                aria-label="Edit observation"
+                                title="Edit observation"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         
                         {isShare ? (

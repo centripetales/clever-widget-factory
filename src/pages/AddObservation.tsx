@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import { useStateMutations, useStateById } from '@/hooks/useStates';
 import { useToast } from '@/components/ui/use-toast';
 import { useOrganization } from '@/hooks/useOrganization';
+import { BATCH_CATEGORY } from '@/lib/constants';
 import type { CreateObservationData } from '@/types/observations';
 import { MetricsInput } from '@/components/observations/MetricsInput';
 import { useMetrics } from '@/hooks/metrics/useMetrics';
@@ -18,6 +19,9 @@ import { useSnapshots, useSnapshotMutations } from '@/hooks/useSnapshots';
 import { snapshotService } from '@/services/snapshotService';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
 import { apiService } from '@/lib/apiService';
+import { useAssetMutations } from '@/hooks/useAssetMutations';
+import { useToolsData } from '@/hooks/tools/useToolsData';
+import { nextBatchCode } from '@/lib/batchCodes';
 
 export default function AddObservation() {
   const { assetType, id, observationId } = useParams<{ 
@@ -26,8 +30,21 @@ export default function AddObservation() {
     observationId?: string;
   }>();
   const navigate = useNavigate();
+  // Opened from a part's + or - button (?stock=add or ?stock=remove): the observation also changes
+  // the part's stock, and the Inventory metric records the quantity left.
+  const [searchParams] = useSearchParams();
+  const stockParam = searchParams.get('stock');
+  const stockOp: 'add' | 'remove' | null = assetType === 'parts' && !observationId && (stockParam === 'add' || stockParam === 'remove') ? stockParam : null;
+  const { createPartsHistory, createTool, updateTool } = useAssetMutations();
+  const [stockAmount, setStockAmount] = useState('');
+  const [partStock, setPartStock] = useState<{ unit: string; quantity: number; areaId: string | null; place: string | null } | null>(null);
+  // Adding to inventory can also make a serial number for the addition: a lightweight tool, a batch,
+  // that can be followed on its own. It is optional, so nothing is made unless the button is pressed.
+  const [serialOpen, setSerialOpen] = useState(false);
+  const [serial, setSerial] = useState('');
+  const [serialEdited, setSerialEdited] = useState(false);
   const { uploadFiles, isUploading } = useFileUpload();
-  const { organization } = useOrganization();
+  const { organization, refreshOrganization } = useOrganization();
   const orgId = organization?.id ?? '';
   const { createState, updateState, isCreating, isUpdating } = useStateMutations(orgId);
   const { toast } = useToast();
@@ -200,6 +217,14 @@ export default function AddObservation() {
               serial_number: assetData.serial_number,
               type: assetType === 'tools' ? 'tool' : assetType === 'parts' ? 'part' : 'action'
             }]);
+            if (assetType === 'parts') {
+              setPartStock({
+                unit: assetData.unit || 'pieces',
+                quantity: Number(assetData.current_quantity) || 0,
+                areaId: assetData.parent_structure_id || null,
+                place: assetData.storage_location || null,
+              });
+            }
           }
         } catch (err) {
           console.error("Failed to fetch route asset details:", err);
@@ -258,6 +283,28 @@ export default function AddObservation() {
   });
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
   const [metricErrors, setMetricErrors] = useState(false);
+
+  // The serial number is filled in from the organization's prefix, the date, two letters of the item
+  // and the next number for that day, looking at the serial numbers of the tools in use, until the
+  // person types their own.
+  const partNameForCode = linkedAssets[0]?.name ?? '';
+  const { tools: toolsInUse } = useToolsData(false);
+  const usedSerials = toolsInUse.map((tool) => tool.serial_number ?? '').filter(Boolean);
+  const usedSerialsKey = usedSerials.join('|');
+  const batchPrefix: string | undefined = organization?.settings?.batch_code_prefix;
+  // The organization is kept for a day, so a prefix saved moments ago may not be in it yet: it is
+  // read again when the screen opens for an addition.
+  useEffect(() => {
+    if (stockOp === 'add') void refreshOrganization();
+    // once, when the screen opens
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockOp]);
+  useEffect(() => {
+    if (stockOp !== 'add' || !serialOpen || serialEdited || !partNameForCode) return;
+    setSerial(nextBatchCode(batchPrefix, partNameForCode, capturedAt ? new Date(capturedAt) : new Date(), usedSerials));
+    // usedSerials is read through its key, so a new array of the same numbers does not run this again
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockOp, serialOpen, serialEdited, partNameForCode, batchPrefix, capturedAt, usedSerialsKey]);
 
   // Pre-populate form fields when editing an existing state
   useEffect(() => {
@@ -318,7 +365,21 @@ export default function AddObservation() {
       return;
     }
 
-    if (!hasText && !hasPhotos && !hasMetrics) {
+    const amount = parseFloat(stockAmount);
+    if (stockOp && !(Number.isFinite(amount) && amount > 0)) {
+      toast({ title: 'Enter an amount', description: 'Say how much is being added or used.', variant: 'destructive' });
+      return;
+    }
+    if (stockOp === 'remove' && partStock && amount > partStock.quantity) {
+      toast({
+        title: 'Not enough in stock',
+        description: `Only ${partStock.quantity} ${partStock.unit} left.`,
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    if (!stockOp && !hasText && !hasPhotos && !hasMetrics) {
       toast({
         title: 'Validation Error',
         description: 'Please add observation text, at least one photo, or at least one metric value',
@@ -336,6 +397,7 @@ export default function AddObservation() {
       capturedAtUTC = new Date().toISOString();
     }
 
+    let stockChanged = false;
     try {
       // Upload any photos that haven't been eagerly uploaded yet
       const pendingPhotos = photos.filter(p => p.file && !p.photo_url);
@@ -390,8 +452,43 @@ export default function AddObservation() {
         .filter(p => p.photo_url)
         .map((p, index) => ({ ...p, photo_order: index }));
 
+      // A change of stock is applied first, on the server, under the part's lock; the observation
+      // then records it, with the quantity that was left as the Inventory reading.
+      const code = stockOp === 'add' && serialOpen ? serial.trim() : '';
+      // A serial number makes a lightweight tool for the addition first, so a number that is already
+      // on a tool in use is refused before anything changes.
+      let batchTool: { id: string } | null = null;
+      if (code) {
+        const partName = linkedAssets[0]?.name ?? 'Batch';
+        batchTool = await createTool.mutateAsync({
+          name: `${partName} ${code}`,
+          serial_number: code,
+          category: BATCH_CATEGORY,
+          status: 'available',
+          description: `A batch of ${partName}, added ${new Date(capturedAtUTC).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })}. It is removed when the batch is gone.`,
+          parent_structure_id: partStock?.areaId ?? null,
+          storage_location: partStock?.place ?? null,
+        });
+      }
+      let stockResult: { stock_metric_id?: string | null; new_quantity?: number } | null = null;
+      if (stockOp && id) {
+        try {
+          stockResult = await createPartsHistory.mutateAsync({
+            part_id: id,
+            quantity_change: stockOp === 'add' ? amount : -amount,
+            change_reason: hasText ? observationText.trim() : `Quantity ${stockOp === 'add' ? 'added' : 'used'}${code ? ` as ${code}` : ''}`,
+          });
+        } catch (stockError) {
+          // Nothing changed, so the tool made for it is not left behind.
+          if (batchTool) await updateTool.mutateAsync({ id: batchTool.id, data: { status: 'removed' } }).catch(() => undefined);
+          throw stockError;
+        }
+        stockChanged = true;
+      }
+      const stockUnit = partStock?.unit || 'pieces';
+
       const data: CreateObservationData = {
-        state_text: hasText ? observationText : undefined,
+        state_text: hasText ? observationText : stockOp ? `${stockOp === 'add' ? 'Added' : 'Used'} ${amount} ${stockUnit}${code ? ` as ${code}` : ''}` : undefined,
         captured_at: capturedAtUTC,
         photos: finalPhotos,
         links: [
@@ -399,6 +496,7 @@ export default function AddObservation() {
             entity_type: asset.type,
             entity_id: asset.id
           })),
+          ...(batchTool ? [{ entity_type: 'tool' as const, entity_id: batchTool.id }] : []),
           // Links this screen doesn't show (sharing, part_of) are kept as they are.
           ...(isEditMode ? (existingState?.links ?? []).filter((l: any) => !['tool', 'part', 'action'].includes(l.entity_type))
             .map((l: any) => ({ entity_type: l.entity_type, entity_id: l.entity_id })) : [])
@@ -424,6 +522,20 @@ export default function AddObservation() {
           description: warnings.join('. ') + " bubbled for operator review.",
           variant: "destructive"
         });
+      }
+
+      // The Inventory reading: the quantity the part has after this change.
+      if (stockResult?.stock_metric_id && Number.isFinite(stockResult.new_quantity)) {
+        try {
+          await snapshotService.createSnapshot(stateId, { metric_id: stockResult.stock_metric_id, value: String(stockResult.new_quantity) });
+        } catch (stockReadingError) {
+          console.error('Failed to save the Inventory reading:', stockReadingError);
+          toast({
+            title: 'Warning',
+            description: 'The inventory changed and the observation was saved, but the Inventory reading was not.',
+            variant: 'destructive'
+          });
+        }
       }
 
       // Save metric snapshots if there are any values
@@ -493,7 +605,9 @@ export default function AddObservation() {
       const errorDetail = error instanceof Error ? error.message : String(error);
       toast({
         title: 'Error',
-        description: `Failed to ${isEditMode ? 'update' : 'save'} observation: ${errorDetail}`,
+        description: stockChanged
+          ? `The stock was changed, but the observation was not saved: ${errorDetail}. Add the photos and note as an observation on the part.`
+          : `Failed to ${isEditMode ? 'update' : 'save'} observation: ${errorDetail}`,
         variant: 'destructive'
       });
     }
@@ -553,7 +667,7 @@ export default function AddObservation() {
         >
           <ArrowLeft className="h-5 w-5" />
         </Button>
-        <h1 className="text-2xl font-bold">{isEditMode ? 'Edit Observation' : 'Add Observation'}</h1>
+        <h1 className="text-2xl font-bold">{isEditMode ? 'Edit Observation' : stockOp === 'add' ? `Add to ${linkedAssets[0]?.name ?? 'item'}` : stockOp === 'remove' ? `Use from ${linkedAssets[0]?.name ?? 'item'}` : 'Add Observation'}</h1>
       </div>
 
       {/* Show loading state while fetching existing state in edit mode */}
@@ -568,6 +682,61 @@ export default function AddObservation() {
         </Card>
       ) : (
         <>
+          {stockOp && (
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle>{stockOp === 'add' ? 'How much is being added?' : 'How much is being used?'}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="stock-amount"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="any"
+                    placeholder="Amount"
+                    value={stockAmount}
+                    onChange={(e) => setStockAmount(e.target.value)}
+                    className="max-w-[10rem]"
+                  />
+                  <span className="text-muted-foreground">{partStock?.unit || ''}</span>
+                </div>
+                {partStock && (
+                  <p className="text-sm text-muted-foreground">
+                    {linkedAssets[0]?.name ? `${linkedAssets[0].name}: ` : ''}{partStock.quantity} {partStock.unit} now
+                  </p>
+                )}
+                {stockOp === 'add' && !serialOpen && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => { setSerialOpen(true); setSerialEdited(false); }}>
+                    Add batch No
+                  </Button>
+                )}
+                {stockOp === 'add' && serialOpen && (
+                  <div className="space-y-1 pt-2">
+                    <Label htmlFor="serial-number">Batch No <span className="font-normal text-muted-foreground">(optional)</span></Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="serial-number"
+                        value={serial}
+                        onChange={(e) => { setSerial(e.target.value); setSerialEdited(true); }}
+                        placeholder="e.g. SF112126LA01"
+                        className="max-w-[16rem] font-mono"
+                      />
+                      <Button type="button" variant="ghost" size="sm" onClick={() => { setSerialOpen(false); setSerial(''); setSerialEdited(false); }}>
+                        Remove
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Optional. Use it to study this batch over time with metrics, such as its ripeness. It makes a small tool for this addition, so it can be followed on its own. {batchPrefix
+                        ? 'Filled in from the organization prefix, the date, two letters of the item and a number. Edit it to match what is written on it.'
+                        : 'Filled in from the date, two letters of the item and a number. No prefix is set for the organization, so it does not start with one: set it in the Organization settings. Edit it to match what is written on it.'}
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Upload Photos</CardTitle>
@@ -929,14 +1098,15 @@ export default function AddObservation() {
               isCreating || 
               isUpdating || 
               isUploading ||
-              (
+              createPartsHistory.isPending ||
+              (stockOp ? !(parseFloat(stockAmount) > 0) : (
                 observationText.trim().length === 0 && 
                 photos.filter(p => (p.photo_url || p.file) && !p.isUploading).length === 0 &&
                 Object.values(metricValues).every(value => !value || value.trim().length === 0)
-              )
+              ))
             }
           >
-            {isCreating || isUpdating ? 'Saving...' : isEditMode ? 'Update Observation' : 'Save Observation'}
+            {isCreating || isUpdating || createPartsHistory.isPending ? 'Saving...' : isEditMode ? 'Update Observation' : stockOp === 'add' ? 'Add' : stockOp === 'remove' ? 'Use' : 'Save Observation'}
           </Button>
         </div>
       ) : null}

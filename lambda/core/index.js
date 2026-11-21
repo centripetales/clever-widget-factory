@@ -341,7 +341,8 @@ exports.handler = async (event) => {
         
         // Send SQS message for embedding generation
         const tool = result[0];
-        const embeddingSource = composeToolEmbeddingSource(tool);
+        // A batch has no embedding. (The shared composer skips it too, but core takes it from the layer.)
+        const embeddingSource = tool.category === 'Batch' ? '' : composeToolEmbeddingSource(tool);
         
         if (embeddingSource && embeddingSource.trim()) {
           try {
@@ -395,6 +396,15 @@ exports.handler = async (event) => {
             statusCode: 404,
             headers,
             body: JSON.stringify({ error: 'Tool not found' })
+          };
+        }
+
+        // A batch stays a batch, and no other tool becomes one: its category cannot be changed.
+        if (body.category !== undefined && (body.category === 'Batch') !== (currentTool.category === 'Batch')) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: 'The Batch category cannot be added to or removed from a tool' })
           };
         }
         
@@ -468,7 +478,8 @@ exports.handler = async (event) => {
         // Trigger embedding regeneration if name or description changed (the policy is not embedded)
         if (body.name !== undefined || body.description !== undefined) {
           const tool = result[0];
-          const embeddingSource = composeToolEmbeddingSource(tool);
+          // A batch has no embedding. (The shared composer skips it too, but core takes it from the layer.)
+        const embeddingSource = tool.category === 'Batch' ? '' : composeToolEmbeddingSource(tool);
           
           if (embeddingSource && embeddingSource.trim()) {
             try {
@@ -1266,7 +1277,7 @@ exports.handler = async (event) => {
           } catch (err) {
             console.error('[CORE] Broadcast failed:', err.message);
           }
-          return { statusCode: 201, headers, body: JSON.stringify({ data: changed.history, part: changed.part }) };
+          return { statusCode: 201, headers, body: JSON.stringify({ data: changed.history, part: changed.part, stock_metric_id: changed.stockMetricId }) };
         }
         
         if (!part_id || change_type === undefined || old_quantity === undefined || new_quantity === undefined) {

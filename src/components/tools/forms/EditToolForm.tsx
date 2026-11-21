@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tool } from "@/hooks/tools/useToolsData";
 import { useToast } from "@/hooks/use-toast";
-import { TOOL_CATEGORY_OPTIONS } from "@/lib/constants";
+import { BATCH_CATEGORY, TOOL_CATEGORY_OPTIONS } from "@/lib/constants";
 import { LocationFieldsGroup } from "@/components/shared/LocationFieldsGroup";
 import { FileAttachmentManager } from "@/components/shared/FileAttachmentManager";
 import { MetricsSection } from "@/components/tools/metrics/MetricsSection";
@@ -199,6 +199,9 @@ export const EditToolForm = ({ tool, isOpen, onClose, onSubmit, isLeadership = f
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label htmlFor="edit-category">Category</Label>
+              {editData.category === BATCH_CATEGORY ? (
+                <p className="h-10 flex items-center text-sm">{BATCH_CATEGORY}</p>
+              ) : (
               <Select
                 value={editData.category}
                 onValueChange={(value) => setEditData(prev => ({ ...prev, category: value }))}
@@ -214,10 +217,11 @@ export const EditToolForm = ({ tool, isOpen, onClose, onSubmit, isLeadership = f
                   ))}
                 </SelectContent>
               </Select>
+              )}
             </div>
 
             <div>
-              <Label htmlFor="edit-serial">Serial Number</Label>
+              <Label htmlFor="edit-serial">{editData.category === BATCH_CATEGORY ? 'Batch No' : 'Serial Number'}</Label>
               <Input
                 id="edit-serial"
                 value={editData.serial_number}

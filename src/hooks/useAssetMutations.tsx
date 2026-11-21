@@ -127,7 +127,10 @@ export function useAssetMutations() {
   const createPartsHistory = useMutation({
     mutationFn: async (data: any) => {
       const result = await apiService.post('/parts_history', data);
-      return result.data;
+      // A change applied on the server also says the part's Stock metric and the quantity it left.
+      return result.stock_metric_id !== undefined
+        ? { ...result.data, stock_metric_id: result.stock_metric_id, batch_metric_id: result.batch_metric_id, new_quantity: Number(result.part?.current_quantity) }
+        : result.data;
     },
     onMutate: async (variables) => {
       await queryClient.cancelQueries({ queryKey: ['parts_history'] });

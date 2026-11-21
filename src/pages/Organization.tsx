@@ -20,6 +20,7 @@ import { useSuperAdmin } from '@/hooks/useSuperAdmin';
 import { useProfile } from '@/hooks/useProfile';
 import { OrganizationValuesSection } from '@/components/OrganizationValuesSection';
 import { AiConfigCard } from '@/components/AiConfigCard';
+import { EditableBatchCodePrefix } from '@/components/EditableBatchCodePrefix';
 import { LensManagementCard } from '@/components/LensManagementCard';
 import { MemberOrganizationsCard } from '@/components/MemberOrganizationsCard';
 import { apiService, getApiData } from '@/lib/apiService';
@@ -401,6 +402,10 @@ const Organization = () => {
               onDomainUpdated={loadOrganizationData}
               canEdit={isAdmin}
             />
+          </div>
+          <div>
+            <Label htmlFor="batch-code-prefix">Batch code prefix</Label>
+            <EditableBatchCodePrefix organization={targetOrganization} canEdit={isAdmin} />
           </div>
         </CardContent>
       </Card>

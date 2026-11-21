@@ -5,6 +5,7 @@ import type { MetricValueType } from './metricValue';
 export interface Metric {
   metric_id: string;
   tool_id: string;
+  entity_type?: string | null;
   name: string;
   unit?: string;
   benchmark_value?: number;
@@ -37,6 +38,12 @@ export interface UpdateMetricRequest {
   min_value?: number;
   max_value?: number;
 }
+
+// Every part has an Inventory metric (how much there is, as readings with observations), set up
+// by the stock service and found by its name. On a part it cannot be renamed, disabled or deleted.
+export const INVENTORY_METRIC = 'Inventory';
+export const isRequiredPartMetric = (metric: Pick<Metric, 'name' | 'entity_type'>): boolean =>
+  metric.entity_type === 'part' && metric.name === INVENTORY_METRIC;
 
 // Postgres NUMERIC comes back from the API as a string.
 const toNumberOrNull = (v: number | string | null): number | null => (v === null ? null : Number(v));
