@@ -1,3 +1,4 @@
+import { BATCH_CATEGORY } from '@/lib/constants';
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -238,7 +239,8 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
 
     // ── Own org tools ──────────────────────────────────────────────────────
     // Process data directly from TanStack Query
-    let filteredToolsData = toolsData || [];
+    // Batches (lightweight tools made for one addition to stock) are reached from their item, not listed here.
+    let filteredToolsData = (toolsData || []).filter((tool: any) => tool.category !== BATCH_CATEGORY);
     if (showRemovedItems) {
       filteredToolsData = filteredToolsData.filter((tool: any) => {
         if (tool.status === 'removed' || tool.status === 'concluded') return true;
@@ -263,7 +265,7 @@ export const useCombinedAssets = (showRemovedItems: boolean = false, options?: A
 
     const extraSharedTools = hasSharedOrgsSelected
       ? (sharedToolsData as any[]).filter(
-          (t: any) => t.is_shared_inbound && selectedOrgs.includes(t.organization_id) && !ownToolIds.has(t.id) && t.status !== 'removed' && t.status !== 'concluded'
+          (t: any) => t.is_shared_inbound && selectedOrgs.includes(t.organization_id) && !ownToolIds.has(t.id) && t.category !== BATCH_CATEGORY && t.status !== 'removed' && t.status !== 'concluded'
         )
       : [];
     const extraSharedParts = hasSharedOrgsSelected

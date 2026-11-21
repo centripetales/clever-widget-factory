@@ -62,6 +62,8 @@ function composePartEmbeddingSource(part) {
  * // Returns: "Hand Drill. Manual drilling tool with adjustable chuck"
  */
 function composeToolEmbeddingSource(tool) {
+  // A batch (a lightweight tool made for one addition to stock) is not searched for, so it has no embedding.
+  if (tool && tool.category === 'Batch') return '';
   const parts = [
     tool.name,
     tool.description

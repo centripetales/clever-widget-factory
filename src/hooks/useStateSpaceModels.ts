@@ -25,6 +25,9 @@ export function useStateSpaceModelsByEntity(entityType: string, entityId: string
     queryKey: stateSpaceModelsByEntityQueryKey(entityType, entityId),
     queryFn: () => getModelsByEntity(entityType, entityId),
     enabled: !!(entityType && entityId),
+    // Models are set and changed by Claude, outside the app, so nothing tells this cache they
+    // changed. The cached models show at once; they are checked again every time a page opens.
+    refetchOnMount: 'always',
   });
 }
 

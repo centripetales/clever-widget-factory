@@ -9,9 +9,6 @@ import { useAssetMutations } from '@/hooks/useAssetMutations';
 import { ArrowLeft, Plus, BarChart3 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { CombinedAssetFilters } from "./CombinedAssetFilters";
 import { CombinedAssetGrid } from "./CombinedAssetGrid";
 import { CONCLUDED_INFO } from "./CombinedAssetCard";
@@ -53,7 +50,7 @@ export const CombinedAssetsContainer = () => {
   const showRemovedItemsParam = urlParams.get('showRemoved') === 'true';
   const searchDescriptionsParam = urlParams.get('searchDescriptions') === 'true';
   const { toast } = useToast();
-  const { updatePart, updateTool, createPartsHistory, deletePart } = useAssetMutations();
+  const { updatePart, updateTool, deletePart } = useAssetMutations();
   const organizationId = useOrganizationId();
   const { uploadImages, isUploading } = useImageUpload();
   const [searchTerm, setSearchTerm] = useState(searchParam);
@@ -103,14 +100,8 @@ export const CombinedAssetsContainer = () => {
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   
   // Stock dialog states
-  const [showQuantityDialog, setShowQuantityDialog] = useState(false);
-  const [quantityOperation, setQuantityOperation] = useState<'add' | 'remove'>('add');
   const [showOrderDialog, setShowOrderDialog] = useState(false);
   const [showReceivingDialog, setShowReceivingDialog] = useState(false);
-  const [quantityChange, setQuantityChange] = useState({
-    amount: '',
-    reason: '',
-  });
 
 
 
@@ -507,17 +498,15 @@ export const CombinedAssetsContainer = () => {
   };
 
   // Stock quantity handlers
+  // + and - open the observation form for the part: photos with descriptions, a note, and the
+  // amount. It records the change of stock as an observation.
   const handleAddQuantity = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setQuantityOperation('add');
-    setShowQuantityDialog(true);
-  }, []);
+    navigate(`/combined-assets/parts/${asset.id}/observation?stock=add`);
+  }, [navigate]);
 
   const handleUseQuantity = useCallback((asset: CombinedAsset) => {
-    setSelectedAssetId(asset.id);
-    setQuantityOperation('remove');
-    setShowQuantityDialog(true);
-  }, []);
+    navigate(`/combined-assets/parts/${asset.id}/observation?stock=remove`);
+  }, [navigate]);
 
   const handleOrderStock = useCallback((asset: CombinedAsset) => {
     setSelectedAssetId(asset.id);
@@ -531,51 +520,6 @@ export const CombinedAssetsContainer = () => {
       setShowReceivingDialog(true);
     }
   }, [pendingOrders]);
-
-  // Quantity update handler for stock items
-  const updateQuantity = async () => {
-    if (!selectedAsset || !quantityChange.amount || !user) return;
-
-    try {
-      const change = parseFloat(quantityChange.amount);
-      const currentQty = selectedAsset.current_quantity || 0;
-      const newQuantity = quantityOperation === 'add' ? currentQty + change : currentQty - change;
-
-      if (newQuantity < 0) {
-        toast({
-          title: "Error",
-          description: "Quantity cannot be negative",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // The server applies the change to the current stock and logs it, in one transaction
-      await createPartsHistory.mutateAsync({
-        part_id: selectedAsset.id,
-        quantity_change: quantityOperation === 'add' ? change : -change,
-        change_reason: quantityChange.reason || `Quantity ${quantityOperation}ed`,
-      });
-
-      // Note: inventory_usage table doesn't exist - usage is tracked in parts_history above
-
-      toast({
-        title: "Success",
-        description: `Quantity ${quantityOperation === 'add' ? 'increased' : 'decreased'} successfully`,
-      });
-
-      setShowQuantityDialog(false);
-      setSelectedAssetId(null);
-      setQuantityChange({ amount: '', reason: '' });
-    } catch (error) {
-      console.error('Error updating quantity:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update quantity",
-        variant: "destructive",
-      });
-    }
-  };
 
   const handleConfirmRemoval = async (reason: string, notes: string) => {
     if (!selectedAsset) return;
@@ -1005,61 +949,6 @@ export const CombinedAssetsContainer = () => {
           </DialogContent>
         </Dialog>
       )}
-
-      {/* Quantity Dialog */}
-      <Dialog open={showQuantityDialog} onOpenChange={setShowQuantityDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {quantityOperation === 'add' ? 'Add Quantity' : 'Use/Remove Quantity'}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedAsset && (
-                <>
-                  {quantityOperation === 'add' ? 'Add to' : 'Remove from'} {selectedAsset.name}
-                  <br />
-                  Current quantity: {selectedAsset.current_quantity} {selectedAsset.unit || 'units'}
-                </>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="amount">Amount</Label>
-              <Input
-                id="amount"
-                type="number"
-                value={quantityChange.amount}
-                onChange={(e) => setQuantityChange(prev => ({ ...prev, amount: e.target.value }))}
-                placeholder="Enter amount"
-                min="0"
-                step="0.01"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="reason">Reason</Label>
-              <Textarea
-                id="reason"
-                value={quantityChange.reason}
-                onChange={(e) => setQuantityChange(prev => ({ ...prev, reason: e.target.value }))}
-                placeholder="Reason for change"
-              />
-            </div>
-
-          </div>
-
-          <div className="flex justify-end gap-2 pt-4">
-            <Button variant="outline" onClick={() => setShowQuantityDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={updateQuantity} disabled={!quantityChange.amount}>
-              {quantityOperation === 'add' ? 'Add to' : 'Remove from'} Stock
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* Order Dialog */}
       {selectedAsset && selectedAsset.type === 'stock' && (

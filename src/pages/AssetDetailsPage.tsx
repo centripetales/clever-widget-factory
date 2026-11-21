@@ -151,7 +151,13 @@ export default function AssetDetailsPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      <StockDetails stock={asset} onBack={handleBack} onRefresh={() => {}} />
+      <StockDetails
+        stock={asset}
+        onBack={handleBack}
+        onRefresh={() => {}}
+        activeTab={searchParams.get('tab') || undefined}
+        onTabChange={handleTabChange}
+      />
     </div>
   );
 }

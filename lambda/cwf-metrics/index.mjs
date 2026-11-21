@@ -29,6 +29,18 @@ function toNumberOrNull(value, field) {
   return n;
 }
 
+// A metric belongs to a tool (tool_id) or to a part (entity_type 'part'). The tool routes
+// below serve both, by the id in the path, so a part's page lists and edits its metrics
+// the way a tool's page does.
+const ABOUT = (param) => `(tool_id::text = ${param} OR (entity_type = 'part' AND entity_id::text = ${param}))`;
+
+// Every part has an Inventory metric: its readings are how much there is, recorded with an
+// observation. The stock service sets it up when the stock first changes and finds it by this
+// name, so on a part it cannot be renamed, disabled or deleted, and no other metric of the part
+// can take the name.
+const REQUIRED_PART_METRICS = ['Inventory'];
+const isInventoryName = (name) => REQUIRED_PART_METRICS.some((required) => required.toLowerCase() === String(name || '').trim().toLowerCase());
+
 const VALUE_TYPES = ['number', 'text'];
 
 // Validates the type/range fields of a metric create or update body and
@@ -63,6 +75,7 @@ export const handler = async (event) => {
     'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
   };
+  const lockedResponse = (message) => ({ statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: message }) });
   
   // Extract organization_id from authorizer context
   const organizationId = event.requestContext?.authorizer?.organization_id;
@@ -530,9 +543,9 @@ export const handler = async (event) => {
     // GET /api/tools/{id}/metrics - List all metrics for a tool
     if (httpMethod === 'GET' && toolId && !metricId) {
       const result = await executeQuery(
-        `SELECT metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id
+        `SELECT metric_id, COALESCE(tool_id, entity_id) AS tool_id, entity_type, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id
          FROM metrics
-         WHERE tool_id = $1 AND organization_id = $2
+         WHERE ${ABOUT('$1')} AND organization_id = $2
          ORDER BY created_at DESC`,
         [toolId, organizationId]
       );
@@ -566,12 +579,28 @@ export const handler = async (event) => {
         return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: err.message }) };
       }
 
-      const result = await executeQuery(
-        `INSERT INTO metrics (tool_id, name, unit, benchmark_value, details, value_type, min_value, max_value, organization_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
-        [toolId, name.trim(), unit || null, benchmark, details || null, typeFields.value_type, typeFields.min_value, typeFields.max_value, organizationId]
-      );
+      const isPart = (await executeQuery(
+        'SELECT 1 FROM parts WHERE id::text = $1 AND (organization_id = $2 OR created_by_organization_id = $2)',
+        [toolId, organizationId]
+      )).rows.length > 0;
+
+      if (isPart && isInventoryName(name)) {
+        return lockedResponse(`${name.trim()} is set up automatically for a part, when its stock changes`);
+      }
+
+      const result = isPart
+        ? await executeQuery(
+          `INSERT INTO metrics (entity_type, entity_id, name, unit, benchmark_value, details, value_type, min_value, max_value, organization_id)
+           VALUES ('part', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING metric_id, entity_id AS tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+          [toolId, name.trim(), unit || null, benchmark, details || null, typeFields.value_type, typeFields.min_value, typeFields.max_value, organizationId]
+        )
+        : await executeQuery(
+          `INSERT INTO metrics (tool_id, name, unit, benchmark_value, details, value_type, min_value, max_value, organization_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+          [toolId, name.trim(), unit || null, benchmark, details || null, typeFields.value_type, typeFields.min_value, typeFields.max_value, organizationId]
+        );
 
       return {
         statusCode: 201,
@@ -605,10 +634,17 @@ export const handler = async (event) => {
       // A metric that already has readings keeps its type, so existing
       // values can't be left stranded under the wrong one.
       const current = await executeQuery(
-        `SELECT value_type, (SELECT COUNT(*) FROM metric_snapshots WHERE metric_id = $1) AS readings
-         FROM metrics WHERE metric_id = $1 AND tool_id = $2 AND organization_id = $3`,
+        `SELECT value_type, name, entity_type, (SELECT COUNT(*) FROM metric_snapshots WHERE metric_id = $1) AS readings
+         FROM metrics WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3`,
         [metricId, toolId, organizationId]
       );
+      const forPart = current.rows[0]?.entity_type === 'part';
+      if (forPart && isInventoryName(current.rows[0].name) && (name.trim() !== current.rows[0].name || active === false)) {
+        return lockedResponse(`The ${current.rows[0].name} metric of a part cannot be renamed or disabled`);
+      }
+      if (forPart && !isInventoryName(current.rows[0].name) && isInventoryName(name)) {
+        return lockedResponse(`${name.trim()} is the name of a metric the stock service sets up for every part`);
+      }
       if (current.rows.length > 0 && current.rows[0].value_type !== typeFields.value_type && Number(current.rows[0].readings) > 0) {
         return {
           statusCode: 400,
@@ -621,8 +657,8 @@ export const handler = async (event) => {
         `UPDATE metrics
          SET name = $1, unit = $2, benchmark_value = $3, details = $4, active = $5,
              value_type = $6, min_value = $7, max_value = $8
-         WHERE metric_id = $9 AND tool_id = $10 AND organization_id = $11
-         RETURNING metric_id, tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
+         WHERE metric_id = $9 AND ${ABOUT('$10')} AND organization_id = $11
+         RETURNING metric_id, COALESCE(tool_id, entity_id) AS tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
         [name.trim(), unit || null, benchmark, details || null, active !== false, typeFields.value_type, typeFields.min_value, typeFields.max_value, metricId, toolId, organizationId]
       );
 
@@ -643,9 +679,16 @@ export const handler = async (event) => {
 
     // DELETE /api/tools/{id}/metrics/{metric_id} - Delete a metric
     if (httpMethod === 'DELETE' && toolId && metricId) {
+      const target = (await executeQuery(
+        `SELECT name, entity_type FROM metrics WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3`,
+        [metricId, toolId, organizationId]
+      )).rows[0];
+      if (target?.entity_type === 'part' && isInventoryName(target.name)) {
+        return lockedResponse(`The ${target.name} metric of a part cannot be deleted`);
+      }
       const result = await executeQuery(
         `DELETE FROM metrics
-         WHERE metric_id = $1 AND tool_id = $2 AND organization_id = $3
+         WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3
          RETURNING metric_id`,
         [metricId, toolId, organizationId]
       );

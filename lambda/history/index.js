@@ -488,7 +488,12 @@ exports.handler = async (event) => {
             FROM metric_snapshots ms
             JOIN metrics m ON ms.metric_id = m.metric_id
             WHERE ms.state_id = s.id
-          ) as metrics
+          ) as metrics,
+          (
+            SELECT json_agg(json_build_object('entity_type', l.entity_type, 'entity_id', l.entity_id))
+            FROM state_links l
+            WHERE l.state_id = s.id AND l.entity_type IN ('tool', 'part')
+          ) as links
         FROM states s
         JOIN state_links sl ON sl.state_id = s.id
         LEFT JOIN LATERAL (

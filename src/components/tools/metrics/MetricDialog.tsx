@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { Metric } from '@/lib/metricsApi';
+import { isRequiredPartMetric, type Metric } from '@/lib/metricsApi';
 import type { MetricValueType } from '@/lib/metricValue';
 
 export interface MetricFormData {
@@ -29,6 +29,7 @@ interface MetricDialogProps {
 }
 
 export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting }: MetricDialogProps) {
+  const locked = !!metric && isRequiredPartMetric(metric);
   const [formData, setFormData] = useState({
     name: '',
     unit: '',
@@ -106,7 +107,13 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
               onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
               placeholder="e.g., Tree Girth, Ant Activity, Nut Count"
               required
+              disabled={locked}
             />
+            {locked && (
+              <p className="text-sm text-muted-foreground mt-1">
+                The stock service sets this metric up for every part and finds it by name, so its name stays.
+              </p>
+            )}
           </div>
 
           <div>
@@ -204,6 +211,7 @@ export function MetricDialog({ open, onOpenChange, onSave, metric, isSubmitting 
                 id="active"
                 checked={formData.active}
                 onCheckedChange={(checked) => setFormData(prev => ({ ...prev, active: checked }))}
+                disabled={locked}
               />
             </div>
           )}

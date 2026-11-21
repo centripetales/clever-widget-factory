@@ -26,11 +26,13 @@ export interface Observation {
   observed_by_name: string;
   observed_at: string;
   photos?: Array<{ id: string; photo_url: string; photo_description: string | null }>;
-  metrics?: Array<{ snapshot_id: string; metric_name: string; value: number; unit: string | null }>;
+  metrics?: Array<{ snapshot_id: string; metric_name: string; value: number | string; unit: string | null }>;
   share_info?: {
     target_org_id: string;
     target_org_name: string;
   } | null;
+  // The tools and parts the observation is about. A batch added to this part is a tool linked here.
+  links?: Array<{ entity_type: string; entity_id: string }> | null;
 }
 
 export interface PartAction {

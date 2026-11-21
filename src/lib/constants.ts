@@ -53,6 +53,10 @@ export const getStatusLabel = (status: string) => {
   }
 };
 
+// The category of a batch: a lightweight tool made for one addition to stock. It is not offered in
+// the category options, cannot be chosen or changed, and gets no embedding or place in the main list.
+export const BATCH_CATEGORY = 'Batch';
+
 // Tool category options
 export const TOOL_CATEGORY_OPTIONS = [
   { value: 'Hand Tools', label: 'Hand Tools' },

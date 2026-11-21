@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Pencil, Trash2 } from 'lucide-react';
-import type { Metric } from '@/lib/metricsApi';
+import { isRequiredPartMetric, type Metric } from '@/lib/metricsApi';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +23,7 @@ interface MetricCardProps {
 
 export function MetricCard({ metric, onEdit, onDelete }: MetricCardProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const locked = isRequiredPartMetric(metric);
 
   return (
     <>
@@ -31,6 +32,9 @@ export function MetricCard({ metric, onEdit, onDelete }: MetricCardProps) {
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0 flex items-center gap-2">
               <p className="text-sm font-medium truncate">{metric.name}</p>
+              {locked && (
+                <Badge variant="outline" className="flex-shrink-0" title="The stock service sets this metric up for every part">Required</Badge>
+              )}
               {metric.active === false && (
                 <Badge variant="secondary" className="flex-shrink-0">Disabled</Badge>
               )}
@@ -50,19 +54,21 @@ export function MetricCard({ metric, onEdit, onDelete }: MetricCardProps) {
               >
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
-              <Button 
-                type="button"
-                variant="ghost" 
-                size="icon" 
-                className="h-7 w-7" 
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setShowDeleteDialog(true);
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              {!locked && (
+                <Button 
+                  type="button"
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-7 w-7" 
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setShowDeleteDialog(true);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>

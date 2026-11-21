@@ -665,3 +665,12 @@ describe('Edge cases', () => {
     assert.strictEqual(result, 'Banana Wine. Fermented beverage');
   });
 });
+
+describe('composeToolEmbeddingSource for a batch', () => {
+  test('gives nothing, so no embedding is made', () => {
+    assert.strictEqual(composeToolEmbeddingSource({ name: 'Latundan banana SF112126LA01', description: 'x', category: 'Batch' }), '');
+  });
+  test('still gives the text for any other category', () => {
+    assert.ok(composeToolEmbeddingSource({ name: 'Drill', description: 'Cordless', category: 'Electric Tool' }).includes('Drill'));
+  });
+});

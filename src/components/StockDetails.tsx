@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
 import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
+import { StockMarketTab } from "@/components/StockMarketTab";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -16,11 +17,17 @@ interface StockDetailsProps {
   stock: CombinedAsset;
   onBack: () => void;
   onRefresh?: () => void;
+  // The tab lives in the URL (?tab=), so a refresh or the back button keeps it. With none, or one
+  // this item does not have (Market is only for items for sale), it opens on History.
+  activeTab?: string;
+  onTabChange?: (tab: string) => void;
 }
 
 export const StockDetails = ({
   stock,
   onBack,
+  activeTab,
+  onTabChange,
 }: StockDetailsProps) => {
   const navigate = useNavigate();
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
@@ -80,9 +87,14 @@ export const StockDetails = ({
 
       <div className="grid grid-cols-1 gap-6">
         <div>
-          <Tabs defaultValue="history" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
+          <Tabs
+            value={activeTab === 'details' || (activeTab === 'market' && stock.sellable) ? activeTab : 'history'}
+            onValueChange={onTabChange}
+            className="w-full"
+          >
+            <TabsList className={`grid w-full ${stock.sellable ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <TabsTrigger value="details">Details</TabsTrigger>
+              {stock.sellable && <TabsTrigger value="market">Market</TabsTrigger>}
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
             </TabsList>
 
@@ -163,6 +175,12 @@ export const StockDetails = ({
                 </Card>
               )}
             </TabsContent>
+
+            {stock.sellable && (
+              <TabsContent value="market" className="space-y-4">
+                <StockMarketTab stock={stock} />
+              </TabsContent>
+            )}
 
             <TabsContent value="history" className="space-y-4">
               <div className="flex justify-end">

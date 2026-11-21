@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Info } from 'lucide-react';
 import { LocationFieldsGroup } from '@/components/shared/LocationFieldsGroup';
 import { FileAttachmentManager } from '@/components/shared/FileAttachmentManager';
+import { MetricsSection } from '@/components/tools/metrics/MetricsSection';
 import { useParentStructures } from '@/hooks/tools/useParentStructures';
 import { useActionProfiles } from '@/hooks/useActionProfiles';
 
@@ -309,6 +310,13 @@ export function InventoryItemForm({
             </p>
           )}
         </div>
+
+        {/* Metrics: things to measure on this item, such as its Stock readings */}
+        {editingPart && (
+          <div className="col-span-2">
+            <MetricsSection toolId={editingPart.id} />
+          </div>
+        )}
 
         {/* Item Images & Documents - moved to bottom */}
         <div className="col-span-2">
