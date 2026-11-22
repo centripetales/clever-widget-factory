@@ -1,9 +1,15 @@
 const { Client } = require('pg');
 const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const jwt = require('jsonwebtoken');
-const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
+const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, AdminGetUserCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
 
 const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
+
+// An invite link only works while the invited account is still waiting to be activated.
+async function isAwaitingActivation(email) {
+  const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: email }));
+  return user.UserStatus === 'FORCE_CHANGE_PASSWORD';
+}
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -42,18 +48,6 @@ const dbConfig = {
     rejectUnauthorized: false
   }
 };
-
-// Helper to execute SQL and return JSON
-async function queryJSON(sql) {
-  const client = new Client(dbConfig);
-  try {
-    await client.connect();
-    const result = await client.query(sql);
-    return result.rows;
-  } finally {
-    await client.end();
-  }
-}
 
 // Helper to execute parameterized SQL
 async function queryParams(sql, params) {
@@ -109,10 +103,10 @@ exports.handler = async (event) => {
     
     // Organization members endpoint
     if (httpMethod === 'GET' && path.endsWith('/organization_members')) {
-      const orgIdsList = accessibleOrgIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
       const filterUserId = queryStringParameters?.cognito_user_id;
       
       let sql;
+      let params = [];
       if (filterUserId) {
         // Return all memberships for a specific user across ALL their orgs
         // Don't filter by accessibleOrgIds here — this is needed for org switching
@@ -131,19 +125,20 @@ exports.handler = async (event) => {
         sql = `SELECT json_agg(row_to_json(t)) FROM (
           SELECT user_id, cognito_user_id, organization_id, full_name, role, favorite_color, is_active, email
           FROM organization_members
-          WHERE cognito_user_id = '${targetUserId.replace(/'/g, "''")}'
+          WHERE cognito_user_id = $1
             AND is_active = true
           ORDER BY created_at ASC
         ) t;`;
+        params = [targetUserId];
       } else if (queryStringParameters?.organization_id) {
         // Specific org: return all members for management (includes id for delete)
-        const orgId = queryStringParameters.organization_id.replace(/'/g, "''");
         sql = `SELECT json_agg(row_to_json(t)) FROM (
           SELECT id, user_id, full_name, role, is_active, cognito_user_id, favorite_color, email, organization_id
           FROM organization_members
-          WHERE organization_id = '${orgId}'
+          WHERE organization_id = $1
           ORDER BY is_active DESC, full_name NULLS LAST
         ) t;`;
+        params = [queryStringParameters.organization_id];
       } else {
         // Default: deduplicated list of all members across accessible orgs
         sql = `SELECT json_agg(row_to_json(t)) FROM (
@@ -152,12 +147,13 @@ exports.handler = async (event) => {
           WHERE full_name IS NOT NULL 
             AND trim(full_name) != ''
             AND cognito_user_id IS NOT NULL
-            AND organization_id IN (${orgIdsList})
+            AND organization_id = ANY($1::uuid[])
           ORDER BY cognito_user_id, full_name
         ) t;`;
+        params = [accessibleOrgIds];
       }
       
-      const result = await queryJSON(sql);
+      const result = await queryParams(sql, params);
       return {
         statusCode: 200,
         headers,
@@ -172,11 +168,11 @@ exports.handler = async (event) => {
       const sql = `SELECT json_agg(row_to_json(t)) FROM (
         SELECT id, user_id, full_name, role, is_active, created_at, super_admin, organization_id, email, cognito_user_id, favorite_color
         FROM organization_members
-        WHERE organization_id = '${organization_id}'
+        WHERE organization_id = $1
         ORDER BY is_active DESC, full_name NULLS LAST
       ) t;`;
       
-      const result = await queryJSON(sql);
+      const result = await queryParams(sql, [organization_id]);
       return {
         statusCode: 200,
         headers,
@@ -198,11 +194,11 @@ exports.handler = async (event) => {
       const sql = `SELECT json_agg(row_to_json(t)) FROM (
         SELECT user_id, full_name, role, email, cognito_user_id
         FROM organization_members
-        WHERE email = '${email}' AND is_active = true
+        WHERE email = $1 AND is_active = true
         LIMIT 1
       ) t;`;
       
-      const result = await queryJSON(sql);
+      const result = await queryParams(sql, [email]);
       const member = result?.[0]?.json_agg?.[0] || null;
       
       return {
@@ -407,6 +403,11 @@ exports.handler = async (event) => {
         return { statusCode: 403, headers, body: JSON.stringify({ error: 'Email does not match invitation' }) };
       }
 
+      // Already active: nothing to do, and never reset an active account's password.
+      if (!(await isAwaitingActivation(email))) {
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+      }
+
       await cognito.send(new AdminSetUserPasswordCommand({
         UserPoolId: process.env.USER_POOL_ID,
         Username: email,
@@ -433,6 +434,10 @@ exports.handler = async (event) => {
 
       if (decoded.email !== email) {
         return { statusCode: 403, headers, body: JSON.stringify({ error: 'Email does not match invitation' }) };
+      }
+
+      if (!(await isAwaitingActivation(email))) {
+        return { statusCode: 409, headers, body: JSON.stringify({ error: 'This account is already active. Please sign in instead.' }) };
       }
 
       await cognito.send(new AdminSetUserPasswordCommand({
