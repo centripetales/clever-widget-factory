@@ -10,17 +10,7 @@ import { useAuth } from '@/hooks/useCognitoAuth';
 import { ChallengesSection } from '@/components/positiveSum/ChallengesSection';
 import { Offers } from '@/components/positiveSum/Offers';
 import { PositiveSumIcon } from '@/components/icons/PositiveSumIcon';
-import type { MyPositiveSum } from '@/types/positiveSum';
-
-// What a person has earned across every offer they can see, closed ones included: what they earned there stays.
-function balance(data: MyPositiveSum, userId: string): number {
-  const rewards = [
-    ...(data.offers ?? []).flatMap(o => o.rewards),
-    ...data.goals.flatMap(g => g.rewards ?? []),
-    ...(data.challenges ?? []).flatMap(c => c.collaborations.flatMap(col => col.rewards ?? [])),
-  ].filter((r, i, all) => all.findIndex(other => other.id === r.id) === i);
-  return rewards.reduce((sum, r) => sum + (r.tally.find(person => person.id === userId)?.php ?? 0), 0);
-}
+import { positiveSumBalance } from '@/lib/positiveSumBalance';
 
 // The action-value function, in MathML: browsers lay out the sum with its
 // limits themselves. A fixed string; React's types have no MathML elements.
@@ -88,7 +78,7 @@ export default function PositiveSum() {
         {data && user?.userId && (
           <span className="ml-auto text-right text-sm text-muted-foreground">
             Balance:{' '}
-            <span className="text-xl font-bold text-green-600 dark:text-green-400">₱{Math.round(balance(data, user.userId)).toLocaleString()}</span>
+            <span className="text-xl font-bold text-green-600 dark:text-green-400">₱{Math.round(positiveSumBalance(data, user.userId)).toLocaleString()}</span>
           </span>
         )}
       </div>
