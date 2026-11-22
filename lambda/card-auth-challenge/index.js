@@ -31,8 +31,8 @@ exports.handler = async (event) => {
     }
 
     case 'CreateAuthChallenge_Authentication':
-      event.response.publicChallengeParameters = {};
-      event.response.privateChallengeParameters = {};
+      event.response.publicChallengeParameters = { type: 'card' };
+      event.response.privateChallengeParameters = { type: 'card' };
       event.response.challengeMetadata = 'CARD_PROOF';
       return event;
 
