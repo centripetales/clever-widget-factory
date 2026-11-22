@@ -53,6 +53,8 @@ export default function SariSariChat() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const positiveSumOrgs = usePositiveSumOrgs();
+  // A card sign-in lands here with nowhere else to go, so there is no way back to the dashboard.
+  const fromCard = (() => { try { return sessionStorage.getItem('cwf_card_login') === '1'; } catch { return false; } })();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -433,14 +435,17 @@ export default function SariSariChat() {
       <header className="border-b bg-card">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-4">
-            <Button
-              onClick={() => navigate('/dashboard')}
-              variant="outline"
-              size="sm"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Dashboard
-            </Button>
+            {!fromCard && (
+              <Button
+                onClick={() => navigate('/dashboard')}
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                aria-label="Back to Dashboard"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            )}
             <div className="min-w-0">
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <img src="/stargazer-farm-logo.svg" alt="Stargazer Farm" className="h-6 w-6" />
