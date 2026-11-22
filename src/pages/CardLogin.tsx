@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { signIn, signOut, confirmSignIn } from 'aws-amplify/auth';
+import { signIn, confirmSignIn } from 'aws-amplify/auth';
 import { Loader2, AlertCircle } from 'lucide-react';
 import '@/hooks/useCognitoAuth'; // configures Amplify
 
@@ -25,8 +25,12 @@ export default function CardLogin() {
         if (!response.ok) throw new Error('This card is not valid.');
         const { email, proof } = await response.json();
 
-        // Whoever was signed in on this device is replaced by the card's holder.
-        await signOut().catch(() => undefined);
+        // Whoever was signed in on this device is replaced by the card's holder. Amplify's signOut
+        // sends a Google-originated session through Cognito's logout page, which navigates away
+        // mid-sign-in, so the old session's tokens are cleared locally instead.
+        Object.keys(localStorage)
+          .filter((key) => key.startsWith('CognitoIdentityServiceProvider') || key.startsWith('amplify-'))
+          .forEach((key) => localStorage.removeItem(key));
 
         const first = await signIn({ username: email, options: { authFlowType: 'CUSTOM_WITHOUT_SRP' } });
         if (first.nextStep.signInStep !== 'CONFIRM_SIGN_IN_WITH_CUSTOM_CHALLENGE') {

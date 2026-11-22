@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const AUDIENCE = 'card-login';
 
 exports.handler = async (event) => {
+  console.log('trigger:', event.triggerSource, 'session steps:', (event.request.session || []).length);
   switch (event.triggerSource) {
     case 'DefineAuthChallenge_Authentication': {
       const session = event.request.session || [];
@@ -39,9 +40,12 @@ exports.handler = async (event) => {
       try {
         const claims = jwt.verify(event.request.challengeAnswer, process.env.JWT_SECRET, { audience: AUDIENCE });
         event.response.answerCorrect = claims.sub === event.request.userAttributes.sub;
-      } catch {
+        if (!event.response.answerCorrect) console.log('proof is for a different user than the one signing in');
+      } catch (e) {
+        console.log('proof rejected:', e.name, e.message);
         event.response.answerCorrect = false;
       }
+      console.log('answer correct:', event.response.answerCorrect);
       return event;
     }
 
