@@ -105,7 +105,7 @@ function AppContent() {
     <div style={{ opacity: isHydrated ? 1 : 0, transition: 'opacity 0.1s' }}>
       <TokenRefreshIndicator />
       {user && (
-        <div className="fixed bottom-4 left-4 z-50 rounded-full bg-background/80 backdrop-blur-sm border px-2.5 py-1.5 shadow-sm">
+        <div className="fixed bottom-1 left-1 z-50 pointer-events-none opacity-60 px-2.5 py-1.5">
           <ConnectionStatusIndicator />
         </div>
       )}
