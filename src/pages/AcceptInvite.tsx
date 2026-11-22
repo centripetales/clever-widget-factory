@@ -49,8 +49,9 @@ export default function AcceptInvite() {
           }
 
           // Email matches — activate the account (clears FORCE_CHANGE_PASSWORD)
-          await apiService.post('/activate-user-account', { email: userEmail });
+          await apiService.post('/activate-user-account', { email: userEmail, token: sessionStorage.getItem('cwf_invite_token') });
           sessionStorage.removeItem('cwf_invite_email');
+          sessionStorage.removeItem('cwf_invite_token');
           setStep('success');
           setTimeout(() => navigate('/dashboard'), 2000);
           return;
@@ -102,6 +103,7 @@ export default function AcceptInvite() {
   const handleGoogleSignIn = async () => {
     if (!inviteData) return;
     sessionStorage.setItem('cwf_invite_email', inviteData.email);
+    sessionStorage.setItem('cwf_invite_token', token);
     await signInWithRedirect('Google');
     // Page will redirect — no further code runs
   };
