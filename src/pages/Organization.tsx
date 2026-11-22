@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Trash2, Send, Users, Shield, User, Wrench, Star, Info, ToggleLeft, ToggleRight, ChevronDown, UserX, ArrowLeft, MessageSquare, Copy, Check, Link } from 'lucide-react';
+import { Trash2, Send, Users, Shield, User, Wrench, Star, Info, ToggleLeft, ToggleRight, ChevronDown, UserX, ArrowLeft, MessageSquare, Copy, Check, Link, Nfc } from 'lucide-react';
 import { EditableOrganizationName } from '@/components/EditableOrganizationName';
 import { EditableMemberName } from '@/components/EditableMemberName';
 import { EditableOrganizationDomain } from '@/components/EditableOrganizationDomain';
@@ -430,6 +430,25 @@ const Organization = () => {
               <Button onClick={() => navigate('/prompts')} variant="outline">
                 <MessageSquare className="w-4 h-4 mr-2" />
                 Manage Scoring Prompts
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* NFC Cards */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Nfc className="w-5 h-5" />
+                NFC Cards
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Assign cards to members so tapping a card signs them in, and revoke cards that are lost.
+              </p>
+              <Button onClick={() => navigate('/cards')} variant="outline">
+                <Nfc className="w-4 h-4 mr-2" />
+                Manage Cards
               </Button>
             </CardContent>
           </Card>
