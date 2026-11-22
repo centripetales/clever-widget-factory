@@ -47,6 +47,8 @@ import AdminOrganizations from "./pages/AdminOrganizations";
 import NotFound from "./pages/NotFound";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import AcceptInvite from "./pages/AcceptInvite";
+import CardLogin from "./pages/CardLogin";
+import CardAdmin from "./pages/CardAdmin";
 import SettingsPage from "./pages/Settings";
 import UploadDebug from "./pages/UploadDebug";
 import UploadMobileTest from "./pages/UploadMobileTest";
@@ -111,6 +113,8 @@ function AppContent() {
       <Routes>
         <Route path="/auth" element={<Auth />} />
         <Route path="/accept-invite" element={<AcceptInvite />} />
+        <Route path="/card/:secret" element={<CardLogin />} />
+        <Route path="/cards" element={<AdminRoute><CardAdmin /></AdminRoute>} />
         <Route
           path="/"
           element={
