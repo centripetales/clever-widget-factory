@@ -9,8 +9,8 @@ export function StoreCredit({ orgId, orgName }: { orgId: string; orgName: string
   const credit = data && user?.userId ? Math.round(positiveSumBalance(data, user.userId)) : 0;
   if (credit <= 0) return null;
   return (
-    <div className="text-right text-sm text-muted-foreground">
-      Your credit{orgName ? ` with ${orgName}` : ''}:{' '}
+    <div className="text-sm text-muted-foreground">
+      Store Credits{orgName ? ` (${orgName})` : ''}:{' '}
       <span className="text-lg font-bold text-green-600 dark:text-green-400">₱{credit.toLocaleString()}</span>
     </div>
   );
