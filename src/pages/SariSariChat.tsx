@@ -11,6 +11,8 @@ import { useToast } from '@/hooks/use-toast';
 import { apiService, getApiData } from '@/lib/apiService';
 import { getThumbnailUrl, getImageUrl } from '@/lib/imageUtils';
 import { InventoryHistoryDialog } from '@/components/InventoryHistoryDialog';
+import { StoreCredit } from '@/components/StoreCredit';
+import { usePositiveSumOrgs } from '@/hooks/positiveSum/usePositiveSumOrgs';
 
 interface Message {
   id: string;
@@ -50,6 +52,7 @@ export default function SariSariChat() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const positiveSumOrgs = usePositiveSumOrgs();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -447,6 +450,9 @@ export default function SariSariChat() {
                 Chat with our farm assistant to explore organic produce and wines.
               </p>
             </div>
+          </div>
+          <div className="space-y-1">
+            {positiveSumOrgs.map(org => <StoreCredit key={org.id} orgId={org.id} orgName={org.name} />)}
           </div>
         </div>
       </header>

@@ -40,7 +40,8 @@ export default function CardLogin() {
         if (!second.isSignedIn) throw new Error('Sign-in did not complete.');
 
         // A full load starts the app from the new session; replace drops the secret from history.
-        window.location.replace('/');
+        // A cardholder lands on the Sari Sari Store, where their credit shows.
+        window.location.replace('/sari-sari-chat');
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Something went wrong.');
       }
