@@ -2,14 +2,26 @@ const { Client } = require('pg');
 const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, AdminGetUserCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
+const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
 
 const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
 
+// Cognito user filters take a quoted string value.
+const quoteFilterValue = (value) => `"${String(value).replace(/[\\"]/g, '\\$&')}"`;
+
+// The pool user with this email or sub, found with ListUsers (the role has no AdminGetUser).
+// An email can also belong to an unlinked Google user; only the native one counts.
+async function findNativeUser(attribute, value) {
+  const resp = await cognito.send(new ListUsersCommand({
+    UserPoolId: process.env.USER_POOL_ID,
+    Filter: `${attribute} = ${quoteFilterValue(value)}`,
+  }));
+  return resp.Users?.find((u) => u.UserStatus !== 'EXTERNAL_PROVIDER');
+}
+
 // An invite link only works while the invited account is still waiting to be activated.
 async function isAwaitingActivation(email) {
-  const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: email }));
-  return user.UserStatus === 'FORCE_CHANGE_PASSWORD';
+  return (await findNativeUser('email', email))?.UserStatus === 'FORCE_CHANGE_PASSWORD';
 }
 
 function escapeHtml(str) {
@@ -443,8 +455,8 @@ exports.handler = async (event) => {
       );
       if (!rows[0]) return invalid;
 
-      const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: rows[0].cognito_user_id }));
-      const email = user.UserAttributes?.find((a) => a.Name === 'email')?.Value;
+      const user = await findNativeUser('sub', rows[0].cognito_user_id);
+      const email = user?.Attributes?.find((a) => a.Name === 'email')?.Value;
       if (!email) return invalid;
 
       const proof = jwt.sign({ sub: rows[0].cognito_user_id }, process.env.JWT_SECRET, { audience: 'card-login', expiresIn: '60s' });
