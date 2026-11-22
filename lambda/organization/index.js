@@ -361,6 +361,72 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ success: true, cognitoUserId, emailSent, inviteLink }) };
     }
 
+    // Admin card management: assign a card to a member, list cards, revoke. Only a hash of the
+    // card's secret is stored. Admins only, and only for organizations the caller can access.
+    const isCardAdmin = authContext.permissions?.includes('data:write:all') || authContext.user_role === 'admin';
+
+    // GET /api/member-cards?organization_id=… — cards of the members of an organization
+    if (httpMethod === 'GET' && path.endsWith('/member-cards')) {
+      const organizationId = queryStringParameters?.organization_id;
+      if (!isCardAdmin) return { statusCode: 403, headers, body: JSON.stringify({ error: 'Admin permission required' }) };
+      if (!organizationId || !accessibleOrgIds.includes(organizationId)) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'No access to that organization' }) };
+      }
+      const rows = await queryParams(
+        `SELECT c.id, c.cognito_user_id, c.created_at, c.revoked_at, m.full_name, m.email
+           FROM member_cards c
+           JOIN organization_members m ON m.cognito_user_id = c.cognito_user_id AND m.organization_id = $1
+          ORDER BY c.created_at DESC`,
+        [organizationId]
+      );
+      return { statusCode: 200, headers, body: JSON.stringify({ data: rows }) };
+    }
+
+    // POST /api/member-cards — assign a card (its secret) to an active member of an organization
+    if (httpMethod === 'POST' && path.endsWith('/member-cards')) {
+      const { organization_id: organizationId, cognito_user_id: cognitoUserId, secret } = JSON.parse(event.body || '{}');
+      if (!isCardAdmin) return { statusCode: 403, headers, body: JSON.stringify({ error: 'Admin permission required' }) };
+      if (!organizationId || !accessibleOrgIds.includes(organizationId)) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'No access to that organization' }) };
+      }
+      if (!cognitoUserId || typeof secret !== 'string' || secret.length < 20 || secret.length > 200) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'cognito_user_id and a card secret (20-200 characters) are required' }) };
+      }
+      const member = await queryParams(
+        'SELECT 1 FROM organization_members WHERE cognito_user_id = $1 AND organization_id = $2 AND is_active = true',
+        [cognitoUserId, organizationId]
+      );
+      if (!member[0]) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Active member not found' }) };
+
+      const secretHash = crypto.createHash('sha256').update(secret).digest('hex');
+      try {
+        const rows = await queryParams(
+          'INSERT INTO member_cards (cognito_user_id, secret_hash) VALUES ($1, $2) RETURNING id',
+          [cognitoUserId, secretHash]
+        );
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true, id: rows[0].id }) };
+      } catch (err) {
+        if (err.code === '23505') return { statusCode: 409, headers, body: JSON.stringify({ error: 'This card is already assigned.' }) };
+        throw err;
+      }
+    }
+
+    // POST /api/member-cards/revoke — stop a card working
+    if (httpMethod === 'POST' && path.endsWith('/member-cards/revoke')) {
+      const { id } = JSON.parse(event.body || '{}');
+      if (!isCardAdmin) return { statusCode: 403, headers, body: JSON.stringify({ error: 'Admin permission required' }) };
+      if (!id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id is required' }) };
+      const rows = await queryParams(
+        `UPDATE member_cards SET revoked_at = now()
+          WHERE id = $1 AND revoked_at IS NULL
+            AND cognito_user_id IN (SELECT cognito_user_id FROM organization_members WHERE organization_id = ANY($2::uuid[]))
+        RETURNING id`,
+        [id, accessibleOrgIds]
+      );
+      if (!rows[0]) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Card not found' }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+    }
+
     // POST /api/card-login — swaps an NFC card's secret for the holder's sign-in name and a
     // short-lived proof that the card-auth-challenge Lambda checks. Only a hash of the secret is stored.
     if (httpMethod === 'POST' && path.endsWith('/card-login')) {
