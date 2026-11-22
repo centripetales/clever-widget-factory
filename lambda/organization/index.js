@@ -1,6 +1,7 @@
 const { Client } = require('pg');
 const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, AdminGetUserCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
 
 const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
@@ -69,7 +70,7 @@ exports.handler = async (event) => {
   const accessibleOrgIds = authContext.accessible_organization_ids || [];
   
   // Unauthenticated endpoints (invite flow) — skip org access check
-  const publicPaths = ['/validate-invite-token', '/activate-user-password', '/activate-user-account'];
+  const publicPaths = ['/validate-invite-token', '/activate-user-password', '/activate-user-account', '/card-login'];
   const isPublicEndpoint = publicPaths.some(p => path.endsWith(p));
   
   if (!isPublicEndpoint && accessibleOrgIds.length === 0) {
@@ -358,6 +359,30 @@ exports.handler = async (event) => {
       }
 
       return { statusCode: 200, headers, body: JSON.stringify({ success: true, cognitoUserId, emailSent, inviteLink }) };
+    }
+
+    // POST /api/card-login — swaps an NFC card's secret for the holder's sign-in name and a
+    // short-lived proof that the card-auth-challenge Lambda checks. Only a hash of the secret is stored.
+    if (httpMethod === 'POST' && path.endsWith('/card-login')) {
+      const { secret } = JSON.parse(event.body || '{}');
+      const invalid = { statusCode: 401, headers, body: JSON.stringify({ error: 'This card is not valid.' }) };
+      if (typeof secret !== 'string' || secret.length < 20 || secret.length > 200) return invalid;
+
+      const secretHash = crypto.createHash('sha256').update(secret).digest('hex');
+      const rows = await queryParams(
+        `SELECT c.cognito_user_id FROM member_cards c
+          WHERE c.secret_hash = $1 AND c.revoked_at IS NULL
+            AND EXISTS (SELECT 1 FROM organization_members m WHERE m.cognito_user_id = c.cognito_user_id AND m.is_active = true)`,
+        [secretHash]
+      );
+      if (!rows[0]) return invalid;
+
+      const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: rows[0].cognito_user_id }));
+      const email = user.UserAttributes?.find((a) => a.Name === 'email')?.Value;
+      if (!email) return invalid;
+
+      const proof = jwt.sign({ sub: rows[0].cognito_user_id }, process.env.JWT_SECRET, { audience: 'card-login', expiresIn: '60s' });
+      return { statusCode: 200, headers, body: JSON.stringify({ email, proof }) };
     }
 
     // POST /api/validate-invite-token — validates a JWT invite token
