@@ -5,6 +5,10 @@ const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPassw
 
 const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function generateInviteToken(email, organizationId) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error('JWT_SECRET environment variable is required');
@@ -336,12 +340,18 @@ exports.handler = async (event) => {
           method: 'POST',
           headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: process.env.INVITE_FROM_EMAIL || 'noreply@stargazer-farm.com',
+            from: `Stargazer Farm <${process.env.INVITE_FROM_EMAIL || 'noreply@stargazer-farm.com'}>`,
             to: [email],
             subject: `You've been invited to ${organizationName}`,
-            html: `<p>You've been invited to join <strong>${organizationName}</strong>.</p>
-                   <p><a href="${inviteLink}">Click here to activate your account</a></p>
-                   <p>This link expires in 24 hours.</p>`,
+            html: `<div style="background:#f4f6f4;padding:24px 12px;font-family:Arial,Helvetica,sans-serif">
+  <table role="presentation" align="center" width="100%" style="max-width:480px;background:#ffffff;border-radius:8px;padding:32px 24px;text-align:center">
+    <tr><td><img src="${appUrl}/email-logo.png" width="80" alt="Stargazer Farm" style="display:block;margin:0 auto 20px"></td></tr>
+    <tr><td style="font-size:20px;font-weight:bold;color:#1a2e1a;padding-bottom:12px">You've been invited to ${escapeHtml(organizationName)}</td></tr>
+    <tr><td style="font-size:15px;color:#444444;padding-bottom:24px">Activate your account to get started.</td></tr>
+    <tr><td style="padding-bottom:24px"><a href="${inviteLink}" style="background:#3aa655;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;display:inline-block">Activate your account</a></td></tr>
+    <tr><td style="font-size:12px;color:#888888">This link expires in 24 hours.<br>If you weren't expecting this, you can ignore this email.</td></tr>
+  </table>
+</div>`,
             text: `You've been invited to join ${organizationName}.\n\nActivate your account: ${inviteLink}\n\nThis link expires in 24 hours.`,
           }),
         });
