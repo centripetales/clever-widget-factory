@@ -35,40 +35,58 @@ const newSecret = () => {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
 
-// Waits for one card to be tapped and returns the secret in its /card/<secret> URL.
-const readCardSecret = (): Promise<string> =>
+const SCAN_SECONDS = 30;
+
+// Scans until a card is read (a read error while the card is only partly in range does not
+// end the scan) or the time runs out. onNote reports read errors as they happen.
+const scanForCard = <T,>(
+  onNote: (text: string) => void,
+  onCard: (event: { serialNumber: string; message: { records: NdefRecordLike[] } }) => T,
+  onTimeout: (readErrors: number) => Error,
+): Promise<T> =>
   new Promise((resolve, reject) => {
     const controller = new AbortController();
+    let readErrors = 0;
+    const timer = setTimeout(() => { controller.abort(); reject(onTimeout(readErrors)); }, SCAN_SECONDS * 1000);
     const reader = new NDEFReader();
-    reader.onreadingerror = () => { controller.abort(); reject(new Error('Could not read that card.')); };
-    reader.onreading = ({ message }) => {
+    reader.onreadingerror = () => {
+      readErrors += 1;
+      onNote(`The card was seen but not read (${readErrors}). Keep it flat and still against the phone.`);
+    };
+    reader.onreading = (event) => {
+      clearTimeout(timer);
       controller.abort();
+      try { resolve(onCard(event)); } catch (e) { reject(e); }
+    };
+    reader.scan({ signal: controller.signal }).catch((e) => { clearTimeout(timer); reject(e); });
+  });
+
+// Waits for one card to be tapped and returns the secret in its /card/<secret> URL.
+const readCardSecret = (onNote: (text: string) => void): Promise<string> =>
+  scanForCard(
+    onNote,
+    ({ message }) => {
       for (const record of message.records) {
         if (record.recordType !== 'url' && record.recordType !== 'text') continue;
         const text = new TextDecoder(record.encoding || 'utf-8').decode(record.data);
         const secret = text.match(/\/card\/([A-Za-z0-9_-]{20,200})/)?.[1];
-        if (secret) return resolve(secret);
+        if (secret) return secret;
       }
-      reject(new Error('That card has no card address on it.'));
-    };
-    reader.scan({ signal: controller.signal }).catch(reject);
-  });
+      throw new Error('That card has no card address on it.');
+    },
+    (errors) => new Error(errors ? `The card was seen ${errors} times but never read. It may not be a writable NFC tag type.` : `No card detected in ${SCAN_SECONDS} seconds.`),
+  );
 
 // Waits for a card and says what was found, to tell whether the phone detects it.
-const checkCard = (): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => { controller.abort(); reject(new Error('No card detected in 20 seconds.')); }, 20000);
-    const reader = new NDEFReader();
-    reader.onreadingerror = () => { clearTimeout(timer); controller.abort(); resolve('A card was detected but could not be read. It may not be a writable NFC tag.'); };
-    reader.onreading = ({ serialNumber, message }) => {
-      clearTimeout(timer);
-      controller.abort();
+const checkCard = (onNote: (text: string) => void): Promise<string> =>
+  scanForCard(
+    onNote,
+    ({ serialNumber, message }) => {
       const hasAddress = message.records.some((r) => r.recordType === 'url' && new TextDecoder().decode(r.data).includes('/card/'));
-      resolve(`Card detected (serial ${serialNumber}). ${message.records.length} record(s); ${hasAddress ? 'it has a card address.' : 'no card address yet.'}`);
-    };
-    reader.scan({ signal: controller.signal }).catch((e) => { clearTimeout(timer); reject(e); });
-  });
+      return `Card detected (serial ${serialNumber}). ${message.records.length} record(s); ${hasAddress ? 'it has a card address.' : 'no card address yet.'}`;
+    },
+    (errors) => new Error(errors ? `A card was seen ${errors} times but could not be read. It may not be a writable NFC tag type.` : `No card detected in ${SCAN_SECONDS} seconds.`),
+  );
 
 export default function CardAdmin() {
   const { toast } = useToast();
@@ -103,7 +121,7 @@ export default function CardAdmin() {
         await assign(secret);
       } else {
         setStatus('Waiting for a card. Hold it flat and still against the back of the phone.');
-        await assign(await readCardSecret());
+        await assign(await readCardSecret(setStatus));
       }
       setStatus('');
       toast({ title: 'Card assigned' });
@@ -126,7 +144,7 @@ export default function CardAdmin() {
     setBusy('check');
     setStatus('Waiting for a card. Hold it flat against the back of the phone.');
     try {
-      setStatus(await checkCard());
+      setStatus(await checkCard(setStatus));
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
