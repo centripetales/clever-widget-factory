@@ -40,7 +40,8 @@ export default function CardLogin() {
         if (!second.isSignedIn) throw new Error('Sign-in did not complete.');
 
         // A full load starts the app from the new session; replace drops the secret from history.
-        // A cardholder lands on the Sari Sari Store, where their credit shows.
+        // A cardholder lands on the Sari Sari Store, where their credit shows; the store hides its back button for them.
+        try { sessionStorage.setItem('cwf_card_login', '1'); } catch { /* the back button just stays */ }
         window.location.replace('/sari-sari-chat');
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Something went wrong.');
