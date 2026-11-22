@@ -75,7 +75,8 @@ async function queryParams(sql, params) {
 }
 
 exports.handler = async (event) => {
-  console.log('Event:', JSON.stringify(event, null, 2));
+  // Not the whole event: its body holds card secrets, activation passwords and invite tokens, and its headers hold login tokens.
+  console.log('Request:', JSON.stringify({ httpMethod: event.httpMethod, path: event.path, queryStringParameters: event.queryStringParameters }));
   
   const { httpMethod, path, queryStringParameters } = event;
   const authContext = getAuthorizerContext(event);
