@@ -2,10 +2,8 @@ const { Client } = require('pg');
 const { getAuthorizerContext } = require('/opt/nodejs/authorizerContext');
 const jwt = require('jsonwebtoken');
 const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
-const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 
 const cognito = new CognitoIdentityProviderClient({ region: 'us-west-2' });
-const ses = new SESClient({ region: 'us-west-2' });
 
 function generateInviteToken(email, organizationId) {
   const secret = process.env.JWT_SECRET;
@@ -331,26 +329,23 @@ exports.handler = async (event) => {
       const appUrl = process.env.APP_URL || 'https://stargazer-farm.com';
       const inviteLink = `${appUrl}/accept-invite?token=${token}`;
 
-      // Attempt to send email via SES (best-effort — may fail in sandbox mode)
+      // Send the invite email via Resend (best-effort — the link is also returned to the admin)
       let emailSent = false;
       try {
-        await ses.send(new SendEmailCommand({
-          Source: process.env.SES_FROM_EMAIL || 'noreply@stargazer-farm.com',
-          Destination: { ToAddresses: [email] },
-          Message: {
-            Subject: { Data: `You've been invited to ${organizationName}` },
-            Body: {
-              Html: {
-                Data: `<p>You've been invited to join <strong>${organizationName}</strong>.</p>
-                       <p><a href="${inviteLink}">Click here to activate your account</a></p>
-                       <p>This link expires in 24 hours.</p>`
-              },
-              Text: {
-                Data: `You've been invited to join ${organizationName}.\n\nActivate your account: ${inviteLink}\n\nThis link expires in 24 hours.`
-              }
-            }
-          }
-        }));
+        const resp = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: process.env.INVITE_FROM_EMAIL || 'noreply@stargazer-farm.com',
+            to: [email],
+            subject: `You've been invited to ${organizationName}`,
+            html: `<p>You've been invited to join <strong>${organizationName}</strong>.</p>
+                   <p><a href="${inviteLink}">Click here to activate your account</a></p>
+                   <p>This link expires in 24 hours.</p>`,
+            text: `You've been invited to join ${organizationName}.\n\nActivate your account: ${inviteLink}\n\nThis link expires in 24 hours.`,
+          }),
+        });
+        if (!resp.ok) throw new Error(`Resend ${resp.status}: ${await resp.text()}`);
         emailSent = true;
       } catch (emailErr) {
         console.warn('Failed to send invite email:', emailErr.message);
@@ -387,9 +382,19 @@ exports.handler = async (event) => {
 
     // POST /api/activate-user-account — clears FORCE_CHANGE_PASSWORD after Google sign-in
     if (httpMethod === 'POST' && path.endsWith('/activate-user-account')) {
-      const { email } = JSON.parse(event.body || '{}');
-      if (!email) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'email is required' }) };
+      const { email, token } = JSON.parse(event.body || '{}');
+      if (!email || !token) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'email and token are required' }) };
+      }
+
+      let decoded;
+      try {
+        decoded = verifyInviteToken(token);
+      } catch (err) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid or expired invitation token' }) };
+      }
+      if (decoded.email !== email) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: 'Email does not match invitation' }) };
       }
 
       await cognito.send(new AdminSetUserPasswordCommand({
