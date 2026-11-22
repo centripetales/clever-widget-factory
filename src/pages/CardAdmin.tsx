@@ -16,7 +16,7 @@ interface NdefRecordLike { recordType: string; data?: DataView; encoding?: strin
 interface NdefReaderLike {
   write(message: { records: { recordType: string; data: string }[] }): Promise<void>;
   scan(options?: { signal?: AbortSignal }): Promise<void>;
-  onreading: ((event: { message: { records: NdefRecordLike[] } }) => void) | null;
+  onreading: ((event: { serialNumber: string; message: { records: NdefRecordLike[] } }) => void) | null;
   onreadingerror: (() => void) | null;
 }
 declare const NDEFReader: { new (): NdefReaderLike };
@@ -54,13 +54,30 @@ const readCardSecret = (): Promise<string> =>
     reader.scan({ signal: controller.signal }).catch(reject);
   });
 
+// Waits for a card and says what was found, to tell whether the phone detects it.
+const checkCard = (): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => { controller.abort(); reject(new Error('No card detected in 20 seconds.')); }, 20000);
+    const reader = new NDEFReader();
+    reader.onreadingerror = () => { clearTimeout(timer); controller.abort(); resolve('A card was detected but could not be read. It may not be a writable NFC tag.'); };
+    reader.onreading = ({ serialNumber, message }) => {
+      clearTimeout(timer);
+      controller.abort();
+      const hasAddress = message.records.some((r) => r.recordType === 'url' && new TextDecoder().decode(r.data).includes('/card/'));
+      resolve(`Card detected (serial ${serialNumber}). ${message.records.length} record(s); ${hasAddress ? 'it has a card address.' : 'no card address yet.'}`);
+    };
+    reader.scan({ signal: controller.signal }).catch((e) => { clearTimeout(timer); reject(e); });
+  });
+
 export default function CardAdmin() {
   const { toast } = useToast();
   const { organization } = useOrganization();
   const organizationId = organization?.id;
   const { members } = useOrganizationMembersByOrg(organizationId);
   const [personId, setPersonId] = useState('');
-  const [busy, setBusy] = useState<'write' | 'read' | null>(null);
+  const [busy, setBusy] = useState<'write' | 'read' | 'check' | null>(null);
+  const [status, setStatus] = useState('');
 
   const supported = typeof window !== 'undefined' && 'NDEFReader' in window;
   const people = members.filter((m) => m.is_active && m.cognito_user_id);
@@ -81,16 +98,37 @@ export default function CardAdmin() {
     try {
       if (mode === 'write') {
         const secret = newSecret();
-        toast({ title: 'Hold a blank card to the back of the phone' });
+        setStatus('Waiting for a card. Hold it flat and still against the back of the phone until this says assigned.');
         await new NDEFReader().write({ records: [{ recordType: 'url', data: `${window.location.origin}/card/${secret}` }] });
         await assign(secret);
       } else {
-        toast({ title: 'Hold the card to the back of the phone' });
+        setStatus('Waiting for a card. Hold it flat and still against the back of the phone.');
         await assign(await readCardSecret());
       }
+      setStatus('');
       toast({ title: 'Card assigned' });
     } catch (e) {
-      toast({ title: 'Card not assigned', description: e instanceof Error ? e.message : String(e), variant: 'destructive' });
+      const message = e instanceof Error ? e.message : String(e);
+      setStatus('');
+      toast({
+        title: 'Card not assigned',
+        description: /IO error/i.test(message)
+          ? 'The card was detected but the write failed. Keep it still against the phone, or it may not be a writable NFC tag (NTAG213/215/216).'
+          : message,
+        variant: 'destructive',
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const check = async () => {
+    setBusy('check');
+    setStatus('Waiting for a card. Hold it flat against the back of the phone.');
+    try {
+      setStatus(await checkCard());
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
@@ -136,7 +174,16 @@ export default function CardAdmin() {
               {busy === 'read' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Nfc className="h-4 w-4 mr-2" />}
               Use a card already written
             </Button>
+            <Button variant="ghost" disabled={!supported || !!busy} onClick={check}>
+              {busy === 'check' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Nfc className="h-4 w-4 mr-2" />}
+              Check a card
+            </Button>
           </div>
+          {status && (
+            <Alert>
+              <AlertDescription>{status}</AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
