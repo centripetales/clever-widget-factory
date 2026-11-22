@@ -441,18 +441,15 @@ export default function SariSariChat() {
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Dashboard
             </Button>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <img src="/stargazer-farm-logo.svg" alt="Stargazer Farm" className="h-6 w-6" />
                 Stargazer Farm
               </h1>
-              <p className="text-sm text-muted-foreground">
-                Chat with our farm assistant to explore organic produce and wines.
-              </p>
+              {positiveSumOrgs.map(org => (
+                <StoreCredit key={org.id} orgId={org.id} orgName={positiveSumOrgs.length > 1 ? org.name : ''} />
+              ))}
             </div>
-          </div>
-          <div className="space-y-1">
-            {positiveSumOrgs.map(org => <StoreCredit key={org.id} orgId={org.id} orgName={org.name} />)}
           </div>
         </div>
       </header>
