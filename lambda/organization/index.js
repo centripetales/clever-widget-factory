@@ -345,7 +345,7 @@ exports.handler = async (event) => {
             subject: `You've been invited to ${organizationName}`,
             html: `<div style="background:#f4f6f4;padding:24px 12px;font-family:Arial,Helvetica,sans-serif">
   <table role="presentation" align="center" width="100%" style="max-width:480px;background:#ffffff;border-radius:8px;padding:32px 24px;text-align:center">
-    <tr><td><img src="${appUrl}/email-logo.png" width="80" alt="Stargazer Farm" style="display:block;margin:0 auto 20px"></td></tr>
+    <tr><td><img src="${appUrl}/email-logo.png" width="240" alt="Stargazer Farms" style="display:block;margin:0 auto 20px;max-width:100%;height:auto"></td></tr>
     <tr><td style="font-size:20px;font-weight:bold;color:#1a2e1a;padding-bottom:12px">You've been invited to ${escapeHtml(organizationName)}</td></tr>
     <tr><td style="font-size:15px;color:#444444;padding-bottom:24px">Activate your account to get started.</td></tr>
     <tr><td style="padding-bottom:24px"><a href="${inviteLink}" style="background:#3aa655;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;display:inline-block">Activate your account</a></td></tr>
