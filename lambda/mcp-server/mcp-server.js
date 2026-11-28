@@ -314,7 +314,8 @@ const refuse = (text) => ({ content: [{ type: 'text', text }], isError: true });
 
 // A saved policy as the policies service answers with it.
 const describePolicy = (p) => ({
-  policy_id: p.id, title: p.title, text: p.description_text, status: p.status,
+  policy_id: p.id, title: p.title, text: p.description_text, ...(p.reasoning && { reasoning: p.reasoning }),
+  status: p.status,
   observation_ids: p.observation_ids, experience_ids: p.experience_ids,
 });
 
@@ -1507,11 +1508,14 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'List policies',
       description:
-        'The saved policies of your organizations: title, text, status (active, or deprecated for retired ' +
-        'ones), whose it is, and its sources, the observations and experiences it rests on (get_experience ' +
+        'The saved policies of your organizations: title, text, reasoning (why we do it, when shared), ' +
+        'status (active, or deprecated for retired ones), whose it is, and its sources, the observations and ' +
+        'experiences it rests on (get_experience ' +
         'opens an experience; get_observation_photos shows an observation\'s photos). A policy is a general ' +
         'rule that action plans draw on and may deviate from: what to do and when it applies. Read them ' +
-        'all and pick the relevant ones yourself.',
+        'all and pick the relevant ones yourself. A policy\'s reasoning often holds what is particular to this ' +
+        'place: where it differs from what you know in general, say so and ask rather than setting the ' +
+        'policy aside.',
       inputSchema: {
         status: z.enum(['active', 'deprecated']).optional().describe('Only policies with this status'),
       },
@@ -1522,7 +1526,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       try {
         // An observation source outside the caller's orgs is listed by id only.
         const policies = await withDbClient(async (client) => (await client.query(
-          `SELECT p.id::text AS policy_id, p.title, p.description_text AS text, p.status, o.name AS organization,
+          `SELECT p.id::text AS policy_id, p.title, p.description_text AS text, p.reasoning, p.status, o.name AS organization,
              (SELECT COALESCE(json_agg(json_build_object('observation_id', ps.state_id, 'captured_at', s.captured_at,
                        'claim', c.claim, 'text', LEFT(s.state_text, 300)) ORDER BY ps.created_at, ps.id), '[]')
               FROM policy_sources ps
@@ -1541,8 +1545,9 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         )).rows);
         console.log(`list_policies: -> ${policies.length} policies`);
         if (policies.length === 0) return { content: [{ type: 'text', text: 'No saved policies.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(policies.map(({ observations, experience_ids, ...policy }) => ({
+        return { content: [{ type: 'text', text: JSON.stringify(policies.map(({ observations, experience_ids, reasoning, ...policy }) => ({
           ...policy,
+          ...(reasoning && { reasoning }),
           ...(observations?.length > 0 && { observations: observations.map((o) => ({
             observation_id: o.observation_id,
             ...(o.captured_at && { captured_at_manila: formatManilaTime(o.captured_at) }),
@@ -1563,24 +1568,27 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       title: 'Create a policy',
       description:
         'Save a new policy for the organization. A policy is abstract and reusable: what to do and the ' +
-        'conditions under which it applies, both in its text. Name a specific asset, person or date only ' +
+        'conditions under which it applies, both in its text. Invite the person to share their reasoning; ' +
+        'it goes in reasoning, not in the text, which is what searches match. Record what they share or a ' +
+        'source you read, never a reason you worked out, and leave it out if they have none to add. Name a specific asset, person or date only ' +
         'if the rule is really about that one. A policy is how the organization works: it is active as soon ' +
         'as it is saved. Something still being tried, or how one particular action will be done, is not a ' +
         'policy: that goes in the action\'s plan (create_action, update_action). The text says what ' +
         'the person means by the rule; do not work one out from observations on your own. Link what it ' +
         'rests on when they point to it: the observation it came from (search_claims) or an experience ' +
         'that shows it done well (search_experiences); a policy needs none. Call list_policies first so ' +
-        'the same rule is not saved twice. Read the title, text and sources back to the person and only ' +
+        'the same rule is not saved twice. Read the title, text, reasoning and sources back to the person and only ' +
         'call this once they say yes.',
       inputSchema: {
         title: z.string().min(1).describe('Short name for the rule, e.g. "Fueling a vehicle"'),
         text: z.string().min(1).describe('What to do and when it applies; plain text'),
+        reasoning: z.string().optional().describe('Why we do it, as the person shares it, e.g. what is particular to this place, or the practice and source it comes from; plain text'),
         observation_ids: z.array(z.string()).optional().describe('Observations the policy rests on'),
         experience_ids: z.array(z.string()).optional().describe('Experiences the policy rests on'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ title, text, observation_ids, experience_ids }) => {
+    async ({ title, text, reasoning, observation_ids, experience_ids }) => {
       console.log('create_policy called with:', JSON.stringify({ title, observation_ids, experience_ids }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -1588,7 +1596,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       }
       try {
         const created = await createPolicy({ cognitoUserId, policy: {
-          title, description_text: text,
+          title, description_text: text, ...(reasoning && { reasoning }),
           ...(observation_ids && { observation_ids }), ...(experience_ids && { experience_ids }),
         } });
         console.log('create_policy: created', created.id);
@@ -1605,7 +1613,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
     {
       title: 'Edit a policy',
       description:
-        'Change a saved policy. Only the fields given change. observation_ids and experience_ids each ' +
+        'Change a saved policy. Only the fields given change. reasoning is why we do it, kept out of the ' +
+        'text: record what the person shares or a source you read. observation_ids and experience_ids each ' +
         'replace that whole list of sources, so start from the current ones (list_policies) when adding or ' +
         'removing one. Once action plans draw on a policy, change its text only to fix the wording: when the ' +
         'practice itself changes, create a new policy and set this one deprecated. A policy is retired that ' +
@@ -1614,19 +1623,20 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         policy_id: z.string().describe('The policy_id from list_policies or create_policy'),
         title: z.string().min(1).optional().describe('New title'),
         text: z.string().min(1).optional().describe('New text; plain text'),
+        reasoning: z.string().optional().describe('New reasoning; plain text, empty to remove it'),
         status: z.enum(['active', 'deprecated']).optional().describe('deprecated retires it; active brings it back'),
         observation_ids: z.array(z.string()).optional().describe('Every observation it rests on'),
         experience_ids: z.array(z.string()).optional().describe('Every experience it rests on'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ policy_id, title, text, status, observation_ids, experience_ids }) => {
+    async ({ policy_id, title, text, reasoning, status, observation_ids, experience_ids }) => {
       console.log('update_policy called with:', JSON.stringify({ policy_id, title, status, observation_ids, experience_ids }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing policies.');
       }
-      const changes = Object.fromEntries(Object.entries({ title, description_text: text, status, observation_ids, experience_ids })
+      const changes = Object.fromEntries(Object.entries({ title, description_text: text, reasoning, status, observation_ids, experience_ids })
         .filter(([, value]) => value !== undefined));
       if (Object.keys(changes).length === 0) return refuse('Nothing to change.');
       try {

@@ -64,6 +64,7 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   if (command.input.FunctionName === 'cwf-policies-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ policy: {
       id: event.pathParameters?.id || 'policy-new', title: body.title ?? 'Old title', description_text: body.description_text ?? 'Old text',
+      reasoning: body.reasoning || null,
       status: body.status || 'active', observation_ids: body.observation_ids || [], experience_ids: body.experience_ids || [],
     } }) })) };
   }
@@ -2010,6 +2011,23 @@ describe('policies', () => {
       policy_id: 'policy-new', title: 'Grease bearings', text: 'Grease them monthly.', status: 'active',
       observation_ids: ['obs-1'], experience_ids: ['exp-1'],
     });
+  });
+
+  test('reasoning is saved apart from the text, listed when there is one, and removed with empty text', async () => {
+    const writerClient = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const created = await writerClient.callTool({ name: 'create_policy', arguments: { title: 'Treat our water', text: 'Add sulfites.', reasoning: 'Our water is not clean.' } });
+    assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { title: 'Treat our water', description_text: 'Add sulfites.', reasoning: 'Our water is not clean.' });
+    assert.strictEqual(JSON.parse(created.content[0].text).reasoning, 'Our water is not clean.');
+
+    rows = [{ organization_id: 'org-a' }];
+    await writerClient.callTool({ name: 'update_policy', arguments: { policy_id: 'policy-1', reasoning: '' } });
+    assert.deepStrictEqual(JSON.parse(invocations[1].event.body), { reasoning: '' });
+
+    rows = [{ policy_id: 'p-1', title: 'Treat our water', reasoning: 'Our water is not clean.' }, { policy_id: 'p-2', title: 'Grease bearings', reasoning: null }];
+    const [first, second] = JSON.parse((await writerClient.callTool({ name: 'list_policies', arguments: {} })).content[0].text);
+    assert.match(queries.at(-1).sql, /p\.reasoning/);
+    assert.strictEqual(first.reasoning, 'Our water is not clean.');
+    assert.ok(!('reasoning' in second));
   });
 
   test('update_policy sends only what changes, in the policy\'s org', async () => {

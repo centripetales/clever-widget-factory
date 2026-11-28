@@ -17,7 +17,7 @@ const pool = new Pool({
 const STATUSES = ['active', 'deprecated'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // With the observations and experiences it rests on (its sources), oldest link first
-const POLICY_COLUMNS = `id, title, description_text, status, effective_from, effective_to, created_at, updated_at,
+const POLICY_COLUMNS = `id, title, description_text, reasoning, status, effective_from, effective_to, created_at, updated_at,
   ARRAY(SELECT ps.state_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.state_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS observation_ids,
   ARRAY(SELECT ps.experience_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids`;
 
@@ -86,6 +86,9 @@ exports.handler = async (event) => {
 };
 
 const canWrite = ({ permissions }) => hasPermission({ permissions }, 'data:write:all') || hasPermission({ permissions }, 'data:write:org');
+
+// The reasoning behind a policy is optional: text, or nothing (null or blank clears it).
+const isReasoning = (value) => value === null || typeof value === 'string';
 
 // The source lists given in a request, each without repeats; a list left out is
 // not in the result. A problem is returned for anything but lists of ids.
@@ -175,9 +178,10 @@ async function createPolicy(event, context) {
   if (!canWrite(context)) return error('Not authorized to create policies', 403);
   const body = parseBody(event);
   if (!body) return error('Invalid JSON in request body', 400);
-  const { title, description_text, status = 'active', effective_from = null, effective_to = null } = body;
+  const { title, description_text, reasoning = null, status = 'active', effective_from = null, effective_to = null } = body;
   if (typeof title !== 'string' || !title.trim()) return error('title is required', 400);
   if (typeof description_text !== 'string' || !description_text.trim()) return error('description_text is required', 400);
+  if (!isReasoning(reasoning)) return error('reasoning must be text', 400);
   if (!STATUSES.includes(status)) return error(`status must be one of ${STATUSES.join(', ')}`, 400);
 
   const { lists, problem } = sourceLists(body);
@@ -185,9 +189,10 @@ async function createPolicy(event, context) {
 
   return await inTransaction(async (client) => {
     const { id } = (await client.query(
-      `INSERT INTO policy (organization_id, title, description_text, status, effective_from, effective_to, created_by_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [context.organizationId, title.trim(), description_text.trim(), status, effective_from, effective_to, context.cognitoUserId]
+      `INSERT INTO policy (organization_id, title, description_text, reasoning, status, effective_from, effective_to, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [context.organizationId, title.trim(), description_text.trim(), reasoning?.trim() || null, status, effective_from, effective_to,
+        context.cognitoUserId]
     )).rows[0];
     const sourceProblem = await saveSources(client, id, lists, context);
     if (sourceProblem) return error(sourceProblem, 400);
@@ -213,6 +218,10 @@ async function updatePolicy(event, id, context) {
   if (body.description_text !== undefined) {
     if (typeof body.description_text !== 'string' || !body.description_text.trim()) return error('description_text cannot be empty', 400);
     changes.description_text = body.description_text.trim();
+  }
+  if (body.reasoning !== undefined) {
+    if (!isReasoning(body.reasoning)) return error('reasoning must be text', 400);
+    changes.reasoning = body.reasoning?.trim() || null;
   }
   if (body.status !== undefined) {
     if (!STATUSES.includes(body.status)) return error(`status must be one of ${STATUSES.join(', ')}`, 400);
@@ -248,7 +257,7 @@ async function actionInOrg(actionId, organizationId) {
 async function getActionPolicies(actionId, { organizationId }) {
   if (!(await actionInOrg(actionId, organizationId))) return error('Action not found', 404);
   const result = await pool.query(
-    `SELECT p.id, p.title, p.description_text, p.status
+    `SELECT p.id, p.title, p.description_text, p.reasoning, p.status
        FROM action_policies ap JOIN policy p ON p.id = ap.policy_id
       WHERE ap.action_id = $1 ORDER BY p.title`,
     [actionId]
