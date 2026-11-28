@@ -70,7 +70,7 @@ describe('creating a policy', () => {
     });
     assert.strictEqual(status, 200);
     assert.deepStrictEqual(body.policy, saved);
-    assert.strictEqual(ran(/INSERT INTO policy \(/)[0].params[3], 'active');
+    assert.strictEqual(ran(/INSERT INTO policy \(/)[0].params[4], 'active');
     assert.deepStrictEqual(ran(/INSERT INTO policy_sources \(policy_id, state_id\)/)[0].params, [POLICY, [OBS_A]]);
     assert.deepStrictEqual(ran(/INSERT INTO policy_sources \(policy_id, experience_id\)/)[0].params, [POLICY, [EXP]]);
     assert.deepStrictEqual(queries[0].sql, 'BEGIN');
@@ -81,6 +81,16 @@ describe('creating a policy', () => {
     const { status } = await call('POST', { title: 'Grease bearings', description_text: 'Grease them monthly.' });
     assert.strictEqual(status, 200);
     assert.strictEqual(ran(/policy_sources \(policy_id/).length, 0);
+  });
+
+  test('keeps its reasoning apart from its text, and may have none', async () => {
+    await call('POST', { title: 't', description_text: 'd', reasoning: '  Our water is not clean.  ' });
+    await call('POST', { title: 't', description_text: 'd', reasoning: '   ' });
+    await call('POST', { title: 't', description_text: 'd' });
+    const inserts = ran(/INSERT INTO policy \(/);
+    assert.deepStrictEqual(inserts.map((q) => q.params[3]), ['Our water is not clean.', null, null]);
+    assert.deepStrictEqual(inserts.map((q) => q.params[2]), ['d', 'd', 'd']);
+    assert.strictEqual((await call('POST', { title: 't', description_text: 'd', reasoning: 5 })).status, 400);
   });
 
   test('looks for sources in all the caller orgs', async () => {
@@ -127,6 +137,14 @@ describe('changing a policy', () => {
     assert.match(update.sql, /UPDATE policy SET status = \$3, updated_at = NOW\(\)/);
     assert.deepStrictEqual(update.params, [POLICY, ORG, 'deprecated']);
     assert.strictEqual(ran(/policy_sources WHERE policy_id = \$1 AND/).length, 0);
+  });
+
+  test('changes or clears the reasoning on its own', async () => {
+    await call('PUT', { reasoning: 'Large farms do this.' }, POLICY);
+    await call('PUT', { reasoning: null }, POLICY);
+    const updates = ran(/UPDATE policy SET/);
+    assert.match(updates[0].sql, /UPDATE policy SET reasoning = \$3, updated_at = NOW\(\)/);
+    assert.deepStrictEqual(updates.map((q) => q.params[2]), ['Large farms do this.', null]);
   });
 
   test('links nothing to a policy of another organization', async () => {
