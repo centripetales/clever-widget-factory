@@ -45,6 +45,11 @@ export const INVENTORY_METRIC = 'Inventory';
 export const isRequiredPartMetric = (metric: Pick<Metric, 'name' | 'entity_type'>): boolean =>
   metric.entity_type === 'part' && metric.name === INVENTORY_METRIC;
 
+// A metric a person can give a reading for on an observation. A part's Inventory is read from its
+// stock changes.
+export const isEntryMetric = (metric: Pick<Metric, 'name' | 'entity_type' | 'active'>): boolean =>
+  metric.active !== false && !isRequiredPartMetric(metric);
+
 // Postgres NUMERIC comes back from the API as a string.
 const toNumberOrNull = (v: number | string | null): number | null => (v === null ? null : Number(v));
 const normalizeMetric = (m: Metric): Metric => ({

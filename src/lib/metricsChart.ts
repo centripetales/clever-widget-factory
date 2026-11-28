@@ -385,6 +385,58 @@ export function collectContainerPoints(
   return points.sort((a, b) => a.timestamp - b.timestamp);
 }
 
+// The readings of one tool or part's own metrics, from its history, as the container the
+// charts are drawn from.
+export function itemContainer(
+  item: { id: string; name: string; organizationId: string },
+  metrics: ItemMetric[],
+  observations: ItemObservation[]
+): GroupContainer {
+  const own = new Map(metrics.filter((m) => m.active !== false).map((m) => [m.metric_id, m]));
+  return {
+    toolId: item.id,
+    toolName: item.name,
+    sourceOrgId: item.organizationId,
+    sourceOrgName: '',
+    sourcePhone: null,
+    actions: [],
+    experiences: [],
+    observations: observations.map((o) => ({
+      id: o.id,
+      observation_text: o.observation_text ?? null,
+      observed_by: o.observed_by,
+      observed_by_name: o.observed_by_name,
+      observed_at: o.observed_at,
+      photos: o.photos?.map((p) => ({ ...p, photo_description: p.photo_description ?? null, captured_at: p.captured_at ?? null })) ?? null,
+      metrics: (o.metrics ?? []).flatMap((reading) => {
+        const metric = reading.metric_id ? own.get(reading.metric_id) : undefined;
+        return metric ? [{
+          metric_id: metric.metric_id,
+          metric_name: metric.name,
+          value: String(reading.value),
+          unit: metric.unit ?? null,
+          value_type: metric.value_type,
+          min_value: metric.min_value,
+          max_value: metric.max_value,
+        }] : [];
+      }),
+    })),
+  };
+}
+
+export type ItemMetric = Pick<GroupMetric, 'metric_id' | 'value_type' | 'min_value' | 'max_value'> &
+  { name: string; unit?: string | null; active?: boolean };
+
+export interface ItemObservation {
+  id: string;
+  observation_text?: string | null;
+  observed_by: string;
+  observed_by_name: string;
+  observed_at: string;
+  photos?: Array<{ id: string; photo_url: string; photo_description?: string | null; captured_at?: string | null }> | null;
+  metrics?: Array<{ metric_id?: string; value: number | string }> | null;
+}
+
 // Ticks across a metric's range: every whole number for a small integer
 // range (0-5), otherwise five even steps.
 export function rangeTicks(min: number, max: number): number[] {

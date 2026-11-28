@@ -7,7 +7,7 @@ import {
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
-  createModel, linkModel, createMetric, createEntityMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
+  createModel, linkModel, createMetric, createEntityMetric, deleteObservation, deleteMetric, updateMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
   findSimilarOrganizations, createOrganization, saveFinancialRecordPurchases, getTransactionAction, createTransactionAction,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
@@ -212,17 +212,21 @@ async function findLinkTargets(client, links, orgIds) {
 
 // Metric values for an observation of something with metrics (a tool, part,
 // action or organization it is linked to), like the observation screen's
-// Metrics section. search_assets lists a tool's metrics; get_metric_history any metric's readings.
+// Metrics section. search_assets lists a tool's or part's metrics; get_metric_history any metric's readings.
 const METRIC_VALUES = z.array(z.object({
   metric_id: z.string(),
   value: z.union([z.string(), z.number()]).describe('The reading; a number unless the metric is text'),
-})).describe('Metric values, for metrics of something the observation is linked to (search_assets lists a tool\'s metrics)');
+})).describe('Metric values, for metrics of something the observation is linked to (search_assets lists a tool\'s or part\'s metrics)');
+
+// A metric's free text, the Details box in the app.
+const METRIC_DETAILS = 'Why it is tracked, how to measure it so readings are taken the same way, and how to read it: ' +
+  'e.g. whether a day\'s readings add up (eggs collected), average (temperature) or the latest counts.';
 
 // The active metrics of these tools in the caller's orgs.
 async function findToolMetrics(client, toolIds, orgIds) {
   if (toolIds.length === 0) return [];
   return (await client.query(
-    `SELECT metric_id::text AS metric_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+    `SELECT metric_id::text AS metric_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value, details
      FROM metrics
      WHERE tool_id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[]) AND active IS NOT FALSE
      ORDER BY created_at`,
@@ -234,7 +238,7 @@ async function findToolMetrics(client, toolIds, orgIds) {
 async function findEntityMetrics(client, entities, orgIds) {
   if (entities.length === 0) return [];
   return (await client.query(
-    `SELECT metric_id::text AS metric_id, entity_type, entity_id::text AS entity_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+    `SELECT metric_id::text AS metric_id, entity_type, entity_id::text AS entity_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value, details
      FROM metrics
      WHERE (entity_type, entity_id::text) IN (SELECT t, i FROM unnest($1::text[], $2::text[]) AS e(t, i))
        AND organization_id = ANY($3::uuid[]) AND active IS NOT FALSE
@@ -261,7 +265,7 @@ async function findEntity(client, entityType, entityId, orgIds) {
 // One metric and what it is about (a tool, part, action, organization or state), in the caller's orgs.
 async function findMetric(client, metricId, orgIds) {
   return (await client.query(
-    `SELECT m.metric_id::text AS metric_id, m.name, m.unit, m.value_type, m.min_value, m.max_value, m.benchmark_value, m.details,
+    `SELECT m.metric_id::text AS metric_id, m.name, m.unit, m.value_type, m.min_value, m.max_value, m.benchmark_value, m.details, m.organization_id, m.active,
             m.entity_type, m.entity_id::text AS entity_id, m.tool_id::text AS tool_id,
             COALESCE(t.name, p.name, a.title, o.name, left(s.state_text, 60)) AS tool_name
      FROM metrics m
@@ -301,7 +305,7 @@ async function findReadings(client, metricId, orgIds) {
 }
 
 const NOT_A_METRIC = (id) => ({
-  content: [{ type: 'text', text: `No metric ${id} in your organizations — get_asset lists a tool's metrics.` }],
+  content: [{ type: 'text', text: `No metric ${id} in your organizations — get_asset lists a tool's or part's metrics.` }],
   isError: true,
 });
 
@@ -329,7 +333,7 @@ async function saveMetrics({ cognitoUserId, orgId, observationId, metrics, known
 }
 
 const unknownMetrics = (ids) => ({
-  content: [{ type: 'text', text: `These metric_ids are not metrics of a tool the observation is linked to: ${ids.join(', ')}. search_assets lists each tool's metrics.` }],
+  content: [{ type: 'text', text: `These metric_ids are not metrics of anything the observation is linked to: ${ids.join(', ')}. search_assets lists each tool's and part's metrics.` }],
   isError: true,
 });
 
@@ -1729,8 +1733,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Claude cannot pass photos from the chat to CWF: for photos already in the CWF photo bucket ' +
         'give their keys or bucket URLs in photo_urls; otherwise create the observation here and give ' +
         'the person the photo link: it opens the observation in the CWF app, ' +
-        'where they can take or pick photos. A tool can have metrics (search_assets lists them); ' +
-        'when the observation is of such a tool, ask for the readings and give them in metrics. ' +
+        'where they can take or pick photos. Tools and parts can have metrics (search_assets lists them); ' +
+        'when the observation is of one that does, ask for the readings and give them in metrics. ' +
         'When it is how things were when an action was taken, also link it to that action as existing_state. ' +
         'A note on a financial transaction (what was read from its receipt, and what was unclear) is linked to it as ' +
         'financial_record and shows under Notes on its page.\n\n' +
@@ -1816,7 +1820,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Find observation_ids with search_claims or search_actions. Read the change back to the ' +
         'person and only call this once they say yes. The same people can edit it as in the app ' +
         '(whoever recorded it, or an admin). Use update_observation_links for links. metrics sets ' +
-        'readings for the metrics of a tool it is linked to (search_assets lists them); other ' +
+        'readings for the metrics of a tool, part or anything else it is linked to (search_assets lists them); other ' +
         'readings are kept, and a blank value removes one. photo_urls adds photos already in the ' +
         'CWF photo bucket; the observation\'s existing photos are kept.',
       inputSchema: {
@@ -1851,7 +1855,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         const { observation, known, existing, currentPhotos } = await withDbClient(async (client) => {
           const observation = (await client.query(
             `SELECT s.id::text AS id, s.organization_id,
-                    COALESCE(array_agg(sl.entity_id::text) FILTER (WHERE sl.entity_type = 'tool'), '{}') AS tool_ids
+                    COALESCE(json_agg(json_build_object('entity_type', sl.entity_type, 'entity_id', sl.entity_id))
+                      FILTER (WHERE sl.entity_id IS NOT NULL), '[]') AS links
              FROM states s LEFT JOIN state_links sl ON sl.state_id = s.id
              WHERE s.id::text = $1 AND s.organization_id = ANY($2::uuid[])
              GROUP BY s.id`,
@@ -1866,7 +1871,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           return {
             observation,
             currentPhotos,
-            known: await findToolMetrics(client, observation.tool_ids, accessibleOrgIds),
+            known: await findEntityMetrics(client, observation.links, accessibleOrgIds),
             existing: (await client.query(
               `SELECT snapshot_id::text AS snapshot_id, metric_id::text AS metric_id FROM metric_snapshots WHERE state_id = $1::uuid`,
               [observation.id]
@@ -1904,6 +1909,181 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'delete_observation',
+    {
+      title: 'Delete an observation',
+      description:
+        'Delete an observation recorded by mistake, as the app\'s delete does. Its text, photos, links and ' +
+        'metric readings go with it, and it drops out of any experience it is in. Only whoever recorded it, ' +
+        'or an admin, can delete it. To fix a mistake, prefer update_observation or update_observation_links. ' +
+        'This cannot be undone, so it takes two calls: the first, without confirm, deletes nothing and ' +
+        'returns what would go; show it to the person and, only once they say yes, call again with confirm: true.',
+      inputSchema: {
+        observation_id: z.string(),
+        confirm: z.boolean().optional().describe('true only after the person has said yes to deleting what the first call returned'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ observation_id, confirm }) => {
+      console.log('delete_observation called with:', JSON.stringify({ observation_id, confirm }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow deleting observations.');
+      }
+      try {
+        const found = await withDbClient(async (client) => {
+          const observation = (await client.query(
+            `SELECT s.id::text AS id, s.organization_id, s.state_text, s.captured_at,
+                    COALESCE((SELECT om.full_name FROM organization_members om WHERE om.cognito_user_id::text = s.captured_by::text LIMIT 1), s.captured_by::text) AS captured_by,
+                    (SELECT COUNT(*) FROM state_photos sp WHERE sp.state_id = s.id) AS photo_count,
+                    (SELECT COALESCE(json_agg(json_build_object('entity_type', sl.entity_type, 'entity_id', sl.entity_id)), '[]')
+                     FROM state_links sl WHERE sl.state_id = s.id) AS links,
+                    (SELECT COALESCE(json_agg(json_build_object('metric', m.name, 'value', ms.value, 'unit', m.unit)), '[]')
+                     FROM metric_snapshots ms JOIN metrics m ON m.metric_id = ms.metric_id WHERE ms.state_id = s.id) AS readings,
+                    (SELECT COALESCE(array_agg(DISTINCT ec.experience_id::text), '{}')
+                     FROM experience_components ec WHERE ec.state_id = s.id) AS experience_ids
+             FROM states s
+             WHERE s.id::text = $1 AND s.organization_id = ANY($2::uuid[])`,
+            [observation_id, accessibleOrgIds]
+          )).rows[0];
+          if (!observation || confirm === true) return { observation };
+          return { observation, targets: observation.links.length === 0 ? [] : await findLinkTargets(client, observation.links, accessibleOrgIds) };
+        });
+        const { observation, targets } = found;
+        if (!observation) return refuse('No observation with that id in your organizations.');
+        if (confirm !== true) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            deleted: false,
+            will_delete: {
+              observation_id: observation.id,
+              captured_at_manila: formatManilaTime(observation.captured_at),
+              captured_by: observation.captured_by,
+              text: observation.state_text,
+              linked_to: targets.map((t) => `${t.entity_type}: ${t.name}`),
+              readings: observation.readings,
+              photos: Number(observation.photo_count),
+              removed_from_experiences: observation.experience_ids,
+            },
+            next: 'Nothing has been deleted. Show this to the person; only if they say yes, call again with confirm: true.',
+          }, null, 2) }] };
+        }
+        await deleteObservation({ cognitoUserId, orgId: observation.organization_id, observationId: observation.id });
+        console.log('delete_observation: deleted', observation.id);
+        return { content: [{ type: 'text', text: JSON.stringify({ observation_id: observation.id, deleted: true }, null, 2) }] };
+      } catch (err) {
+        console.log('delete_observation failed:', err.message);
+        return refuse(`Could not delete the observation: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_metric',
+    {
+      title: 'Edit a metric\'s details',
+      description:
+        'Replace a metric\'s details, e.g. to add how its readings should be read and charted. Give the whole ' +
+        'new text, keeping what still applies from the current details (get_asset shows them). No reading ' +
+        'changes. Read the new text back to the person and only call this once they say yes.',
+      inputSchema: {
+        metric_id: z.string().describe('From search_assets or get_asset'),
+        details: z.string().min(1).describe(METRIC_DETAILS),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ metric_id, details }) => {
+      console.log('update_metric called with:', JSON.stringify({ metric_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing metrics.');
+      }
+      try {
+        const metric = await withDbClient(async (client) => findMetric(client, metric_id, accessibleOrgIds));
+        if (!metric) return NOT_A_METRIC(metric_id);
+        if (metric.organization_id !== accessibleOrgIds[0]) {
+          return refuse(`${metric.name} belongs to another of your organizations; for now metrics can only be edited here in your first one.`);
+        }
+        const role = await memberRole(cognitoUserId, metric.organization_id);
+        if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can edit metrics.');
+        const { name, unit, benchmark_value, active, value_type, min_value, max_value } = metric;
+        const saved = await updateMetric({
+          cognitoUserId, entityId: metric.entity_id, metricId: metric.metric_id,
+          metric: { name, unit, benchmark_value, details: details.trim(), active, value_type, min_value, max_value },
+        });
+        console.log('update_metric: updated', metric.metric_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ metric_id: metric.metric_id, name: saved.name, details: saved.details }, null, 2) }] };
+      } catch (err) {
+        console.log('update_metric failed:', err.message);
+        return refuse(`Could not edit the metric: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    'delete_metric',
+    {
+      title: 'Delete a metric',
+      description:
+        'Delete a metric added by mistake, e.g. a duplicate, as the app\'s delete does. All its readings go ' +
+        'with it (the observations stay). To remove one reading only, use update_observation with a blank ' +
+        'value. A part\'s Inventory metric cannot be deleted. This cannot be undone, so it takes two calls: ' +
+        'the first, without confirm, deletes nothing and returns the metric, its readings and the models that ' +
+        'use it; show them to the person and, only once they say yes, call again with confirm: true.',
+      inputSchema: {
+        metric_id: z.string().describe('From search_assets or get_asset'),
+        confirm: z.boolean().optional().describe('true only after the person has said yes to deleting what the first call returned'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ metric_id, confirm }) => {
+      console.log('delete_metric called with:', JSON.stringify({ metric_id, confirm }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow deleting metrics.');
+      }
+      try {
+        const found = await withDbClient(async (client) => {
+          const metric = await findMetric(client, metric_id, accessibleOrgIds);
+          if (!metric || confirm === true) return { metric };
+          const readings = await findReadings(client, metric_id, accessibleOrgIds);
+          const models = (await client.query(
+            `SELECT DISTINCT name FROM state_space_models
+             WHERE organization_id = ANY($2::uuid[]) AND model_definition::text LIKE '%' || $1 || '%'`,
+            [metric.metric_id, accessibleOrgIds]
+          )).rows;
+          return { metric, readings, models };
+        });
+        const { metric, readings, models } = found;
+        if (!metric) return NOT_A_METRIC(metric_id);
+        if (metric.entity_type === 'part' && metric.name === 'Inventory') return refuse('The Inventory metric of a part cannot be deleted.');
+        if (metric.organization_id !== accessibleOrgIds[0]) {
+          return refuse(`${metric.name} belongs to another of your organizations; for now metrics can only be deleted here in your first one. Delete it in the app instead.`);
+        }
+        const role = await memberRole(cognitoUserId, metric.organization_id);
+        if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can delete metrics.');
+        if (confirm !== true) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            deleted: false,
+            will_delete: {
+              ...describeMetric(metric),
+              reading_count: readings.length,
+              readings: readings.map((r) => ({ observation_id: r.observation_id, captured_at_manila: formatManilaTime(r.captured_at), value: r.value })),
+              used_by_models: models.map((m) => m.name),
+            },
+            next: 'Nothing has been deleted. Show this to the person; only if they say yes, call again with confirm: true.',
+          }, null, 2) }] };
+        }
+        await deleteMetric({ cognitoUserId, entityId: metric.entity_id, metricId: metric.metric_id });
+        console.log('delete_metric: deleted', metric.metric_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ metric_id: metric.metric_id, name: metric.name, deleted: true }, null, 2) }] };
+      } catch (err) {
+        console.log('delete_metric failed:', err.message);
+        return refuse(`Could not delete the metric: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
     'search_assets',
     {
       title: 'Search assets',
@@ -1911,7 +2091,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
         'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links), ' +
         'or to look at (get_asset) or edit (update_asset). ' +
-        'Tools list their metrics — the readings an observation of that tool can record. ' +
+        'Tools and parts list their metrics — the readings an observation of them can record. A metric\'s details ' +
+        'say how to measure it and how to read it; follow them when charting or analysing readings. ' +
         'low_stock lists the parts below their minimum quantity, like the app\'s Low Stock filter, with ' +
         'quantities, unit cost and supplier — use it to plan purchases.',
       inputSchema: {
@@ -1973,15 +2154,15 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           )).rows;
           const seen = new Set();
           const assets = [...byName, ...byMeaning].filter((r) => r.name && !seen.has(r.id) && seen.add(r.id)).slice(0, effectiveLimit);
-          const metrics = await findToolMetrics(client, assets.filter((a) => a.type === 'tool').map((a) => a.id), accessibleOrgIds);
-          return assets.map((a) => ({ ...a, metrics: metrics.filter((m) => m.tool_id === a.id) }));
+          const metrics = await findEntityMetrics(client, assets.map((a) => ({ entity_type: a.type, entity_id: a.id })), accessibleOrgIds);
+          return assets.map((a) => ({ ...a, metrics: metrics.filter((m) => m.entity_id === a.id) }));
         });
         console.log(`search_assets: -> ${results.length} results`);
         if (results.length === 0) return { content: [{ type: 'text', text: 'No assets matched — try another name.' }] };
         return { content: [{ type: 'text', text: JSON.stringify(results.map((r) => ({
           asset_id: r.id, type: r.type, name: r.name, category: r.category,
           ...(r.status && { status: r.status }),
-          ...(r.metrics.length > 0 && { metrics: r.metrics.map(({ tool_id, ...m }) => m) }),
+          ...(r.metrics.length > 0 && { metrics: r.metrics.map(({ tool_id, entity_type, entity_id, ...m }) => m) }),
         })), null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error searching assets: ${err.message}` }], isError: true };
@@ -2102,7 +2283,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Everything about one tool or part, as its page in the app shows it: details (description, ' +
         'area and exact location, who is accountable, serial number or quantities, cost, supplier), ' +
-        'a tool\'s metrics and actions, recent edits or stock changes, the Systems it is (and was) part of and ' +
+        'its metrics, a tool\'s actions, recent edits or stock changes, the Systems it is (and was) part of and ' +
         'the components it is (and was) made of, with dates, and the most recent observations as claims (short ' +
         'summaries) with how many there are in all. A System\'s observations include those of everything it is ' +
         'made of, at any depth, from while each was part of it, labelled with the component (from_components; ' +
@@ -2164,6 +2345,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              LIMIT 5`,
             [asset_id, accessibleOrgIds]
           )).rows;
+          const metrics = await findEntityMetrics(client, [{ entity_type: asset.type, entity_id: asset_id }], accessibleOrgIds);
           if (asset.type === 'part') {
             const stockChanges = (await client.query(
               `SELECT ph.quantity_change, ph.new_quantity, ph.change_reason, ph.changed_at, COALESCE(om.full_name, ph.changed_by::text) AS changed_by
@@ -2175,7 +2357,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
               [asset_id]
             )).rows;
             const experiences = await findExperiences(client, { orgIds: accessibleOrgIds, assetId: asset_id, limit: 3 });
-            return { asset, observations, stockChanges, memberships, experiences };
+            return { asset, observations, stockChanges, metrics, memberships, experiences };
           }
           const actions = (await client.query(
             `SELECT a.id::text AS action_id, a.title, a.status, a.updated_at
@@ -2194,7 +2376,6 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
              LIMIT 5`,
             [asset_id]
           )).rows;
-          const metrics = await findToolMetrics(client, [asset_id], accessibleOrgIds);
           const experiences = await findExperiences(client, { orgIds: accessibleOrgIds, assetId: asset_id, limit: 3 });
           return { asset, observations, actions, edits, metrics, memberships, experiences };
         });
@@ -2221,7 +2402,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           ...(ms.formerlyPartOf.length > 0 && { formerly_part_of: ms.formerlyPartOf }),
           ...(ms.components.length > 0 && { components: ms.components }),
           ...(ms.formerComponents.length > 0 && { former_components: ms.formerComponents }),
-          ...(metrics?.length > 0 && { metrics: metrics.map(({ tool_id, ...m }) => m) }),
+          ...(metrics?.length > 0 && { metrics: metrics.map(({ tool_id, entity_type, entity_id, ...m }) => m) }),
           ...(actions?.length > 0 && { actions: actions.map((a) => ({ ...a, updated_at: formatManilaTime(a.updated_at) })) }),
           ...(edits?.length > 0 && { recent_edits: edits.map((e) => ({ ...e, changed_at: formatManilaTime(e.changed_at) })) }),
           ...(stockChanges?.length > 0 && { recent_stock_changes: stockChanges.map((c) => ({
@@ -3240,7 +3421,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         value_type: z.enum(['number', 'text']).optional().describe('number (the default) or text, e.g. low/medium/high'),
         min_value: z.number().optional().describe('Numbers only: the lowest possible reading'),
         max_value: z.number().optional().describe('Numbers only: the highest possible reading'),
-        details: z.string().optional().describe('Why it is tracked and how to measure it, so readings are taken the same way'),
+        details: z.string().optional().describe(METRIC_DETAILS),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
@@ -3262,7 +3443,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can add metrics.');
           const found = await withDbClient(async (client) => {
             const entity = await findEntity(client, entity_type, entity_id, accessibleOrgIds);
-            return entity && { entity, existing: await findEntityMetrics(client, [entity], [accessibleOrgIds[0]]) };
+            return entity && { entity, existing: await findEntityMetrics(client, [{ entity_type, entity_id: entity.id }], [accessibleOrgIds[0]]) };
           });
           if (!found) return refuse(`No ${entity_type} ${entity_id} your organizations can use.`);
           const same = found.existing.find((m) => m.name.trim().toLowerCase() === name.trim().toLowerCase());
@@ -3318,7 +3499,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Every reading of one metric over time, oldest first, with who took it and the observation\'s claim, ' +
         'plus the actions on its tool with their dates (candidates for when an expectation starts). This is ' +
         'the farm evidence for an expectation (set_model). Readings record deviations: people note what ' +
-        'differs from what was expected, so a gap between readings is not a missing value.',
+        'differs from what was expected, so a gap between readings is not a missing value. When charting or ' +
+        'summarising them, follow the metric\'s details, which say how its readings are meant to be read.',
       inputSchema: {
         metric_id: z.string().describe('From search_assets or get_asset'),
       },

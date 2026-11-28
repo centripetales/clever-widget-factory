@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { metricsApi, type Metric, type CreateMetricRequest, type UpdateMetricRequest } from '@/lib/metricsApi';
 import { toast } from 'sonner';
 
@@ -7,6 +7,16 @@ export function useMetrics(toolId: string | undefined) {
     queryKey: ['metrics', toolId],
     queryFn: () => metricsApi.getMetrics(toolId!),
     enabled: !!toolId,
+  });
+}
+
+// The metrics of several tools or parts, in the same order.
+export function useAssetsMetrics(assetIds: string[]) {
+  return useQueries({
+    queries: assetIds.map((id) => ({
+      queryKey: ['metrics', id],
+      queryFn: () => metricsApi.getMetrics(id),
+    })),
   });
 }
 

@@ -10,6 +10,7 @@ import {
   buildPresenceChart,
   buildMetricChart,
   collectContainerPoints,
+  itemContainer,
   CHART_START_MS,
   type GroupContainer,
   type GroupObservation,
@@ -331,5 +332,21 @@ describe('text metrics', () => {
     expect(buildPresenceChart([c], [series[0]], { name: 'Estrus Signs', unit: null }).points).toEqual([]);
     const mixed = container([obs('a', '2026-09-01T00:00:00Z', [{ name: 'Estrus Signs', value: '12', type: 'text' }])]);
     expect(collectContainerPoints(mixed, 'Estrus Signs', false)).toEqual([]);
+  });
+});
+
+describe('itemContainer', () => {
+  it('keeps the readings of the item\'s own active metrics', () => {
+    const c = itemContainer(
+      { id: 'part-1', name: 'Darag Chicken', organizationId: 'o1' },
+      [
+        { metric_id: 'eggs', name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: 0, max_value: null },
+        { metric_id: 'old', name: 'Old', value_type: 'number', min_value: null, max_value: null, active: false },
+      ],
+      [{ id: 'a', observed_by: 'u', observed_by_name: 'U', observed_at: '2026-11-27T03:25:00Z', metrics: [{ metric_id: 'eggs', value: 6 }, { metric_id: 'old', value: 1 }, { metric_id: 'other-item', value: 9 }] }],
+    );
+    expect(c.observations[0].metrics).toEqual([
+      { metric_id: 'eggs', metric_name: 'Eggs collected', value: '6', unit: 'count', value_type: 'number', min_value: 0, max_value: null },
+    ]);
   });
 });

@@ -14,7 +14,9 @@ import { useOrganization } from '@/hooks/useOrganization';
 import { BATCH_CATEGORY } from '@/lib/constants';
 import type { CreateObservationData } from '@/types/observations';
 import { MetricsInput } from '@/components/observations/MetricsInput';
-import { useMetrics } from '@/hooks/metrics/useMetrics';
+import { useAssetsMetrics } from '@/hooks/metrics/useMetrics';
+import { isEntryMetric } from '@/lib/metricsApi';
+import { validateMetricValue } from '@/lib/metricValue';
 import { useSnapshots, useSnapshotMutations } from '@/hooks/useSnapshots';
 import { snapshotService } from '@/services/snapshotService';
 import { PhotoUploadPanel, type PhotoItem } from '@/components/shared/PhotoUploadPanel';
@@ -263,10 +265,13 @@ export default function AddObservation() {
     }
   }, [showSearch, toolsList.length, partsList.length, actionsList.length, toast]);
 
-  // Determine toolId for metrics
-  const toolId = linkedAssets.find(a => a.type === 'tool')?.id || null;
-  const { data: metrics } = useMetrics(toolId || '');
-  const hasMetrics = !!metrics?.some(metric => metric.active !== false);
+  // Metrics of the linked tools and parts
+  const metricAssets = linkedAssets.filter(a => a.type === 'tool' || a.type === 'part');
+  const metricQueries = useAssetsMetrics(metricAssets.map(a => a.id));
+  const assetsWithMetrics = metricAssets
+    .map((asset, i) => ({ asset, metrics: (metricQueries[i]?.data ?? []).filter(isEntryMetric) }))
+    .filter(a => a.metrics.length > 0);
+  const entryMetrics = assetsWithMetrics.flatMap(a => a.metrics);
 
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [observationText, setObservationText] = useState('');
@@ -282,7 +287,7 @@ export default function AddObservation() {
     return `${year}-${month}-${day}T${hours}:${minutes}`;
   });
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
-  const [metricErrors, setMetricErrors] = useState(false);
+  const metricErrors = entryMetrics.some(m => validateMetricValue(m, metricValues[m.metric_id] ?? ''));
 
   // The serial number is filled in from the organization's prefix, the date, two letters of the item
   // and the next number for that day, looking at the serial numbers of the tools in use, until the
@@ -539,9 +544,10 @@ export default function AddObservation() {
       }
 
       // Save metric snapshots if there are any values
-      const isToolObservation = linkedAssets.some(a => a.type === 'tool');
-      
-      if (isToolObservation && hasMetrics && Object.keys(metricValues).length > 0) {
+      // Only readings of what is still linked are saved.
+      const entryMetricIds = new Set(entryMetrics.map(m => m.metric_id));
+
+      if (entryMetrics.length > 0 && Object.keys(metricValues).length > 0) {
         try {
           const existingSnapshotsMap = new Map(
             (existingSnapshots || []).map(s => [s.metric_id, s])
@@ -553,7 +559,7 @@ export default function AddObservation() {
           // there's no stable id to bind a hook to ahead of time — and no prior
           // cached History view for a state that didn't exist a moment ago, so
           // there's nothing to invalidate here anyway.
-          for (const [metricId, value] of Object.entries(metricValues)) {
+          for (const [metricId, value] of Object.entries(metricValues).filter(([metricId]) => entryMetricIds.has(metricId))) {
             const existingSnapshot = existingSnapshotsMap.get(metricId);
 
             if (value.trim()) {
@@ -1047,19 +1053,23 @@ export default function AddObservation() {
             </>
         )}
 
-      {/* Metrics Section - only show for tools that have metrics defined */}
-      {(!isEditMode || !isLoadingState) && toolId && hasMetrics ? (
+      {/* Metrics Section - only for linked tools and parts that have metrics defined */}
+      {(!isEditMode || !isLoadingState) && assetsWithMetrics.length > 0 ? (
         <Card className="mt-4">
           <CardHeader>
             <CardTitle>Metrics</CardTitle>
           </CardHeader>
-          <CardContent>
-            <MetricsInput
-              toolId={toolId}
-              values={metricValues}
-              onChange={setMetricValues}
-              onErrorsChange={setMetricErrors}
-            />
+          <CardContent className="space-y-4">
+            {assetsWithMetrics.map(({ asset }) => (
+              <div key={asset.id} className="space-y-2">
+                {assetsWithMetrics.length > 1 && <p className="text-sm font-medium">{asset.name}</p>}
+                <MetricsInput
+                  toolId={asset.id}
+                  values={metricValues}
+                  onChange={setMetricValues}
+                />
+              </div>
+            ))}
           </CardContent>
         </Card>
       ) : null}

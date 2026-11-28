@@ -39,6 +39,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toolHistoryQueryKey, experiencesQueryKey, groupSnapshotsQueryKey } from "@/lib/queryKeys";
 import { offlineQueryConfig } from "@/lib/queryConfig";
 import { useToolShares } from "@/hooks/useToolShares";
+import { ItemMetrics } from "@/components/shared/ItemMetrics";
+import { useMetrics } from "@/hooks/metrics/useMetrics";
 import { fetchGroupSnapshots } from "@/hooks/useGroupSnapshots";
 
 interface ToolDetailsProps {
@@ -96,6 +98,9 @@ export const ToolDetails = ({
   // happens to be shared into.
   const { data: sharesData } = useToolShares(tool.id);
   const shares = useMemo(() => sharesData ?? [], [sharesData]);
+  // A shared tool's charts are on the group's Metrics tab; any other tool with metrics gets its own.
+  const { data: ownMetrics } = useMetrics(tool.id);
+  const showOwnMetrics = !!sharesData && sharesData.length === 0 && !!ownMetrics?.some((metric) => metric.active !== false);
   useEffect(() => {
     // Warm the Metrics tab's data so it's ready by the time the tab is opened.
     for (const share of shares) {
@@ -173,6 +178,7 @@ export const ToolDetails = ({
   // What this tool's metrics are expected to do (models set with Claude);
   // the Expected tab appears once there is one.
   const { data: modelsData } = useStateSpaceModelsByEntity('tool', tool.id);
+  const observationHistory = useMemo(() => toolHistory.filter(isObservation), [toolHistory]);
   const expectations = useMemo(
     () => buildToolExpectations(modelsData?.data ?? [], toolHistory.filter(isObservation)),
     [modelsData, toolHistory],
@@ -539,12 +545,15 @@ export const ToolDetails = ({
       <div>
         <div>
           <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
-            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${3 + (expectations.length > 0 ? 1 : 0) + shares.length}, 1fr)` }}>
+            <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${3 + (expectations.length > 0 ? 1 : 0) + (showOwnMetrics ? 1 : 0) + shares.length}, 1fr)` }}>
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
               <TabsTrigger value="experiences" className="w-full">Experiences</TabsTrigger>
               {expectations.length > 0 && (
                 <TabsTrigger value="expected" className="w-full">Expected</TabsTrigger>
+              )}
+              {showOwnMetrics && (
+                <TabsTrigger value="metrics" className="w-full">Metrics</TabsTrigger>
               )}
               {shares.map((share) => (
                 <TabsTrigger key={share.target_org_id} value={`group-${share.target_org_id}`} className="w-full">
@@ -688,6 +697,12 @@ export const ToolDetails = ({
             {expectations.length > 0 && (
               <TabsContent value="expected" className="space-y-4">
                 <ExpectationsTab expectations={expectations} />
+              </TabsContent>
+            )}
+
+            {showOwnMetrics && (
+              <TabsContent value="metrics" className="space-y-4">
+                <ItemMetrics itemId={tool.id} itemName={tool.name} observations={observationHistory} loading={toolHistoryLoading} />
               </TabsContent>
             )}
 

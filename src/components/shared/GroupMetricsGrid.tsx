@@ -567,7 +567,12 @@ const MAX_PRELOADED_THUMBNAILS = 60;
  * (GroupCoverage.tsx) and embedded as a tab on a shared container's own
  * details page (ToolDetails.tsx).
  */
-export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; hideContainerName?: boolean }) {
+export function GroupMetricsGrid({ orgId, hideContainerName, containers: ownContainers }: {
+  orgId: string;
+  hideContainerName?: boolean;
+  // Given to chart one item's own readings instead of what is shared into the organization.
+  containers?: GroupContainer[];
+}) {
   const { user } = useAuth();
   // Active-org-scoped, matching the backend's own check (an admin can only
   // edit observations belonging to whichever org is currently selected —
@@ -575,8 +580,8 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
   const { isAdmin } = useOrganization();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { data: containersData, isLoading: loading, error: loadError } = useGroupSnapshots(orgId);
-  const containers = containersData ?? null;
+  const { data: groupData, isLoading: loading, error: loadError } = useGroupSnapshots(ownContainers ? undefined : orgId);
+  const containers = ownContainers ?? groupData ?? null;
   const error = loadError ? (loadError as Error).message || 'Failed to load group data' : null;
   // Set on click, rendered as a popup dialog (see the Dialog
   // below) — a hover-preview doesn't have a touch-device equivalent, so
@@ -814,7 +819,7 @@ export function GroupMetricsGrid({ orgId, hideContainerName }: { orgId: string; 
         {metricCharts.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="pt-6 text-center text-muted-foreground">
-              No metrics have been recorded yet for any container shared into this organization.
+              {ownContainers ? 'No metrics have been recorded yet.' : 'No metrics have been recorded yet for any container shared into this organization.'}
             </CardContent>
           </Card>
         ) : (

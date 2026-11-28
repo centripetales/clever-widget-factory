@@ -95,6 +95,26 @@ describe('other metrics', () => {
     assert.strictEqual((await handler(event('DELETE'))).statusCode, 200);
   });
 
+  test('a metric is deleted by what it is about, whatever that is', async () => {
+    answers = [
+      { when: 'SELECT name, entity_type FROM metrics', rows: [{ name: 'Wait at checkout', entity_type: 'organization' }] },
+      { when: 'DELETE FROM metrics', rows: [{ metric_id: 'metric-1' }] },
+    ];
+    assert.strictEqual((await handler(event('DELETE'))).statusCode, 200);
+    const removed = calls.find((c) => c.sql.startsWith('DELETE FROM metrics'));
+    assert.match(removed.sql, /entity_id::text = \$2\) AND organization_id = \$3/);
+    assert.deepStrictEqual(removed.params, ['metric-1', 'part-1', 'org-a']);
+  });
+
+  test('a metric of an organization can be edited by what it is about', async () => {
+    answers = [
+      { when: 'SELECT value_type, name, entity_type', rows: [{ value_type: 'number', name: 'Wait', entity_type: 'organization', readings: '1' }] },
+      { when: 'UPDATE metrics', rows: [{ metric_id: 'metric-1' }] },
+    ];
+    assert.strictEqual((await handler(event('PUT', { name: 'Wait', value_type: 'number', details: 'Average per visit' }))).statusCode, 200);
+    assert.match(calls.find((c) => c.sql.startsWith('UPDATE metrics')).sql, /entity_id::text = \$10\) AND organization_id = \$11/);
+  });
+
   test('a tool metric named Inventory is not locked', async () => {
     answers = [
       { when: 'SELECT name, entity_type FROM metrics', rows: [{ name: 'Inventory', entity_type: 'tool' }] },
