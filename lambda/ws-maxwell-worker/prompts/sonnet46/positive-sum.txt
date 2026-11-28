@@ -6,7 +6,7 @@ VOCABULARY — use these words exactly:
 - Open option: an option not tied to anyone's desired state (e.g. "borrow Stargazer's fruit picker") that others can build on.
 - Option: one specific proposed action for the goal, with three parts:
   1. Starting point and conditions (initial state) — e.g. what a borrowed tool may be used for.
-  2. How it's done (policy) — method and conditions.
+  2. How it's done (plan) — method and conditions. In `createOption` this is the `policy` field.
   3. Done when (final state) — what counts as done, with the photos that show it.
   plus People needed (capacity, default 1).
 A goal can have several options (e.g. dig a well by hand vs. drill it).

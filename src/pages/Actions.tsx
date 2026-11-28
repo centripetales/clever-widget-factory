@@ -365,7 +365,7 @@ export default function Actions() {
                           <ul className="list-disc list-inside space-y-1 text-sm">
                             <li><strong>Existing State:</strong> The initial description of what needs to be done</li>
                             <li><strong>Evidence:</strong> What was actually accomplished</li>
-                            <li><strong>Policy:</strong> Lessons learned and best practices</li>
+                            <li><strong>Plan:</strong> How the work is intended to be done</li>
                             <li><strong>Observations:</strong> Field notes and additional context</li>
                           </ul>
                           <p className="text-sm mt-2 pt-2 border-t">

@@ -192,8 +192,21 @@ export async function linkModel({ cognitoUserId, orgId, modelId, entityType, ent
     { entity_type: entityType, entity_id: entityId }, { cognitoUserId, orgId }, { id: modelId })).data;
 }
 
-// The app stores policy as rich text (HTML); spoken plans arrive as plain text.
-export function policyToHtml(text) {
+// A new policy, through the policies service, which decides who may add one;
+// in the primary org (none given).
+export async function createPolicy({ cognitoUserId, policy }) {
+  return (await invokeApp('cwf-policies-lambda', '/api/policies', policy, { cognitoUserId })).policy;
+}
+
+// Only the fields given change, in the policy's org (orgId). A list of source
+// ids given is the policy's whole list of that kind.
+export async function updatePolicy({ cognitoUserId, orgId, policyId, changes }) {
+  return (await invokeApp('cwf-policies-lambda', `/api/policies/${policyId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: policyId })).policy;
+}
+
+// An action's plan is stored as rich text (HTML) in its policy column; spoken
+// plans arrive as plain text.
+export function planToHtml(text) {
   const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return text.trim().split(/\n\s*\n/).map((p) => `<p>${escape(p.trim()).replace(/\n/g, '<br>')}</p>`).join('');
 }

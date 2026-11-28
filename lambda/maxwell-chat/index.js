@@ -119,7 +119,7 @@ exports.handler = async (event) => {
     let contextParts = [`You are discussing ${sessionAttributes.entityType} "${sessionAttributes.entityName}" (ID: ${sessionAttributes.entityId})`];
     const policyText = normalizeContextText(sessionAttributes.policy);
     if (policyText) {
-      contextParts.push(`Description: ${policyText}`);
+      contextParts.push(`${sessionAttributes.entityType === 'action' ? 'Plan' : 'Description'}: ${policyText}`);
     }
     const implementationText = normalizeContextText(sessionAttributes.implementation, 999999);
     if (implementationText) {

@@ -12,7 +12,7 @@ const { STATE_TYPES, stateText, parseState } = require('./positiveSumRules');
 // Most capable Claude model this account can invoke on Bedrock (Opus 5 /
 // Sonnet 5 are not enabled for it yet).
 const MODEL_ID = process.env.REWARD_MODEL_ID || 'us.anthropic.claude-opus-4-6-v1';
-const PROMPT_VERSION = 'reward-v11';
+const PROMPT_VERSION = 'reward-v12';
 const INFERENCE_CONFIG = { max_tokens: 8000, effort: 'low' };
 
 const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -190,7 +190,7 @@ function buildContext(action, observations, people, orgs, transaction) {
   const lines = [
     `Action: ${action.title || ''} (organization: ${orgName(action.organization_id)}, org id ${action.organization_id})`,
     action.description && `Description: ${action.description}`,
-    action.policy && `Policy: ${action.policy}`,
+    action.policy && `Plan (what was intended, not evidence that it happened): ${action.policy}`,
     `Status: ${action.status}${action.completed_at ? `, completed ${date(action.completed_at)}` : ''}`,
     transaction && `Transaction (a fact from the record): ₱${transaction.php} paid by ${transaction.from_name}${transaction.from_org_id ? ` (org id ${transaction.from_org_id})` : ''} to ${transaction.to_name}${transaction.to_org_id ? ` (org id ${transaction.to_org_id})` : ''} on ${date(transaction.date)}`,
     '',

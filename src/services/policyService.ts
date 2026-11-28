@@ -13,7 +13,7 @@ import { embeddingQueue } from './embeddingQueue';
 export interface CreatePolicyRequest {
   title: string;
   description_text: string;
-  status: 'draft' | 'active' | 'deprecated';
+  status: 'active' | 'deprecated';
   effective_from?: Date;
   effective_to?: Date;
   link_to_action_id?: string; // Optional linking during creation
@@ -22,7 +22,7 @@ export interface CreatePolicyRequest {
 export interface UpdatePolicyRequest {
   title?: string;
   description_text?: string;
-  status?: 'draft' | 'active' | 'deprecated';
+  status?: 'active' | 'deprecated';
   effective_from?: Date;
   effective_to?: Date;
 }
@@ -31,7 +31,7 @@ export interface PolicyResponse {
   id: number;
   title: string;
   description_text: string;
-  status: 'draft' | 'active' | 'deprecated';
+  status: 'active' | 'deprecated';
   effective_from?: string;
   effective_to?: string;
   created_by_user_id: string;
@@ -45,7 +45,7 @@ export interface PolicyDraft {
 }
 
 export interface PolicyFilters {
-  status?: 'draft' | 'active' | 'deprecated';
+  status?: 'active' | 'deprecated';
   crop?: string;
   created_by?: string;
   limit?: number;
@@ -279,21 +279,19 @@ export class PolicyService {
    * @returns boolean - True if transition is valid
    */
   static validateStatusTransition(
-    currentStatus: 'draft' | 'active' | 'deprecated',
-    newStatus: 'draft' | 'active' | 'deprecated'
+    currentStatus: 'active' | 'deprecated',
+    newStatus: 'active' | 'deprecated'
   ): boolean {
     // Valid transitions:
-    // draft -> active
     // active -> deprecated
     // deprecated -> active (allowed for reactivation)
     // Same status is always allowed
-    
+
     if (currentStatus === newStatus) {
       return true;
     }
-    
+
     const validTransitions = {
-      draft: ['active'],
       active: ['deprecated'],
       deprecated: ['active'] // Allow reactivation
     };

@@ -3,12 +3,13 @@ import { z } from 'zod';
 import { withDbClient } from './db.js';
 import { generateEmbedding } from './embeddings.js';
 import {
-  createAction, updateAction, createObservation, updateObservation, policyToHtml,
+  createAction, updateAction, createObservation, updateObservation, planToHtml,
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
   createModel, linkModel, createMetric, createEntityMetric, deleteObservation, deleteMetric, updateMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
   findSimilarOrganizations, createOrganization, saveFinancialRecordPurchases, getTransactionAction, createTransactionAction,
+  createPolicy, updatePolicy,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -310,6 +311,12 @@ const NOT_A_METRIC = (id) => ({
 });
 
 const refuse = (text) => ({ content: [{ type: 'text', text }], isError: true });
+
+// A saved policy as the policies service answers with it.
+const describePolicy = (p) => ({
+  policy_id: p.id, title: p.title, text: p.description_text, status: p.status,
+  observation_ids: p.observation_ids, experience_ids: p.experience_ids,
+});
 
 // Saves each value through the snapshots service, as the app does after the
 // observation itself: updates a reading already there, adds a new one, and a
@@ -848,7 +855,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Three ways to search — pick one:\n' +
         '1. List: give only `status` and/or `person` to get every matching action, most recently ' +
         'active first, e.g. status ["not_started","in_progress"] for what is open when planning a day. ' +
-        'Listed actions leave out policy and expected_state; search by topic for those.\n' +
+        'Listed actions leave out plan and expected_state; search by topic for those.\n' +
         '2. Topical search: give `query`, ranked by semantic similarity. Do NOT put dates in the query.\n' +
         '3. Date-range lookup: `relative` or `date_from`/`date_to` for actions created or completed in the window.\n' +
         '`status` and `person` also narrow modes 2 and 3. Status external_proposal is a Positive Sum offer.',
@@ -968,7 +975,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           similarity: r.similarity === undefined ? undefined : Number(r.similarity.toFixed(3)),
           title: r.title,
           status: r.status,
-          policy: isListMode ? undefined : r.policy,
+          plan: isListMode ? undefined : r.policy,
           expected_state: isListMode ? undefined : r.expected_state,
           asset: r.asset_name,
           assigned_to: r.assigned_to_name,
@@ -1496,6 +1503,149 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'list_policies',
+    {
+      title: 'List policies',
+      description:
+        'The saved policies of your organizations: title, text, status (active, or deprecated for retired ' +
+        'ones), whose it is, and its sources, the observations and experiences it rests on (get_experience ' +
+        'opens an experience; get_observation_photos shows an observation\'s photos). A policy is a general ' +
+        'rule that action plans draw on and may deviate from: what to do and when it applies. Read them ' +
+        'all and pick the relevant ones yourself.',
+      inputSchema: {
+        status: z.enum(['active', 'deprecated']).optional().describe('Only policies with this status'),
+      },
+    },
+    async ({ status }) => {
+      console.log('list_policies called with:', JSON.stringify({ status }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      try {
+        // An observation source outside the caller's orgs is listed by id only.
+        const policies = await withDbClient(async (client) => (await client.query(
+          `SELECT p.id::text AS policy_id, p.title, p.description_text AS text, p.status, o.name AS organization,
+             (SELECT COALESCE(json_agg(json_build_object('observation_id', ps.state_id, 'captured_at', s.captured_at,
+                       'claim', c.claim, 'text', LEFT(s.state_text, 300)) ORDER BY ps.created_at, ps.id), '[]')
+              FROM policy_sources ps
+              LEFT JOIN states s ON s.id = ps.state_id AND s.organization_id = ANY($1::uuid[])
+              LEFT JOIN LATERAL (
+                SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+                WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+              ) c ON true
+              WHERE ps.policy_id = p.id AND ps.state_id IS NOT NULL) AS observations,
+             ARRAY(SELECT ps.experience_id::text FROM policy_sources ps
+              WHERE ps.policy_id = p.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids
+           FROM policy p JOIN organizations o ON o.id = p.organization_id
+           WHERE p.organization_id = ANY($1::uuid[]) AND ($2::text IS NULL OR p.status = $2)
+           ORDER BY o.name, p.title`,
+          [accessibleOrgIds, status || null]
+        )).rows);
+        console.log(`list_policies: -> ${policies.length} policies`);
+        if (policies.length === 0) return { content: [{ type: 'text', text: 'No saved policies.' }] };
+        return { content: [{ type: 'text', text: JSON.stringify(policies.map(({ observations, experience_ids, ...policy }) => ({
+          ...policy,
+          ...(observations?.length > 0 && { observations: observations.map((o) => ({
+            observation_id: o.observation_id,
+            ...(o.captured_at && { captured_at_manila: formatManilaTime(o.captured_at) }),
+            ...(o.claim ? { claim: o.claim } : o.text && { text_start: o.text }),
+          })) }),
+          ...(experience_ids?.length > 0 && { experience_ids }),
+        })), null, 2) }] };
+      } catch (err) {
+        console.log('list_policies failed:', err.message);
+        return refuse(`Could not list the policies: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_policy',
+    {
+      title: 'Create a policy',
+      description:
+        'Save a new policy for the organization. A policy is abstract and reusable: what to do and the ' +
+        'conditions under which it applies, both in its text. Name a specific asset, person or date only ' +
+        'if the rule is really about that one. A policy is how the organization works: it is active as soon ' +
+        'as it is saved. Something still being tried, or how one particular action will be done, is not a ' +
+        'policy: that goes in the action\'s plan (create_action, update_action). The text says what ' +
+        'the person means by the rule; do not work one out from observations on your own. Link what it ' +
+        'rests on when they point to it: the observation it came from (search_claims) or an experience ' +
+        'that shows it done well (search_experiences); a policy needs none. Call list_policies first so ' +
+        'the same rule is not saved twice. Read the title, text and sources back to the person and only ' +
+        'call this once they say yes.',
+      inputSchema: {
+        title: z.string().min(1).describe('Short name for the rule, e.g. "Fueling a vehicle"'),
+        text: z.string().min(1).describe('What to do and when it applies; plain text'),
+        observation_ids: z.array(z.string()).optional().describe('Observations the policy rests on'),
+        experience_ids: z.array(z.string()).optional().describe('Experiences the policy rests on'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ title, text, observation_ids, experience_ids }) => {
+      console.log('create_policy called with:', JSON.stringify({ title, observation_ids, experience_ids }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow creating policies.');
+      }
+      try {
+        const created = await createPolicy({ cognitoUserId, policy: {
+          title, description_text: text,
+          ...(observation_ids && { observation_ids }), ...(experience_ids && { experience_ids }),
+        } });
+        console.log('create_policy: created', created.id);
+        return { content: [{ type: 'text', text: JSON.stringify(describePolicy(created), null, 2) }] };
+      } catch (err) {
+        console.log('create_policy failed:', err.message);
+        return refuse(`Could not create the policy: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_policy',
+    {
+      title: 'Edit a policy',
+      description:
+        'Change a saved policy. Only the fields given change. observation_ids and experience_ids each ' +
+        'replace that whole list of sources, so start from the current ones (list_policies) when adding or ' +
+        'removing one. Once action plans draw on a policy, change its text only to fix the wording: when the ' +
+        'practice itself changes, create a new policy and set this one deprecated. A policy is retired that ' +
+        'way, never deleted. Read the change back to the person and only call this once they say yes.',
+      inputSchema: {
+        policy_id: z.string().describe('The policy_id from list_policies or create_policy'),
+        title: z.string().min(1).optional().describe('New title'),
+        text: z.string().min(1).optional().describe('New text; plain text'),
+        status: z.enum(['active', 'deprecated']).optional().describe('deprecated retires it; active brings it back'),
+        observation_ids: z.array(z.string()).optional().describe('Every observation it rests on'),
+        experience_ids: z.array(z.string()).optional().describe('Every experience it rests on'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ policy_id, title, text, status, observation_ids, experience_ids }) => {
+      console.log('update_policy called with:', JSON.stringify({ policy_id, title, status, observation_ids, experience_ids }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing policies.');
+      }
+      const changes = Object.fromEntries(Object.entries({ title, description_text: text, status, observation_ids, experience_ids })
+        .filter(([, value]) => value !== undefined));
+      if (Object.keys(changes).length === 0) return refuse('Nothing to change.');
+      try {
+        const policy = await withDbClient(async (client) => (await client.query(
+          'SELECT organization_id FROM policy WHERE id::text = $1 AND organization_id = ANY($2::uuid[])',
+          [policy_id, accessibleOrgIds]
+        )).rows[0]);
+        if (!policy) return refuse(`No policy ${policy_id} in your organizations — find it with list_policies.`);
+        const updated = await updatePolicy({ cognitoUserId, orgId: policy.organization_id, policyId: policy_id, changes });
+        console.log('update_policy: updated', updated.id);
+        return { content: [{ type: 'text', text: JSON.stringify(describePolicy(updated), null, 2) }] };
+      } catch (err) {
+        console.log('update_policy failed:', err.message);
+        return refuse(`Could not edit the policy: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
     'create_action',
     {
       title: 'Create an action',
@@ -1503,7 +1653,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Create a new action in CWF. It is open until it is completed (update_action). Give a title ' +
         'and existing_state (where things are now) from what the person said, and asset_id when they ' +
         'name the asset it is on, and completed_at when it records work already done. Add expected_state ' +
-        '(where we want to get to), policy (how to do it) ' +
+        '(where we want to get to), plan (how we intend to do it, which may deviate from policy) ' +
         'and people only when the person gives them or asks for them. When it is just a title and ' +
         'existing state in the person\'s own words, create it straight away; otherwise read the draft ' +
         'back and only call this once they say yes. The reply gives a link for photos of the existing ' +
@@ -1513,7 +1663,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         title: z.string().min(1).describe('Short name for the work, e.g. "Waterproof the bamboo treatment bins"'),
         existing_state: z.string().optional().describe('Where things are now'),
         expected_state: z.string().optional().describe('Where we want to get to'),
-        policy: z.string().optional().describe('How to do it; plain text, blank lines between paragraphs'),
+        plan: z.string().optional().describe('How we intend to do it; plain text, blank lines between paragraphs'),
         assigned_to: z.string().optional().describe('Name of the person it is assigned to'),
         participants: z.array(z.string()).optional().describe('Names of other people taking part'),
         asset_id: z.string().optional().describe('The tool the action is on (search_assets), if any'),
@@ -1523,7 +1673,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ title, existing_state, expected_state, policy, assigned_to, participants, asset_id, completed_at }) => {
+    async ({ title, existing_state, expected_state, plan, assigned_to, participants, asset_id, completed_at }) => {
       console.log('create_action called with:', JSON.stringify({ title, assigned_to, participants }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -1553,7 +1703,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           action: {
             title,
             expected_state: expected_state || null,
-            policy: policy ? policyToHtml(policy) : null,
+            policy: plan ? planToHtml(plan) : null,
             // Midday in Manila, so the day shows as given in every timezone the app uses.
             ...(completed_at
               ? { status: 'completed', completed_at: new Date(`${completed_at}T12:00:00+08:00`).toISOString() }
@@ -1611,7 +1761,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       description:
         'Change an existing action, like its screen in the app. Only the fields given change. ' +
         'Lists (participants, required_tools, required_stock) replace the whole list, and a new ' +
-        'policy replaces the whole policy, so start from the current values (search_actions) when ' +
+        'plan replaces the whole plan, so start from the current values (search_actions) when ' +
         'changing part of one. status starts an action (in_progress), puts it back (not_started) or ' +
         'completes it (completed), which uses up its required stock, as in the app. ' +
         'Find the action_id with search_actions, tools and parts with search_assets. Before calling ' +
@@ -1621,7 +1771,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         title: z.string().min(1).optional().describe('New title'),
         existing_state: z.string().optional().describe('New existing state (where things are now)'),
         expected_state: z.string().optional().describe('New expected state (where we want to get to)'),
-        policy: z.string().optional().describe('New policy; plain text, blank lines between paragraphs'),
+        plan: z.string().optional().describe('New plan; plain text, blank lines between paragraphs'),
         assigned_to: z.string().nullable().optional().describe('Name of the person it is assigned to; null to unassign'),
         participants: z.array(z.string()).optional().describe('Names of everyone else taking part (the whole list)'),
         asset_id: z.string().nullable().optional().describe('The tool (asset) the action is about, from search_assets; null to clear'),
@@ -1633,7 +1783,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ action_id, title, existing_state, expected_state, policy, assigned_to, participants, asset_id, required_tools, required_stock, status, shared_with_partners }) => {
+    async ({ action_id, title, existing_state, expected_state, plan, assigned_to, participants, asset_id, required_tools, required_stock, status, shared_with_partners }) => {
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1645,7 +1795,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         ...(title !== undefined && { title }),
         ...(existing_state !== undefined && { description: existing_state || null }),
         ...(expected_state !== undefined && { expected_state: expected_state || null }),
-        ...(policy !== undefined && { policy: policy ? policyToHtml(policy) : null }),
+        ...(plan !== undefined && { policy: plan ? planToHtml(plan) : null }),
         ...(status !== undefined && { status }),
         ...(status === 'completed' && { completed_at: new Date().toISOString() }),
         ...(shared_with_partners !== undefined && { shared_with_partners }),

@@ -232,7 +232,7 @@ function buildSkillProfilePrompt(ctx, strict = false, aiConfig = null, growthInt
   if (ctx.title) parts.push(`Title: ${ctx.title}`);
   if (ctx.description) parts.push(`Description: ${ctx.description}`);
   if (ctx.expected_state) parts.push(`Expected Outcome (S'): ${ctx.expected_state}`);
-  if (ctx.policy) parts.push(`Policy: ${ctx.policy}`);
+  if (ctx.policy) parts.push(`Plan: ${ctx.policy}`);
   if (ctx.asset_name) parts.push(`Asset: ${ctx.asset_name}`);
   if (ctx.required_tools && ctx.required_tools.length > 0) {
     parts.push(`Required Tools: ${ctx.required_tools.join(', ')}`);

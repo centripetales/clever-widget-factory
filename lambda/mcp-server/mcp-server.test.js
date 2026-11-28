@@ -61,6 +61,12 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   if (command.input.FunctionName === 'cwf-financial-records-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: 'new-record', description: body.description, transaction_date: body.transaction_date, amount: body.amount, payment_method: body.payment_method }) })) };
   }
+  if (command.input.FunctionName === 'cwf-policies-lambda') {
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ policy: {
+      id: event.pathParameters?.id || 'policy-new', title: body.title ?? 'Old title', description_text: body.description_text ?? 'Old text',
+      status: body.status || 'active', observation_ids: body.observation_ids || [], experience_ids: body.experience_ids || [],
+    } }) })) };
+  }
   if (command.input.FunctionName === 'cwf-experiences-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: event.pathParameters?.id || 'new-experience' }) })) };
   }
@@ -193,14 +199,23 @@ describe('search_actions list mode', () => {
     assert.strictEqual(queries[0].params[1], 'Lester');
   });
 
-  test('listed actions carry where they stand but not their policy', async () => {
+  test('listed actions carry where they stand but not their plan', async () => {
     rows = [{ id: 'a1', title: 'Order sand', status: 'in_progress', policy: '<p>long</p>', created_at: '2026-10-01T00:00:00Z',
       latest_observation_at: '2026-10-30T02:00:00Z', latest_observation_claim: 'Sand ordered.' }];
     const client = await connect(['org-a']);
     const result = await client.callTool({ name: 'search_actions', arguments: { status: ['in_progress'] } });
     const [action] = JSON.parse(result.content[0].text);
-    assert.strictEqual(action.policy, undefined);
+    assert.strictEqual(action.plan, undefined);
     assert.strictEqual(action.latest_observation.claim, 'Sand ordered.');
+  });
+
+  test('actions found by date give the stored policy column as their plan', async () => {
+    rows = [{ id: 'a1', title: 'Order sand', status: 'in_progress', policy: '<p>Call Prince.</p>', created_at: '2026-10-01T00:00:00Z' }];
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'search_actions', arguments: { date_from: '2026-10-01' } });
+    const [action] = JSON.parse(result.content[0].text);
+    assert.strictEqual(action.plan, '<p>Call Prince.</p>');
+    assert.strictEqual(action.policy, undefined);
   });
 });
 
@@ -231,7 +246,7 @@ describe('create_action', () => {
     const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
     const result = await client.callTool({ name: 'create_action', arguments: {
       title: 'Waterproof the bamboo treatment bins', existing_state: 'Bins leak', expected_state: 'Bins hold water',
-      policy: 'Dry the bins.\n\nApply two coats.', assigned_to: 'lester', participants: ['Mae'],
+      plan: 'Dry the bins.\n\nApply two coats.', assigned_to: 'lester', participants: ['Mae'],
     } });
     assert.strictEqual(result.isError, undefined);
     assert.deepStrictEqual(queries[0].params, ['org-a']);
@@ -554,7 +569,7 @@ describe('update_action', () => {
   test('existing state and policy map to the app fields', async () => {
     rows = [{ id: 'action-1', organization_id: 'org-a' }];
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
-    await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', existing_state: 'Bins leak', policy: 'Seal the seams.' } });
+    await client.callTool({ name: 'update_action', arguments: { action_id: 'action-1', existing_state: 'Bins leak', plan: 'Seal the seams.' } });
     assert.deepStrictEqual(JSON.parse(invocations[0].event.body), { description: 'Bins leak', policy: '<p>Seal the seams.</p>' });
   });
 
@@ -1948,6 +1963,79 @@ describe('create_metric', () => {
     }
     const reader = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
     assert.strictEqual((await reader.callTool({ name: 'create_metric', arguments: rootLength })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('policies', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+
+  test('list_policies reads the policies of the caller orgs, optionally by status', async () => {
+    rows = [{ policy_id: 'policy-1', title: 'Fueling a vehicle', text: 'Record the meter.', status: 'active', organization: 'Stargazer Farm' }];
+    const client = await connect(['org-a', 'org-b']);
+    const result = await client.callTool({ name: 'list_policies', arguments: { status: 'active' } });
+    assert.match(queries[0].sql, /p\.organization_id = ANY\(\$1::uuid\[\]\)/);
+    assert.deepStrictEqual(queries[0].params, [['org-a', 'org-b'], 'active']);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), rows);
+  });
+
+  test('list_policies shows what each policy rests on', async () => {
+    rows = [{ policy_id: 'policy-1', title: 'Grease bearings', observations: [
+      { observation_id: 'obs-1', captured_at: '2026-10-05T09:30:00Z', claim: 'The bearing seized.', text: 'bearing' },
+      { observation_id: 'obs-2', captured_at: '2026-10-06T09:30:00Z', claim: null, text: 'Greased it' },
+      { observation_id: 'obs-elsewhere', captured_at: null, claim: null, text: null },
+    ], experience_ids: ['exp-1'] }];
+    const client = await connect(['org-a']);
+    const [policy] = JSON.parse((await client.callTool({ name: 'list_policies', arguments: {} })).content[0].text);
+    assert.deepStrictEqual(policy.observations, [
+      { observation_id: 'obs-1', captured_at_manila: 'Oct 5, 2026, 5:30 PM PHT', claim: 'The bearing seized.' },
+      { observation_id: 'obs-2', captured_at_manila: 'Oct 6, 2026, 5:30 PM PHT', text_start: 'Greased it' },
+      { observation_id: 'obs-elsewhere' },
+    ]);
+    assert.deepStrictEqual(policy.experience_ids, ['exp-1']);
+  });
+
+  test('create_policy saves it with its sources through the policies service', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_policy', arguments: {
+      title: 'Grease bearings', text: 'Grease them monthly.', observation_ids: ['obs-1'], experience_ids: ['exp-1'],
+    } });
+    const create = invocations.find((i) => i.functionName === 'cwf-policies-lambda');
+    assert.strictEqual(create.event.httpMethod, 'POST');
+    assert.strictEqual(create.event.path, '/api/policies');
+    assert.deepStrictEqual(JSON.parse(create.event.body), {
+      title: 'Grease bearings', description_text: 'Grease them monthly.', observation_ids: ['obs-1'], experience_ids: ['exp-1'],
+    });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), {
+      policy_id: 'policy-new', title: 'Grease bearings', text: 'Grease them monthly.', status: 'active',
+      observation_ids: ['obs-1'], experience_ids: ['exp-1'],
+    });
+  });
+
+  test('update_policy sends only what changes, in the policy\'s org', async () => {
+    rows = [{ organization_id: 'org-b' }];
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'update_policy', arguments: { policy_id: 'policy-1', status: 'deprecated', experience_ids: [] } });
+    const update = invocations.find((i) => i.functionName === 'cwf-policies-lambda');
+    assert.strictEqual(update.event.httpMethod, 'PUT');
+    assert.strictEqual(update.event.path, '/api/policies/policy-1');
+    assert.deepStrictEqual(update.event.pathParameters, { id: 'policy-1' });
+    assert.strictEqual(update.event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(JSON.parse(update.event.body), { status: 'deprecated', experience_ids: [] });
+  });
+
+  test('update_policy leaves alone a policy outside the caller orgs', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_policy', arguments: { policy_id: 'policy-1', title: 'x' } });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('create_policy and update_policy are refused on a read-only connection', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', { cognitoUserId: 'cognito-1' });
+    for (const [name, args] of [['create_policy', { title: 'x', text: 'y' }], ['update_policy', { policy_id: 'policy-1', title: 'x' }]]) {
+      assert.strictEqual((await client.callTool({ name, arguments: args })).isError, true, name);
+    }
     assert.strictEqual(invocations.length, 0);
   });
 });
