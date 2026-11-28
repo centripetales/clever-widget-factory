@@ -21,6 +21,37 @@ const POLICY_COLUMNS = `id, title, description_text, reasoning, status, effectiv
   ARRAY(SELECT ps.state_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.state_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS observation_ids,
   ARRAY(SELECT ps.experience_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids`;
 
+// For reading policies: what each source says, who and when, and how many
+// actions follow the policy. A source outside the caller's orgs (the SQL
+// parameter `orgs`) is listed without its content.
+const READ_COLUMNS = (orgs) => `${POLICY_COLUMNS},
+  (SELECT COUNT(*)::int FROM action_policies ap WHERE ap.policy_id = policy.id) AS action_count,
+  (SELECT COALESCE(json_agg(json_build_object(
+       'type', CASE WHEN ps.state_id IS NOT NULL THEN 'observation' ELSE 'experience' END,
+       'id', COALESCE(ps.state_id, ps.experience_id),
+       'text', COALESCE(c.claim, LEFT(s.state_text, 200), first.label),
+       'date', COALESCE(s.captured_at, e.created_at),
+       'by', COALESCE(om.full_name, writer.full_name)
+     ) ORDER BY ps.created_at, ps.id), '[]')
+     FROM policy_sources ps
+     LEFT JOIN states s ON s.id = ps.state_id AND s.organization_id = ANY(${orgs}::uuid[])
+     LEFT JOIN LATERAL (
+       SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+       WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+     ) c ON true
+     LEFT JOIN organization_members om ON om.cognito_user_id::text = s.captured_by::text AND om.organization_id = s.organization_id
+     LEFT JOIN experiences e ON e.id = ps.experience_id AND e.organization_id = ANY(${orgs}::uuid[])
+     LEFT JOIN organization_members writer ON writer.id = e.created_by
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(a.title, LEFT(st.state_text, 200)) AS label
+       FROM experience_components ec
+       LEFT JOIN actions a ON a.id = ec.action_id
+       LEFT JOIN states st ON st.id = ec.state_id
+       WHERE ec.experience_id = e.id
+       ORDER BY (ec.component_type = 'action') DESC, ec.created_at LIMIT 1
+     ) first ON true
+     WHERE ps.policy_id = policy.id) AS sources`;
+
 // The two kinds of source: the field that lists them, the policy_sources column
 // and which ids are really that kind in the caller's orgs. An observation is a
 // person's, not a record the app keeps as a state.
@@ -63,6 +94,7 @@ exports.handler = async (event) => {
     organizationId,
     memberOrgIds: memberOrgIds.length > 0 ? memberOrgIds : [organizationId],
     cognitoUserId: authContext.cognito_user_id,
+    role: authContext.user_role,
     permissions: authContext.permissions || [],
   };
 
@@ -85,7 +117,10 @@ exports.handler = async (event) => {
   }
 };
 
-const canWrite = ({ permissions }) => hasPermission({ permissions }, 'data:write:all') || hasPermission({ permissions }, 'data:write:org');
+// Leadership and admins write policies. The role is checked as well as the
+// permissions: switching organization drops an admin's data:write:all.
+const canWrite = ({ role, permissions }) => ['admin', 'leadership'].includes(role)
+  || hasPermission({ permissions }, 'data:write:all') || hasPermission({ permissions }, 'data:write:org');
 
 // The reasoning behind a policy is optional: text, or nothing (null or blank clears it).
 const isReasoning = (value) => value === null || typeof value === 'string';
@@ -157,19 +192,19 @@ function parseBody(event) {
   }
 }
 
-async function listPolicies(query, { organizationId }) {
+async function listPolicies(query, { organizationId, memberOrgIds }) {
   const status = query?.status;
   if (status && !STATUSES.includes(status)) return error(`status must be one of ${STATUSES.join(', ')}`, 400);
   const result = await pool.query(
-    `SELECT ${POLICY_COLUMNS} FROM policy WHERE organization_id = $1 AND ($2::text IS NULL OR status = $2) ORDER BY title`,
-    [organizationId, status || null]
+    `SELECT ${READ_COLUMNS('$3')} FROM policy WHERE organization_id = $1 AND ($2::text IS NULL OR status = $2) ORDER BY title`,
+    [organizationId, status || null, memberOrgIds]
   );
   return success({ policies: result.rows });
 }
 
-async function getPolicy(id, { organizationId }) {
+async function getPolicy(id, { organizationId, memberOrgIds }) {
   if (!UUID.test(id)) return error('Policy not found', 404);
-  const result = await pool.query(`SELECT ${POLICY_COLUMNS} FROM policy WHERE id = $1 AND organization_id = $2`, [id, organizationId]);
+  const result = await pool.query(`SELECT ${READ_COLUMNS('$3')} FROM policy WHERE id = $1 AND organization_id = $2`, [id, organizationId, memberOrgIds]);
   if (result.rows.length === 0) return error('Policy not found', 404);
   return success({ policy: result.rows[0] });
 }

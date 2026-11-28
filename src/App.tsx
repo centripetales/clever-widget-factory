@@ -38,6 +38,7 @@ import Actions from "./pages/Actions";
 import ActionPage from "./pages/ActionPage";
 import ExperiencePage from "./pages/ExperiencePage";
 import Experiences from "./pages/Experiences";
+import Policies from "./pages/Policies";
 import Explorations from "./pages/Explorations";
 import Audit from "./pages/Audit";
 import AuditTool from "./pages/AuditTool";
@@ -284,6 +285,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <Experiences />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/policies"
+          element={
+            <ProtectedRoute>
+              <Policies />
             </ProtectedRoute>
           }
         />
