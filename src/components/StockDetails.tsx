@@ -8,6 +8,9 @@ import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/comp
 import { CombinedAsset } from "@/hooks/useCombinedAssets";
 import { InventoryHistoryContent } from "@/components/InventoryHistoryContent";
 import { StockMarketTab } from "@/components/StockMarketTab";
+import { ItemMetrics } from "@/components/shared/ItemMetrics";
+import { useMetrics } from "@/hooks/metrics/useMetrics";
+import { usePartHistory } from "@/hooks/usePartHistory";
 import { ExperienceCreationDialog } from "@/components/ExperienceCreationDialog";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -23,6 +26,11 @@ interface StockDetailsProps {
   onTabChange?: (tab: string) => void;
 }
 
+function PartMetrics({ partId, partName }: { partId: string; partName: string }) {
+  const { observations, loading } = usePartHistory(partId);
+  return <ItemMetrics itemId={partId} itemName={partName} observations={observations} loading={loading} />;
+}
+
 export const StockDetails = ({
   stock,
   onBack,
@@ -31,6 +39,9 @@ export const StockDetails = ({
 }: StockDetailsProps) => {
   const navigate = useNavigate();
   const [isExperienceDialogOpen, setIsExperienceDialogOpen] = useState(false);
+  const { data: metrics } = useMetrics(stock.id);
+  const hasMetrics = !!metrics?.some((metric) => metric.active !== false);
+  const tabCount = 2 + (stock.sellable ? 1 : 0) + (hasMetrics ? 1 : 0);
 
   const getStockStatusBadge = () => {
     if (stock.current_quantity === 0) {
@@ -88,14 +99,15 @@ export const StockDetails = ({
       <div className="grid grid-cols-1 gap-6">
         <div>
           <Tabs
-            value={activeTab === 'details' || (activeTab === 'market' && stock.sellable) ? activeTab : 'history'}
+            value={activeTab === 'details' || (activeTab === 'market' && stock.sellable) || (activeTab === 'metrics' && hasMetrics) ? activeTab : 'history'}
             onValueChange={onTabChange}
             className="w-full"
           >
-            <TabsList className={`grid w-full ${stock.sellable ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            <TabsList className={`grid w-full ${tabCount === 4 ? 'grid-cols-4' : tabCount === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <TabsTrigger value="details">Details</TabsTrigger>
               {stock.sellable && <TabsTrigger value="market">Market</TabsTrigger>}
               <TabsTrigger value="history" className="w-full">History</TabsTrigger>
+              {hasMetrics && <TabsTrigger value="metrics">Metrics</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -179,6 +191,12 @@ export const StockDetails = ({
             {stock.sellable && (
               <TabsContent value="market" className="space-y-4">
                 <StockMarketTab stock={stock} />
+              </TabsContent>
+            )}
+
+            {hasMetrics && (
+              <TabsContent value="metrics" className="space-y-4">
+                <PartMetrics partId={stock.id} partName={stock.name} />
               </TabsContent>
             )}
 

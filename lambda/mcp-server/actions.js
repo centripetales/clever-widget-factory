@@ -163,6 +163,12 @@ export async function createMetric({ cognitoUserId, toolId, metric }) {
   return (await invokeApp('cwf-metrics-lambda', `/api/tools/${toolId}/metrics`, metric, { cognitoUserId }, { id: toolId })).metric;
 }
 
+// An edit replaces the metric's fields, so `metric` is all of them. Like a
+// delete, it works in the caller's primary org.
+export async function updateMetric({ cognitoUserId, entityId, metricId, metric }) {
+  return (await invokeApp('cwf-metrics-lambda', `/api/tools/${entityId}/metrics/${metricId}`, metric, { cognitoUserId }, { method: 'PUT', id: entityId, metricId })).metric;
+}
+
 // Deletes a metric of anything, with all its readings, from the caller's
 // primary org. The route names what the metric is about, then the metric.
 export async function deleteMetric({ cognitoUserId, entityId, metricId }) {

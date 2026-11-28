@@ -33,6 +33,9 @@ function toNumberOrNull(value, field) {
 // below serve both, by the id in the path, so a part's page lists and edits its metrics
 // the way a tool's page does.
 const ABOUT = (param) => `(tool_id::text = ${param} OR (entity_type = 'part' AND entity_id::text = ${param}))`;
+// A metric is edited or deleted by whatever it is about: a tool or part from their pages, or an
+// organization, action or state (MCP).
+const ABOUT_ANY = (param) => `(tool_id::text = ${param} OR entity_id::text = ${param})`;
 
 // Every part has an Inventory metric: its readings are how much there is, recorded with an
 // observation. The stock service sets it up when the stock first changes and finds it by this
@@ -635,7 +638,7 @@ export const handler = async (event) => {
       // values can't be left stranded under the wrong one.
       const current = await executeQuery(
         `SELECT value_type, name, entity_type, (SELECT COUNT(*) FROM metric_snapshots WHERE metric_id = $1) AS readings
-         FROM metrics WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3`,
+         FROM metrics WHERE metric_id = $1 AND ${ABOUT_ANY('$2')} AND organization_id = $3`,
         [metricId, toolId, organizationId]
       );
       const forPart = current.rows[0]?.entity_type === 'part';
@@ -657,7 +660,7 @@ export const handler = async (event) => {
         `UPDATE metrics
          SET name = $1, unit = $2, benchmark_value = $3, details = $4, active = $5,
              value_type = $6, min_value = $7, max_value = $8
-         WHERE metric_id = $9 AND ${ABOUT('$10')} AND organization_id = $11
+         WHERE metric_id = $9 AND ${ABOUT_ANY('$10')} AND organization_id = $11
          RETURNING metric_id, COALESCE(tool_id, entity_id) AS tool_id, name, unit, benchmark_value, details, active, value_type, min_value, max_value, created_at, organization_id`,
         [name.trim(), unit || null, benchmark, details || null, active !== false, typeFields.value_type, typeFields.min_value, typeFields.max_value, metricId, toolId, organizationId]
       );
@@ -677,12 +680,10 @@ export const handler = async (event) => {
       };
     }
 
-    // DELETE /api/tools/{id}/metrics/{metric_id} - Delete a metric. The id is what the metric is
-    // about: a tool or part from their pages, or an organization, action or state (MCP).
+    // DELETE /api/tools/{id}/metrics/{metric_id} - Delete a metric
     if (httpMethod === 'DELETE' && toolId && metricId) {
-      const aboutAnything = '(tool_id::text = $2 OR entity_id::text = $2)';
       const target = (await executeQuery(
-        `SELECT name, entity_type FROM metrics WHERE metric_id = $1 AND ${aboutAnything} AND organization_id = $3`,
+        `SELECT name, entity_type FROM metrics WHERE metric_id = $1 AND ${ABOUT_ANY('$2')} AND organization_id = $3`,
         [metricId, toolId, organizationId]
       )).rows[0];
       if (target?.entity_type === 'part' && isInventoryName(target.name)) {
@@ -690,7 +691,7 @@ export const handler = async (event) => {
       }
       const result = await executeQuery(
         `DELETE FROM metrics
-         WHERE metric_id = $1 AND ${aboutAnything} AND organization_id = $3
+         WHERE metric_id = $1 AND ${ABOUT_ANY('$2')} AND organization_id = $3
          RETURNING metric_id`,
         [metricId, toolId, organizationId]
       );

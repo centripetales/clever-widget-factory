@@ -106,6 +106,15 @@ describe('other metrics', () => {
     assert.deepStrictEqual(removed.params, ['metric-1', 'part-1', 'org-a']);
   });
 
+  test('a metric of an organization can be edited by what it is about', async () => {
+    answers = [
+      { when: 'SELECT value_type, name, entity_type', rows: [{ value_type: 'number', name: 'Wait', entity_type: 'organization', readings: '1' }] },
+      { when: 'UPDATE metrics', rows: [{ metric_id: 'metric-1' }] },
+    ];
+    assert.strictEqual((await handler(event('PUT', { name: 'Wait', value_type: 'number', details: 'Average per visit' }))).statusCode, 200);
+    assert.match(calls.find((c) => c.sql.startsWith('UPDATE metrics')).sql, /entity_id::text = \$10\) AND organization_id = \$11/);
+  });
+
   test('a tool metric named Inventory is not locked', async () => {
     answers = [
       { when: 'SELECT name, entity_type FROM metrics', rows: [{ name: 'Inventory', entity_type: 'tool' }] },

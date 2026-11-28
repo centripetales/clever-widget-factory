@@ -66,7 +66,7 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   }
   if (command.input.FunctionName === 'cwf-metrics-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 201, body: JSON.stringify({ metric: {
-      metric_id: 'metric-new', name: body.name, unit: body.unit ?? null, value_type: body.value_type, min_value: body.min_value ?? null, max_value: body.max_value ?? null,
+      metric_id: 'metric-new', details: body.details, name: body.name, unit: body.unit ?? null, value_type: body.value_type, min_value: body.min_value ?? null, max_value: body.max_value ?? null,
     } }) })) };
   }
   if (command.input.FunctionName === 'cwf-state-space-lambda') {
@@ -1005,6 +1005,45 @@ describe('delete_observation and delete_metric', () => {
       const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', args);
       const result = await client.callTool({ name: 'delete_metric', arguments: { metric_id: 'metric-eggs', confirm: true } });
       assert.strictEqual(result.isError, true, JSON.stringify(extra));
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('metric details', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const metric = { metric_id: 'metric-eggs', organization_id: 'org-a', entity_type: 'part', entity_id: 'part-1', tool_id: null, tool_name: 'Darag Chicken', name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: '0', max_value: null, benchmark_value: null, details: 'Counted at collection', active: true };
+  const answers = (extra = {}) => (sql) => sql.includes('FROM metrics m') ? [{ ...metric, ...extra }] : [{ role: 'admin' }];
+
+  test('get_asset shows them', async () => {
+    rows = (sql) => sql.includes('FROM tools t') ? [{ type: 'part', fields: { name: 'Darag Chicken' } }]
+      : sql.includes('FROM metrics') ? [{ ...metric }] : [];
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'part-1' } })).content[0].text);
+    assert.strictEqual(reply.metrics[0].details, 'Counted at collection');
+    assert.ok(queries.some((q) => /max_value, details\s+FROM metrics/.test(q.sql)));
+  });
+
+  test('update_metric replaces them, with the metric\'s other fields as they were', async () => {
+    rows = answers();
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_metric', arguments: { metric_id: 'metric-eggs', details: 'Counted at collection. Add up each day.' } });
+    assert.strictEqual(result.isError, undefined);
+    const [{ functionName, event }] = invocations;
+    assert.strictEqual(functionName, 'cwf-metrics-lambda');
+    assert.strictEqual(event.httpMethod, 'PUT');
+    assert.deepStrictEqual(event.pathParameters, { id: 'part-1', metric_id: 'metric-eggs' });
+    assert.deepStrictEqual(JSON.parse(event.body), {
+      name: 'Eggs collected', unit: 'count', benchmark_value: null, details: 'Counted at collection. Add up each day.', active: true,
+      value_type: 'number', min_value: '0', max_value: null,
+    });
+  });
+
+  test('update_metric changes nothing for another org\'s metric or on a read-only connection', async () => {
+    for (const [extra, who] of [[{ organization_id: 'org-b' }, writer], [{}, { cognitoUserId: 'cognito-1' }]]) {
+      rows = answers(extra);
+      const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', who);
+      assert.strictEqual((await client.callTool({ name: 'update_metric', arguments: { metric_id: 'metric-eggs', details: 'x' } })).isError, true);
     }
     assert.strictEqual(invocations.length, 0);
   });

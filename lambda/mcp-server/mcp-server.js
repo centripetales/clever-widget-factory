@@ -7,7 +7,7 @@ import {
   createSnapshot, updateSnapshot, deleteSnapshot,
   changeStock, createAsset, updateAsset,
   createExperience, updateExperience, deleteExperience,
-  createModel, linkModel, createMetric, createEntityMetric, deleteObservation, deleteMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
+  createModel, linkModel, createMetric, createEntityMetric, deleteObservation, deleteMetric, updateMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
   findSimilarOrganizations, createOrganization, saveFinancialRecordPurchases, getTransactionAction, createTransactionAction,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
@@ -218,11 +218,15 @@ const METRIC_VALUES = z.array(z.object({
   value: z.union([z.string(), z.number()]).describe('The reading; a number unless the metric is text'),
 })).describe('Metric values, for metrics of something the observation is linked to (search_assets lists a tool\'s or part\'s metrics)');
 
+// A metric's free text, the Details box in the app.
+const METRIC_DETAILS = 'Why it is tracked, how to measure it so readings are taken the same way, and how to read it: ' +
+  'e.g. whether a day\'s readings add up (eggs collected), average (temperature) or the latest counts.';
+
 // The active metrics of these tools in the caller's orgs.
 async function findToolMetrics(client, toolIds, orgIds) {
   if (toolIds.length === 0) return [];
   return (await client.query(
-    `SELECT metric_id::text AS metric_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+    `SELECT metric_id::text AS metric_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value, details
      FROM metrics
      WHERE tool_id::text = ANY($1::text[]) AND organization_id = ANY($2::uuid[]) AND active IS NOT FALSE
      ORDER BY created_at`,
@@ -234,7 +238,7 @@ async function findToolMetrics(client, toolIds, orgIds) {
 async function findEntityMetrics(client, entities, orgIds) {
   if (entities.length === 0) return [];
   return (await client.query(
-    `SELECT metric_id::text AS metric_id, entity_type, entity_id::text AS entity_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value
+    `SELECT metric_id::text AS metric_id, entity_type, entity_id::text AS entity_id, tool_id::text AS tool_id, name, unit, value_type, min_value, max_value, details
      FROM metrics
      WHERE (entity_type, entity_id::text) IN (SELECT t, i FROM unnest($1::text[], $2::text[]) AS e(t, i))
        AND organization_id = ANY($3::uuid[]) AND active IS NOT FALSE
@@ -261,7 +265,7 @@ async function findEntity(client, entityType, entityId, orgIds) {
 // One metric and what it is about (a tool, part, action, organization or state), in the caller's orgs.
 async function findMetric(client, metricId, orgIds) {
   return (await client.query(
-    `SELECT m.metric_id::text AS metric_id, m.name, m.unit, m.value_type, m.min_value, m.max_value, m.benchmark_value, m.details, m.organization_id,
+    `SELECT m.metric_id::text AS metric_id, m.name, m.unit, m.value_type, m.min_value, m.max_value, m.benchmark_value, m.details, m.organization_id, m.active,
             m.entity_type, m.entity_id::text AS entity_id, m.tool_id::text AS tool_id,
             COALESCE(t.name, p.name, a.title, o.name, left(s.state_text, 60)) AS tool_name
      FROM metrics m
@@ -1974,6 +1978,48 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'update_metric',
+    {
+      title: 'Edit a metric\'s details',
+      description:
+        'Replace a metric\'s details, e.g. to add how its readings should be read and charted. Give the whole ' +
+        'new text, keeping what still applies from the current details (get_asset shows them). No reading ' +
+        'changes. Read the new text back to the person and only call this once they say yes.',
+      inputSchema: {
+        metric_id: z.string().describe('From search_assets or get_asset'),
+        details: z.string().min(1).describe(METRIC_DETAILS),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ metric_id, details }) => {
+      console.log('update_metric called with:', JSON.stringify({ metric_id }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!canWrite) {
+        return refuse('This connection can only read. Disconnect and reconnect the CWF connector in Claude to allow editing metrics.');
+      }
+      try {
+        const metric = await withDbClient(async (client) => findMetric(client, metric_id, accessibleOrgIds));
+        if (!metric) return NOT_A_METRIC(metric_id);
+        if (metric.organization_id !== accessibleOrgIds[0]) {
+          return refuse(`${metric.name} belongs to another of your organizations; for now metrics can only be edited here in your first one.`);
+        }
+        const role = await memberRole(cognitoUserId, metric.organization_id);
+        if (!['contributor', 'leadership', 'admin'].includes(role)) return refuse('Only contributors, leadership and admins can edit metrics.');
+        const { name, unit, benchmark_value, active, value_type, min_value, max_value } = metric;
+        const saved = await updateMetric({
+          cognitoUserId, entityId: metric.entity_id, metricId: metric.metric_id,
+          metric: { name, unit, benchmark_value, details: details.trim(), active, value_type, min_value, max_value },
+        });
+        console.log('update_metric: updated', metric.metric_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ metric_id: metric.metric_id, name: saved.name, details: saved.details }, null, 2) }] };
+      } catch (err) {
+        console.log('update_metric failed:', err.message);
+        return refuse(`Could not edit the metric: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
     'delete_metric',
     {
       title: 'Delete a metric',
@@ -2045,7 +2091,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Find assets — tools (equipment, places, fields, containers) and parts (stock) — by name or ' +
         'topic, to get the asset_id and type to link an observation to (add_observation, update_observation_links), ' +
         'or to look at (get_asset) or edit (update_asset). ' +
-        'Tools and parts list their metrics — the readings an observation of them can record. ' +
+        'Tools and parts list their metrics — the readings an observation of them can record. A metric\'s details ' +
+        'say how to measure it and how to read it; follow them when charting or analysing readings. ' +
         'low_stock lists the parts below their minimum quantity, like the app\'s Low Stock filter, with ' +
         'quantities, unit cost and supplier — use it to plan purchases.',
       inputSchema: {
@@ -3374,7 +3421,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         value_type: z.enum(['number', 'text']).optional().describe('number (the default) or text, e.g. low/medium/high'),
         min_value: z.number().optional().describe('Numbers only: the lowest possible reading'),
         max_value: z.number().optional().describe('Numbers only: the highest possible reading'),
-        details: z.string().optional().describe('Why it is tracked and how to measure it, so readings are taken the same way'),
+        details: z.string().optional().describe(METRIC_DETAILS),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
@@ -3452,7 +3499,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         'Every reading of one metric over time, oldest first, with who took it and the observation\'s claim, ' +
         'plus the actions on its tool with their dates (candidates for when an expectation starts). This is ' +
         'the farm evidence for an expectation (set_model). Readings record deviations: people note what ' +
-        'differs from what was expected, so a gap between readings is not a missing value.',
+        'differs from what was expected, so a gap between readings is not a missing value. When charting or ' +
+        'summarising them, follow the metric\'s details, which say how its readings are meant to be read.',
       inputSchema: {
         metric_id: z.string().describe('From search_assets or get_asset'),
       },

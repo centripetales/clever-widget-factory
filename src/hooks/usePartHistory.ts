@@ -26,7 +26,7 @@ export interface Observation {
   observed_by_name: string;
   observed_at: string;
   photos?: Array<{ id: string; photo_url: string; photo_description: string | null }>;
-  metrics?: Array<{ snapshot_id: string; metric_name: string; value: number | string; unit: string | null }>;
+  metrics?: Array<{ snapshot_id: string; metric_id?: string; metric_name: string; value: number | string; unit: string | null }>;
   share_info?: {
     target_org_id: string;
     target_org_name: string;
