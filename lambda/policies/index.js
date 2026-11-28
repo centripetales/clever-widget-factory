@@ -282,9 +282,17 @@ async function setActionPolicies(event, actionId, context) {
 
   const wanted = [...new Set(policyIds)];
   if (wanted.length > 0) {
-    const found = await pool.query('SELECT id FROM policy WHERE id = ANY($1::uuid[]) AND organization_id = $2', [wanted, context.organizationId]);
+    // With whether the action already follows each: a retired policy stays on
+    // the actions that follow it, and is not linked to any other.
+    const found = await pool.query(
+      `SELECT p.id, p.status, EXISTS (SELECT 1 FROM action_policies ap WHERE ap.action_id = $3 AND ap.policy_id = p.id) AS linked
+         FROM policy p WHERE p.id = ANY($1::uuid[]) AND p.organization_id = $2`,
+      [wanted, context.organizationId, actionId]
+    );
     const missing = wanted.find((id) => !found.rows.some((row) => row.id === id));
     if (missing) return error(`Policy ${missing} is not a policy of this organization`, 400);
+    const retired = found.rows.find((row) => row.status === 'deprecated' && !row.linked);
+    if (retired) return error(`Policy ${retired.id} is retired, so it cannot be newly linked`, 400);
   }
 
   const client = await pool.connect();

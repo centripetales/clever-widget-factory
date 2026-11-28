@@ -155,3 +155,32 @@ describe('changing a policy', () => {
     assert.deepStrictEqual(queries.at(-1).sql, 'ROLLBACK');
   });
 });
+
+describe('the policies an action follows', () => {
+  const ACTION = '22222222-2222-2222-2222-222222222222';
+  const KEPT = '33333333-3333-3333-3333-333333333333';
+  const link = async (found) => {
+    rows = (sql) => /FROM actions WHERE id/.test(sql) ? [{ id: ACTION, created_by: 'cognito-1' }]
+      : /AS linked\s+FROM policy p/.test(sql) ? found : [];
+    const response = await handler({
+      httpMethod: 'PUT', path: `/api/actions/${ACTION}/policies`, pathParameters: { id: ACTION },
+      body: JSON.stringify({ policy_ids: found.map((f) => f.id) }),
+      requestContext: { authorizer: { organization_id: ORG, cognito_user_id: 'cognito-1', permissions: '["data:write"]' } },
+    });
+    return { status: response.statusCode, body: JSON.parse(response.body) };
+  };
+
+  test('keeps a retired policy it already follows', async () => {
+    const { status } = await link([{ id: KEPT, status: 'deprecated', linked: true }, { id: POLICY, status: 'active', linked: false }]);
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(ran(/INSERT INTO action_policies/)[0].params, [ACTION, [KEPT, POLICY]]);
+  });
+
+  test('refuses to newly link a retired one, changing nothing', async () => {
+    const { status, body } = await link([{ id: POLICY, status: 'deprecated', linked: false }]);
+    assert.strictEqual(status, 400);
+    assert.match(body.error, /retired/);
+    assert.strictEqual(ran(/(INSERT INTO|DELETE FROM) action_policies/).length, 0);
+  });
+});
+

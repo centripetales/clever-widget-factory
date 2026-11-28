@@ -9,7 +9,7 @@ import {
   createExperience, updateExperience, deleteExperience,
   createModel, linkModel, createMetric, createEntityMetric, deleteObservation, deleteMetric, updateMetric, createFinancialRecord, updateFinancialRecord, deleteFinancialRecord,
   findSimilarOrganizations, createOrganization, saveFinancialRecordPurchases, getTransactionAction, createTransactionAction,
-  createPolicy, updatePolicy,
+  createPolicy, updatePolicy, setActionPolicies,
 } from './actions.js';
 import { simulate, summarize, expectedPath, expectedOn, compareReadings } from './expectations.js';
 
@@ -311,6 +311,65 @@ const NOT_A_METRIC = (id) => ({
 });
 
 const refuse = (text) => ({ content: [{ type: 'text', text }], isError: true });
+
+// The policies of these organizations with what they rest on; an observation
+// source outside them is listed by id only. With a limit: at most that many,
+// those in `first` ahead of the most recently changed, each row giving the total.
+async function findPolicies(client, orgIds, { status, limit, first } = {}) {
+  const params = [orgIds, status || null];
+  if (limit) params.push(first || [], limit);
+  return (await client.query(
+    `SELECT p.id::text AS policy_id, p.title, p.description_text AS text, p.reasoning, p.status, o.name AS organization,
+       (SELECT COALESCE(json_agg(json_build_object('observation_id', ps.state_id, 'captured_at', s.captured_at,
+                 'claim', c.claim, 'text', LEFT(s.state_text, 300)) ORDER BY ps.created_at, ps.id), '[]')
+        FROM policy_sources ps
+        LEFT JOIN states s ON s.id = ps.state_id AND s.organization_id = ANY($1::uuid[])
+        LEFT JOIN LATERAL (
+          SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+          WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+        ) c ON true
+        WHERE ps.policy_id = p.id AND ps.state_id IS NOT NULL) AS observations,
+       ARRAY(SELECT ps.experience_id::text FROM policy_sources ps
+        WHERE ps.policy_id = p.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids${limit ? `,
+       COUNT(*) OVER () AS total` : ''}
+     FROM policy p JOIN organizations o ON o.id = p.organization_id
+     WHERE p.organization_id = ANY($1::uuid[]) AND ($2::text IS NULL OR p.status = $2)
+     ORDER BY ${limit ? '(p.id::text = ANY($3::text[])) DESC, p.updated_at DESC LIMIT $4' : 'o.name, p.title'}`,
+    params
+  )).rows;
+}
+
+// A row of findPolicies, leaving out what it does not have.
+const describeFoundPolicy = ({ observations, experience_ids, reasoning, total, ...policy }) => ({
+  ...policy,
+  ...(reasoning && { reasoning }),
+  ...(observations?.length > 0 && { observations: observations.map((o) => ({
+    observation_id: o.observation_id,
+    ...(o.captured_at && { captured_at_manila: formatManilaTime(o.captured_at) }),
+    ...(o.claim ? { claim: o.claim } : o.text && { text_start: o.text }),
+  })) }),
+  ...(experience_ids?.length > 0 && { experience_ids }),
+});
+
+const POLICY_IDS = z.array(z.string()).optional();
+const POLICY_IDS_HELP = 'The saved policies the plan draws on, including any it deliberately departs from (the plan says how)';
+const PLAN_LINKS = 'links written as [label](https://…) become clickable';
+
+// Why these policies cannot be linked to an action of this org, or null: each
+// must be one of its policies, and a retired one only if already linked.
+async function unlinkablePolicy(client, policyIds, orgId, actionId = null) {
+  if (policyIds.length === 0) return null;
+  const rows = (await client.query(
+    `SELECT p.id::text AS policy_id, p.title, p.status,
+            EXISTS (SELECT 1 FROM action_policies ap WHERE ap.policy_id = p.id AND ap.action_id::text = $3) AS linked
+     FROM policy p WHERE p.id::text = ANY($1::text[]) AND p.organization_id = $2`,
+    [policyIds, orgId, actionId]
+  )).rows;
+  const missing = policyIds.find((id) => !rows.some((r) => r.policy_id === id));
+  if (missing) return `No policy ${missing} in the action's organization — find it with list_policies.`;
+  const retired = rows.find((r) => r.status === 'deprecated' && !r.linked);
+  return retired ? `"${retired.title}" is retired, so it cannot be newly linked.` : null;
+}
 
 // A saved policy as the policies service answers with it.
 const describePolicy = (p) => ({
@@ -615,6 +674,215 @@ const photoTakenWhere = (p) => ({
   ...(p.taken_at && { taken_at_manila: formatManilaTime(new Date(p.taken_at).getTime() - 8 * 3600 * 1000) }),
   ...(p.gps_latitude != null && p.gps_longitude != null && { gps: `${Number(p.gps_latitude)},${Number(p.gps_longitude)}` }),
 });
+
+// Planning context: how many of each kind get_planning_context surfaces.
+const PLANNING = { policies: 10, observations: 10, observationsOnAssets: 5, actions: 5, actionsOnAssets: 3, experiences: 3, assets: 10 };
+
+const OBSERVATION_LINK = (id) => `https://stargazer-farm.com/observations/edit/${id}`;
+const ACTION_PAGE = (id) => `https://stargazer-farm.com/actions/${id}`;
+
+const plainText = (html) => (html || '')
+  .replace(/<a\b[^>]*?href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, label) => (label === href ? href : `[${label}](${href})`))
+  .replace(/<\/(p|li|h\d)>|<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '')
+  .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  .replace(/\n\s*\n+/g, '\n').trim();
+
+const OBSERVATION_COLUMNS = `s.id::text AS observation_id, s.captured_at, c.claim, LEFT(s.state_text, 300) AS text_start,
+  COALESCE(om.full_name, s.captured_by::text) AS captured_by`;
+const OBSERVATION_JOINS = `LEFT JOIN LATERAL (
+    SELECT cp.content->>'content' AS claim FROM state_perspectives cp
+    WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
+  ) c ON true
+  LEFT JOIN organization_members om ON s.captured_by::text = om.cognito_user_id::text AND s.organization_id = om.organization_id`;
+
+// An observation with something said in it: a claim or its own note (photos
+// alone give nothing to show).
+const HAS_WORDS = (state) => `(COALESCE(TRIM(${state}.state_text), '') <> '' OR EXISTS (SELECT 1 FROM state_perspectives wp
+  WHERE wp.state_id = ${state}.id AND wp.perspective_type = 'CLAIM' AND wp.status = 'SUCCESS'))`;
+
+const describeObservation = (o) => ({
+  observation_id: o.observation_id,
+  ...(o.claim ? { claim: plainText(o.claim) } : o.text_start && { text_start: plainText(o.text_start) }),
+  captured_at_manila: formatManilaTime(o.captured_at),
+  captured_by: o.captured_by,
+  link: OBSERVATION_LINK(o.observation_id),
+});
+
+// The action being planned, with its latest observations (its existing state
+// first) and the policies it already links.
+async function findPlannedAction(client, actionId, orgIds) {
+  const action = (await client.query(
+    `SELECT a.id::text AS action_id, a.title, a.status, a.description, a.expected_state, a.policy,
+            a.asset_id::text AS asset_id, a.required_tools::text[] AS required_tools, a.required_stock,
+            (SELECT om.full_name FROM organization_members om
+              WHERE om.user_id::text = a.assigned_to::text AND om.organization_id = a.organization_id LIMIT 1) AS assigned_to,
+            (SELECT string_agg(om.full_name, ', ') FROM organization_members om
+              WHERE om.user_id::text = ANY(a.participants::text[]) AND om.organization_id = a.organization_id) AS participants
+     FROM actions a
+     WHERE a.id::text = $1 AND ${VISIBLE_ACTION('$2')}`,
+    [actionId, orgIds]
+  )).rows[0];
+  if (!action) return null;
+  const observations = (await client.query(
+    `SELECT ${OBSERVATION_COLUMNS},
+            EXISTS (SELECT 1 FROM state_links es WHERE es.state_id = s.id AND es.entity_type = 'existing_state' AND es.entity_id::text = $1) AS is_existing_state
+     FROM states s ${OBSERVATION_JOINS}
+     WHERE s.organization_id = ANY($2::uuid[]) AND ${IS_OBSERVATION('s')}
+       AND EXISTS (SELECT 1 FROM state_links al WHERE al.state_id = s.id AND al.entity_type = 'action' AND al.entity_id::text = $1)
+     ORDER BY is_existing_state DESC, s.captured_at DESC
+     LIMIT 6`,
+    [actionId, orgIds]
+  )).rows;
+  const policyIds = (await client.query(
+    `SELECT policy_id::text AS policy_id FROM action_policies WHERE action_id::text = $1`, [actionId]
+  )).rows.map((r) => r.policy_id);
+  return { ...action, observations, policyIds };
+}
+
+async function findPlanningAssets(client, assetIds, orgIds) {
+  if (assetIds.length === 0) return [];
+  return (await client.query(
+    `SELECT 'tool' AS type, t.id::text AS asset_id, t.name, t.status::text AS status, area.name AS area,
+            COALESCE(NULLIF(t.actual_location, ''), NULLIF(t.storage_location, ''), NULLIF(t.legacy_storage_vicinity, '')) AS location
+     FROM tools t LEFT JOIN tools area ON area.id = t.parent_structure_id
+     WHERE t.id::text = ANY($1::text[]) AND t.organization_id = ANY($2::uuid[])
+     UNION ALL
+     SELECT 'part', p.id::text, p.name, NULL, area.name,
+            COALESCE(NULLIF(p.storage_location, ''), NULLIF(p.storage_vicinity, ''), NULLIF(p.legacy_storage_vicinity, ''))
+     FROM parts p LEFT JOIN tools area ON area.id = p.parent_structure_id
+     WHERE p.id::text = ANY($1::text[]) AND p.organization_id = ANY($2::uuid[])`,
+    [assetIds, orgIds]
+  )).rows;
+}
+
+// Keeps each thing found once, with every reason it surfaced and its closest match.
+function collect(found, id, row, why, similarity = 0) {
+  const entry = found.get(id) || { row, why: new Set(), similarity: 0, onAsset: false };
+  entry.why.add(why);
+  entry.similarity = Math.max(entry.similarity, similarity);
+  found.set(id, entry);
+  return entry;
+}
+
+// Those on the assets first, up to their share, then the closest others, then
+// any more on the assets while there is room.
+function choose(found, limit, assetShare) {
+  const ranked = [...found.values()].sort((a, b) => b.similarity - a.similarity);
+  const onAssets = ranked.filter((e) => e.onAsset);
+  const chosen = onAssets.slice(0, assetShare);
+  for (const entry of [...ranked.filter((e) => !e.onAsset), ...onAssets.slice(assetShare)]) {
+    if (chosen.length < limit) chosen.push(entry);
+  }
+  return chosen;
+}
+
+// Observations by anyone in the caller's orgs: on the assets (a System's
+// components included) and closest to the searches, leaving out the action's own.
+async function findPlanningObservations(client, { orgIds, assets, searches, vectors, actionId }) {
+  const found = new Map();
+  const query = async (assetId, vector) => {
+    const params = [orgIds, vector, actionId];
+    if (assetId) params.push(assetId);
+    return (await client.query(
+      `WITH ${assetId ? `RECURSIVE ${MEMBERS_CTE('$4', '$1')},` : ''}
+       matches AS (
+         SELECT s.id AS state_id, MAX(1 - (ue.embedding <=> $2::vector)) AS similarity
+         FROM unified_embeddings ue
+         LEFT JOIN state_perspectives cp ON ue.entity_type = 'claim_perspective' AND cp.id = ue.entity_id
+         JOIN states s ON s.id = COALESCE(cp.state_id, ue.entity_id)
+         WHERE ue.organization_id = ANY($1::uuid[]) AND ue.entity_type IN ('claim_perspective', 'state')
+           AND ${IS_OBSERVATION('s')} AND ${HAS_WORDS('s')}
+           AND NOT EXISTS (SELECT 1 FROM state_links own WHERE own.state_id = s.id AND own.entity_type = 'action' AND own.entity_id::text = $3)
+           ${assetId ? `AND ${ON_MEMBERS('s')}` : ''}
+         GROUP BY s.id
+         ORDER BY similarity DESC
+         LIMIT ${PLANNING.observations}
+       )
+       SELECT m.similarity, ${OBSERVATION_COLUMNS}
+       FROM matches m JOIN states s ON s.id = m.state_id ${OBSERVATION_JOINS}
+       ORDER BY m.similarity DESC`,
+      params
+    )).rows;
+  };
+  for (const [i, vector] of vectors.entries()) {
+    for (const asset of assets) {
+      for (const row of await query(asset.asset_id, vector)) {
+        collect(found, row.observation_id, row, `on ${asset.name}`, Number(row.similarity)).onAsset = true;
+      }
+    }
+    for (const row of await query(null, vector)) {
+      if (Number(row.similarity) > SIMILARITY_THRESHOLD) {
+        collect(found, row.observation_id, row, `matches "${searches[i]}"`, Number(row.similarity));
+      }
+    }
+  }
+  return choose(found, PLANNING.observations, PLANNING.observationsOnAssets)
+    .map(({ row, why }) => ({ ...describeObservation(row), why: [...why] }));
+}
+
+// Other actions on the same assets or close to the searches, each with its
+// latest observation: what happened after.
+async function findPlanningActions(client, { orgIds, assets, searches, vectors, actionId }) {
+  const found = new Map();
+  if (assets.length > 0) {
+    const rows = (await client.query(
+      `SELECT a.id::text AS action_id FROM actions a
+       WHERE (a.asset_id::text = ANY($1::text[]) OR a.required_tools::text[] && $1::text[])
+         AND ${VISIBLE_ACTION('$2')} AND ${NOT_FROM_TRANSACTION} AND a.id::text IS DISTINCT FROM $3
+       ORDER BY COALESCE(a.completed_at, a.updated_at) DESC
+       LIMIT ${PLANNING.actions}`,
+      [assets.map((a) => a.asset_id), orgIds, actionId]
+    )).rows;
+    for (const row of rows) collect(found, row.action_id, row, 'on the same asset').onAsset = true;
+  }
+  for (const [i, vector] of vectors.entries()) {
+    const rows = (await client.query(
+      `SELECT a.id::text AS action_id, 1 - (ue.embedding <=> $1::vector) AS similarity
+       FROM unified_embeddings ue
+       JOIN actions a ON a.id = ue.entity_id
+       WHERE ue.entity_type = 'action_policy' AND ${VISIBLE_ACTION('$2')} AND ${NOT_FROM_TRANSACTION} AND a.id::text IS DISTINCT FROM $3
+       ORDER BY ue.embedding <=> $1::vector
+       LIMIT ${PLANNING.actions}`,
+      [vector, orgIds, actionId]
+    )).rows;
+    for (const row of rows) {
+      if (Number(row.similarity) > SIMILARITY_THRESHOLD) {
+        collect(found, row.action_id, row, `matches "${searches[i]}"`, Number(row.similarity));
+      }
+    }
+  }
+  const chosen = choose(found, PLANNING.actions, PLANNING.actionsOnAssets);
+  if (chosen.length === 0) return [];
+  const details = (await client.query(
+    `SELECT a.id::text AS action_id, a.title, a.status, a.policy, a.expected_state, a.completed_at,
+            lo.observation_id, lo.captured_at, lo.claim, lo.text_start, lo.captured_by
+     FROM actions a
+     LEFT JOIN LATERAL (
+       SELECT ${OBSERVATION_COLUMNS}
+       FROM state_links sl JOIN states s ON s.id = sl.state_id ${OBSERVATION_JOINS}
+       WHERE sl.entity_type = 'action' AND sl.entity_id = a.id AND s.organization_id = ANY($2::uuid[])
+         AND ${IS_OBSERVATION('s')} AND ${HAS_WORDS('s')}
+       ORDER BY s.captured_at DESC
+       LIMIT 1
+     ) lo ON true
+     WHERE a.id::text = ANY($1::text[])`,
+    [chosen.map(({ row }) => row.action_id), orgIds]
+  )).rows;
+  return chosen.map(({ row, why }) => {
+    const a = details.find((d) => d.action_id === row.action_id);
+    if (!a) return null;
+    const plan = plainText(a.policy);
+    return {
+      action_id: a.action_id, title: a.title, status: a.status,
+      ...(a.completed_at && { completed_at_manila: formatManilaTime(a.completed_at) }),
+      ...(a.expected_state && { expected_state: a.expected_state }),
+      ...(plan && { plan: plan.length > 400 ? `${plan.slice(0, 400)}…` : plan }),
+      ...(a.observation_id && { latest_observation: describeObservation(a) }),
+      why: [...why],
+      link: ACTION_PAGE(a.action_id),
+    };
+  }).filter(Boolean);
+}
 
 // accessibleOrgIds, callerName, cognitoUserId and canWrite come from the
 // authenticated caller (see orgs.js, auth.js); every query is limited to
@@ -1524,37 +1792,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       console.log('list_policies called with:', JSON.stringify({ status }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       try {
-        // An observation source outside the caller's orgs is listed by id only.
-        const policies = await withDbClient(async (client) => (await client.query(
-          `SELECT p.id::text AS policy_id, p.title, p.description_text AS text, p.reasoning, p.status, o.name AS organization,
-             (SELECT COALESCE(json_agg(json_build_object('observation_id', ps.state_id, 'captured_at', s.captured_at,
-                       'claim', c.claim, 'text', LEFT(s.state_text, 300)) ORDER BY ps.created_at, ps.id), '[]')
-              FROM policy_sources ps
-              LEFT JOIN states s ON s.id = ps.state_id AND s.organization_id = ANY($1::uuid[])
-              LEFT JOIN LATERAL (
-                SELECT cp.content->>'content' AS claim FROM state_perspectives cp
-                WHERE cp.state_id = s.id AND cp.perspective_type = 'CLAIM' AND cp.status = 'SUCCESS' LIMIT 1
-              ) c ON true
-              WHERE ps.policy_id = p.id AND ps.state_id IS NOT NULL) AS observations,
-             ARRAY(SELECT ps.experience_id::text FROM policy_sources ps
-              WHERE ps.policy_id = p.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids
-           FROM policy p JOIN organizations o ON o.id = p.organization_id
-           WHERE p.organization_id = ANY($1::uuid[]) AND ($2::text IS NULL OR p.status = $2)
-           ORDER BY o.name, p.title`,
-          [accessibleOrgIds, status || null]
-        )).rows);
+        const policies = await withDbClient(async (client) => findPolicies(client, accessibleOrgIds, { status }));
         console.log(`list_policies: -> ${policies.length} policies`);
         if (policies.length === 0) return { content: [{ type: 'text', text: 'No saved policies.' }] };
-        return { content: [{ type: 'text', text: JSON.stringify(policies.map(({ observations, experience_ids, reasoning, ...policy }) => ({
-          ...policy,
-          ...(reasoning && { reasoning }),
-          ...(observations?.length > 0 && { observations: observations.map((o) => ({
-            observation_id: o.observation_id,
-            ...(o.captured_at && { captured_at_manila: formatManilaTime(o.captured_at) }),
-            ...(o.claim ? { claim: o.claim } : o.text && { text_start: o.text }),
-          })) }),
-          ...(experience_ids?.length > 0 && { experience_ids }),
-        })), null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(policies.map(describeFoundPolicy), null, 2) }] };
       } catch (err) {
         console.log('list_policies failed:', err.message);
         return refuse(`Could not list the policies: ${err.message}`);
@@ -1656,6 +1897,95 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
   );
 
   server.registerTool(
+    'get_planning_context',
+    {
+      title: 'Get planning context',
+      description:
+        'Surfaces what is already known, from anyone in the organization, before an action is planned: the ' +
+        'action as it stands, policies, past observations, other actions with what happened after, ' +
+        'experiences, and the assets with where they are. Each item says why it surfaced and gives a link. ' +
+        'It changes nothing. Use it when someone wants to plan an action: give action_id, or description for ' +
+        'one not yet created, and 2 to 5 searches from different angles (the situation, the kind of work, ' +
+        'general concerns such as safety or documentation), each worded as what would have been recorded. ' +
+        `Policies are any ${PLANNING.policies} active ones, not picked by relevance: judge which apply. ` +
+        'Then work out the plan with the person: show the few items that bear on it, with who said them, when ' +
+        'and their links; ask about anything old, conflicting or missing; where a policy\'s reasoning differs ' +
+        'from what you know in general, say so and ask. Keep the plan short, built from what people here ' +
+        'said, with no generic advice; it may deviate from policy. Save it with create_action or ' +
+        'update_action only after they say yes: link each line to the observation it came from, and give ' +
+        'policy_ids for the policies it draws on, including any it departs from.',
+      inputSchema: {
+        action_id: z.string().optional().describe('The action being planned, from search_actions or create_action'),
+        description: z.string().optional().describe('What is to be done, when there is no action yet'),
+        asset_ids: z.array(z.string()).max(PLANNING.assets).optional().describe('Tools and parts it concerns (search_assets), besides the action\'s own'),
+        searches: z.array(z.string().min(1)).max(5).optional().describe(`Short searches from different angles. ${QUERY_AS_CONTENT}`),
+      },
+    },
+    async ({ action_id, description, asset_ids, searches }) => {
+      console.log('get_planning_context called with:', JSON.stringify({ action_id, asset_ids, searches }));
+      if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
+      if (!action_id && !description?.trim()) return refuse('Give the action_id, or a description of what is to be done.');
+      try {
+        const action = action_id
+          ? await withDbClient(async (client) => findPlannedAction(client, action_id, accessibleOrgIds))
+          : null;
+        if (action_id && !action) return refuse('No action with that id in your organizations — find it with search_actions.');
+        const existing = action?.observations.find((o) => o.is_existing_state);
+        const asked = searches?.length ? searches
+          : [[description, action?.title, existing?.claim || existing?.text_start || action?.description].filter(Boolean).join('. ')];
+        const vectors = (await Promise.all(asked.map((s) => generateEmbedding(s)))).map((v) => `[${v.join(',')}]`);
+
+        const found = await withDbClient(async (client) => {
+          const wanted = [...new Set([
+            ...(asset_ids || []), action?.asset_id, ...(action?.required_tools || []),
+            ...(action?.required_stock || []).map((s) => s.part_id),
+          ].filter(Boolean))].slice(0, PLANNING.assets);
+          const assets = await findPlanningAssets(client, wanted, accessibleOrgIds);
+          const search = { orgIds: accessibleOrgIds, assets, searches: asked, vectors, actionId: action?.action_id || null };
+          const policies = await findPolicies(client, accessibleOrgIds, { status: 'active', limit: PLANNING.policies, first: action?.policyIds });
+          const observations = await findPlanningObservations(client, search);
+          const actions = await findPlanningActions(client, search);
+          const observationIds = [...observations, ...(action?.observations || [])].map((o) => o.observation_id);
+          const actionIds = [...actions.map((a) => a.action_id), ...(action ? [action.action_id] : [])];
+          const experiences = observationIds.length + actionIds.length === 0 ? []
+            : (await findExperiences(client, { orgIds: accessibleOrgIds, observationIds, actionIds, limit: PLANNING.experiences })).experiences;
+          return { assets, policies, observations, actions, experiences };
+        });
+        console.log(`get_planning_context: ${found.policies.length} policies, ${found.observations.length} observations, ${found.actions.length} actions, ${found.experiences.length} experiences`);
+
+        const plan = plainText(action?.policy);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          searched: asked,
+          action: action ? {
+            action_id: action.action_id, title: action.title, status: action.status,
+            ...(action.description && { description: action.description }),
+            ...(action.expected_state && { expected_state: action.expected_state }),
+            ...(plan && { plan }),
+            policy_ids: action.policyIds,
+            ...(action.assigned_to && { assigned_to: action.assigned_to }),
+            ...(action.participants && { participants: action.participants }),
+            observations: action.observations.map((o) => ({ ...describeObservation(o), ...(o.is_existing_state && { existing_state: true }) })),
+            link: ACTION_PAGE(action.action_id),
+          } : { description },
+          policies: found.policies.map((p) => ({
+            ...describeFoundPolicy(p), ...(action?.policyIds.includes(p.policy_id) && { linked_to_action: true }),
+          })),
+          active_policies_in_all: Number(found.policies[0]?.total || 0),
+          observations: found.observations,
+          past_actions: found.actions,
+          experiences: found.experiences,
+          assets: found.assets.map(({ status, area, location, ...a }) => ({
+            ...a, ...(status && { status }), ...(area && { area }), ...(location && { location }), link: ASSET_LINK(a.asset_id),
+          })),
+        }, null, 2) }] };
+      } catch (err) {
+        console.log('get_planning_context failed:', err.message);
+        return refuse(`Could not get the planning context: ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
     'create_action',
     {
       title: 'Create an action',
@@ -1673,7 +2003,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         title: z.string().min(1).describe('Short name for the work, e.g. "Waterproof the bamboo treatment bins"'),
         existing_state: z.string().optional().describe('Where things are now'),
         expected_state: z.string().optional().describe('Where we want to get to'),
-        plan: z.string().optional().describe('How we intend to do it; plain text, blank lines between paragraphs'),
+        plan: z.string().optional().describe(`How we intend to do it; plain text, blank lines between paragraphs, ${PLAN_LINKS}`),
+        policy_ids: POLICY_IDS.describe(POLICY_IDS_HELP),
         assigned_to: z.string().optional().describe('Name of the person it is assigned to'),
         participants: z.array(z.string()).optional().describe('Names of other people taking part'),
         asset_id: z.string().optional().describe('The tool the action is on (search_assets), if any'),
@@ -1683,7 +2014,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ title, existing_state, expected_state, plan, assigned_to, participants, asset_id, completed_at }) => {
+    async ({ title, existing_state, expected_state, plan, policy_ids, assigned_to, participants, asset_id, completed_at }) => {
       console.log('create_action called with:', JSON.stringify({ title, assigned_to, participants }));
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
@@ -1703,6 +2034,10 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
             [asset_id, accessibleOrgIds]
           )).rows[0]);
           if (!tool) return NOT_AN_ASSET(asset_id);
+        }
+        if (policy_ids?.length) {
+          const problem = await withDbClient(async (client) => unlinkablePolicy(client, policy_ids, accessibleOrgIds[0]));
+          if (problem) return refuse(`${problem} Nothing was created.`);
         }
         // Names become the member user_ids the app stores, within the org
         // the action is created in (the first one, as the app does).
@@ -1745,6 +2080,17 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
           existingStateId = observation.id;
           console.log('create_action: existing state', observation.id);
         }
+        // The action is saved by now: a failure to link is reported with it.
+        let linking = {};
+        if (policy_ids?.length) {
+          try {
+            const linked = await setActionPolicies({ cognitoUserId, actionId: created.id, policyIds: policy_ids });
+            linking = { policies: linked.map((p) => p.title) };
+          } catch (err) {
+            console.log('create_action: policies not linked:', err.message);
+            linking = { policies_not_linked: `The action was created, but its policies were not linked: ${err.message}` };
+          }
+        }
         return {
           content: [{ type: 'text', text: JSON.stringify({
             action_id: created.id,
@@ -1755,6 +2101,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
               existing_state_id: existingStateId,
               add_photos_link: `https://stargazer-farm.com/observations/edit/${existingStateId}`,
             }),
+            ...linking,
           }, null, 2) }],
         };
       } catch (err) {
@@ -1781,7 +2128,8 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         title: z.string().min(1).optional().describe('New title'),
         existing_state: z.string().optional().describe('New existing state (where things are now)'),
         expected_state: z.string().optional().describe('New expected state (where we want to get to)'),
-        plan: z.string().optional().describe('New plan; plain text, blank lines between paragraphs'),
+        plan: z.string().optional().describe(`New plan; plain text, blank lines between paragraphs, ${PLAN_LINKS}`),
+        policy_ids: POLICY_IDS.describe(`${POLICY_IDS_HELP}; the whole list, empty to remove all (get_planning_context shows the current ones)`),
         assigned_to: z.string().nullable().optional().describe('Name of the person it is assigned to; null to unassign'),
         participants: z.array(z.string()).optional().describe('Names of everyone else taking part (the whole list)'),
         asset_id: z.string().nullable().optional().describe('The tool (asset) the action is about, from search_assets; null to clear'),
@@ -1793,7 +2141,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ action_id, title, existing_state, expected_state, plan, assigned_to, participants, asset_id, required_tools, required_stock, status, shared_with_partners }) => {
+    async ({ action_id, title, existing_state, expected_state, plan, policy_ids, assigned_to, participants, asset_id, required_tools, required_stock, status, shared_with_partners }) => {
       if (accessibleOrgIds.length === 0) return NOT_A_MEMBER;
       if (!canWrite) {
         return {
@@ -1810,7 +2158,7 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         ...(status === 'completed' && { completed_at: new Date().toISOString() }),
         ...(shared_with_partners !== undefined && { shared_with_partners }),
       };
-      const fields = [...Object.keys(changes), ...Object.entries({ assigned_to, participants, asset_id, required_tools, required_stock })
+      const fields = [...Object.keys(changes), ...Object.entries({ policy_ids, assigned_to, participants, asset_id, required_tools, required_stock })
         .filter(([, v]) => v !== undefined).map(([k]) => k)];
       console.log('update_action called with:', JSON.stringify({ action_id, fields }));
       if (fields.length === 0) {
@@ -1824,6 +2172,11 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         )).rows[0]);
         if (!action) {
           return { content: [{ type: 'text', text: 'No action with that id in your organizations — find it with search_actions.' }], isError: true };
+        }
+
+        if (policy_ids) {
+          const problem = await withDbClient(async (client) => unlinkablePolicy(client, policy_ids, action.organization_id, action.id));
+          if (problem) return refuse(`${problem} Nothing was changed.`);
         }
 
         // People are members of the action's org; tools and parts are in the
@@ -1859,19 +2212,31 @@ function create({ accessibleOrgIds, callerName, cognitoUserId, canWrite = false 
         }
 
         // Edited where the action lives, as when the app has that org active.
-        const updated = await updateAction({
+        // Nothing to send when only the policy links change.
+        const updated = Object.keys(changes).length === 0 ? null : await updateAction({
           cognitoUserId,
           orgId: action.organization_id,
           actionId: action.id,
           changes,
         });
+        let linking = {};
+        if (policy_ids) {
+          try {
+            const linked = await setActionPolicies({ cognitoUserId, orgId: action.organization_id, actionId: action.id, policyIds: policy_ids });
+            linking = { policies: linked.map((p) => p.title) };
+          } catch (err) {
+            if (!updated) throw err;
+            console.log('update_action: policies not linked:', err.message);
+            linking = { policies_not_linked: `The other changes were saved, but the policies were not linked: ${err.message}` };
+          }
+        }
         console.log('update_action: updated', action.id);
         return {
           content: [{ type: 'text', text: JSON.stringify({
             action_id: action.id,
-            title: updated.title,
-            status: updated.status,
-            changed: fields,
+            ...(updated && { title: updated.title, status: updated.status }),
+            changed: linking.policies_not_linked ? fields.filter((f) => f !== 'policy_ids') : fields,
+            ...linking,
             link: `https://stargazer-farm.com/actions/${action.id}`,
           }, null, 2) }],
         };

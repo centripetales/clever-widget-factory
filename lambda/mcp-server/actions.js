@@ -204,9 +204,34 @@ export async function updatePolicy({ cognitoUserId, orgId, policyId, changes }) 
   return (await invokeApp('cwf-policies-lambda', `/api/policies/${policyId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: policyId })).policy;
 }
 
+// The policies given are the whole list the action's plan draws on; the
+// policies service adds and removes the difference, in the action's org (orgId).
+export async function setActionPolicies({ cognitoUserId, orgId, actionId, policyIds }) {
+  return (await invokeApp('cwf-policies-lambda', `/api/actions/${actionId}/policies`, { policy_ids: policyIds }, { cognitoUserId, orgId }, { method: 'PUT', id: actionId })).policies;
+}
+
 // An action's plan is stored as rich text (HTML) in its policy column; spoken
 // plans arrive as plain text.
 export function planToHtml(text) {
-  const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return text.trim().split(/\n\s*\n/).map((p) => `<p>${escape(p.trim()).replace(/\n/g, '<br>')}</p>`).join('');
+  return text.trim().split(/\n\s*\n/).map((p) => `<p>${withLinks(p.trim()).replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// [label](address) or a bare address, web addresses only.
+const URL_PART = String.raw`(?:[^\s()<>"\[\]]|\([^\s()<>"]*\))`;
+const LINK = new RegExp(String.raw`\[([^\]\n]+)\]\((https?://${URL_PART}+)\)|(https?://${URL_PART}+)`, 'g');
+
+// The text escaped, with its links made clickable. Punctuation ending a
+// sentence is not part of a bare address.
+function withLinks(text) {
+  const anchor = (href, label) => `<a href="${escapeHtml(href).replace(/"/g, '&quot;')}">${escapeHtml(label)}</a>`;
+  let html = '';
+  let from = 0;
+  for (const match of text.matchAll(LINK)) {
+    const [whole, label, href, bare] = match;
+    const address = href || bare.replace(/[.,;:!?']+$/, '');
+    html += escapeHtml(text.slice(from, match.index)) + anchor(address, label || address);
+    from = match.index + (href ? whole.length : address.length);
+  }
+  return html + escapeHtml(text.slice(from));
 }
