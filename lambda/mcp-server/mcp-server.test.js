@@ -2,6 +2,7 @@ import { test, describe, beforeEach, mock } from 'node:test';
 import assert from 'node:assert';
 import pg from 'pg';
 import { LambdaClient } from '@aws-sdk/client-lambda';
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -60,6 +61,10 @@ mock.method(LambdaClient.prototype, 'send', async (command) => {
   }
   if (command.input.FunctionName === 'cwf-financial-records-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ id: 'new-record', description: body.description, transaction_date: body.transaction_date, amount: body.amount, payment_method: body.payment_method }) })) };
+  }
+  if (command.input.FunctionName === 'cwf-policies-lambda' && event.path.startsWith('/api/actions/')) {
+    if (event.pathParameters.id === 'refused') return { Payload: Buffer.from(JSON.stringify({ statusCode: 403, body: JSON.stringify({ error: 'Not authorized to edit this action' }) })) };
+    return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ policies: body.policy_ids.map((id) => ({ id, title: `Title of ${id}` })) }) })) };
   }
   if (command.input.FunctionName === 'cwf-policies-lambda') {
     return { Payload: Buffer.from(JSON.stringify({ statusCode: 200, body: JSON.stringify({ policy: {
@@ -2057,3 +2062,162 @@ describe('policies', () => {
     assert.strictEqual(invocations.length, 0);
   });
 });
+
+describe('get_planning_context', () => {
+  let embedded;
+  const embeddings = () => mock.method(BedrockRuntimeClient.prototype, 'send', async (command) => {
+    embedded.push(JSON.parse(command.input.body).inputText);
+    return { body: Buffer.from(JSON.stringify({ embedding: [0.1, 0.2] })) };
+  });
+  const at = '2026-10-05T09:30:00Z';
+  const observation = (id, similarity) => ({ observation_id: id, claim: `claim ${id}`, captured_at: at, captured_by: 'Mae', similarity });
+  const action = { action_id: 'act-1', title: 'Collect more eggs', status: 'not_started', policy: '<p>Check nests.</p>', asset_id: 'part-1',
+    required_tools: [], required_stock: [] };
+  const database = (sql) => {
+    if (sql.includes('a.required_stock')) return [action];
+    if (sql.includes('AS is_existing_state')) return [{ ...observation('own-1'), is_existing_state: true }];
+    if (sql.includes('FROM action_policies')) return [{ policy_id: 'pol-1' }];
+    if (sql.includes("SELECT 'tool' AS type, t.id::text")) return [{ type: 'part', asset_id: 'part-1', name: 'Darag Chicken', status: null, area: 'Chicken Coop', location: 'General' }];
+    if (sql.includes('FROM policy p JOIN organizations')) return [{ policy_id: 'pol-1', title: 'Layers', text: 'Feed them.', reasoning: null, status: 'active', observations: [], experience_ids: [], total: '12' }];
+    if (sql.includes('WITH RECURSIVE')) return [1, 2, 3, 4, 5, 6, 7].map((i) => observation(`asset-${i}`, 0.3));
+    if (sql.includes('WITH ') && sql.includes('matches AS')) return [...[1, 2, 3, 4, 5, 6].map((i) => observation(`near-${i}`, 0.9 - i / 100)), observation('weak', 0.2)];
+    if (sql.includes('a.required_tools::text[] &&')) return [{ action_id: 'act-asset' }];
+    if (sql.includes("ue.entity_type = 'action_policy'")) return [{ action_id: 'act-near', similarity: 0.8 }, { action_id: 'act-weak', similarity: 0.1 }];
+    if (sql.includes('LEFT JOIN LATERAL') && sql.includes('a.id::text = ANY($1::text[])')) {
+      return ['act-asset', 'act-near'].map((id) => ({ action_id: id, title: id, status: 'completed', policy: '<p>Do it.</p>', observation_id: `after-${id}`, captured_at: at, claim: 'It worked.' }));
+    }
+    return [];
+  };
+
+  test('surfaces the action, policies, observations, past actions and assets, saying why', async () => {
+    embedded = [];
+    const restore = embeddings();
+    rows = database;
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'get_planning_context', arguments: { action_id: 'act-1', searches: ['egg collection', 'laying hens feed'] } });
+    restore.mock.restore();
+    const context = JSON.parse(result.content[0].text);
+    assert.deepStrictEqual(embedded, ['egg collection', 'laying hens feed']);
+    assert.strictEqual(context.action.plan, 'Check nests.');
+    assert.strictEqual(context.action.observations[0].existing_state, true);
+    assert.strictEqual(context.policies[0].linked_to_action, true);
+    assert.strictEqual(context.active_policies_in_all, 12);
+    const ids = context.observations.map((o) => o.observation_id);
+    assert.strictEqual(ids.length, 10);
+    assert.strictEqual(ids.filter((id) => id.startsWith('near-')).length, 5);
+    assert.strictEqual(ids.filter((id) => id.startsWith('asset-')).length, 5);
+    assert.ok(!ids.includes('weak'));
+    assert.deepStrictEqual(context.observations[0].why, ['on Darag Chicken']);
+    assert.match(context.observations[0].link, /observations\/edit\/asset-1$/);
+    assert.deepStrictEqual(context.past_actions.map((a) => a.action_id), ['act-asset', 'act-near']);
+    assert.strictEqual(context.past_actions[0].latest_observation.claim, 'It worked.');
+    assert.strictEqual(context.assets[0].location, 'General');
+    const policies = queries.find((q) => q.sql.includes('FROM policy p JOIN organizations'));
+    assert.deepStrictEqual(policies.params, [['org-a'], 'active', ['pol-1'], 10]);
+    // What happened after comes only from the caller's orgs, even on a shared action
+    const after = queries.find((q) => q.sql.includes('a.id::text = ANY($1::text[])'));
+    assert.match(after.sql, /s\.organization_id = ANY\(\$2::uuid\[\]\)/);
+    assert.deepStrictEqual(after.params[1], ['org-a']);
+    // Read only: no service is called and nothing is written
+    assert.strictEqual(invocations.length, 0);
+    assert.ok(queries.every((q) => !/\b(INSERT|UPDATE|DELETE)\b/.test(q.sql)));
+  });
+
+  test('searches only observations with words, and shows rich text as plain text', async () => {
+    embedded = [];
+    const restore = embeddings();
+    rows = (sql) => sql.includes('matches AS') ? [{ ...observation('html', 0.9), claim: null, text_start: '<p>The kids agreed.</p><p>We will check.</p>' }] : [];
+    const client = await connect(['org-a']);
+    const context = JSON.parse((await client.callTool({ name: 'get_planning_context', arguments: { description: 'Chickens' } })).content[0].text);
+    restore.mock.restore();
+    assert.strictEqual(context.observations[0].text_start, 'The kids agreed.\nWe will check.');
+    assert.match(queries.find((q) => q.sql.includes('matches AS')).sql, /TRIM\(s\.state_text\)/);
+  });
+
+  test('plans from a description when there is no action yet, searching on it', async () => {
+    embedded = [];
+    const restore = embeddings();
+    const client = await connect(['org-a']);
+    const result = await client.callTool({ name: 'get_planning_context', arguments: { description: 'Wash bignay for wine' } });
+    restore.mock.restore();
+    const context = JSON.parse(result.content[0].text);
+    assert.deepStrictEqual(embedded, ['Wash bignay for wine']);
+    assert.deepStrictEqual(context.action, { description: 'Wash bignay for wine' });
+    assert.deepStrictEqual([context.policies, context.observations, context.past_actions, context.assets], [[], [], [], []]);
+  });
+
+  test('needs an action or a description, and an action in the caller orgs', async () => {
+    const client = await connect(['org-a']);
+    assert.strictEqual((await client.callTool({ name: 'get_planning_context', arguments: {} })).isError, true);
+    assert.strictEqual(queries.length, 0);
+    assert.strictEqual((await client.callTool({ name: 'get_planning_context', arguments: { action_id: 'elsewhere' } })).isError, true);
+    assert.deepStrictEqual(queries[0].params, ['elsewhere', ['org-a']]);
+  });
+});
+
+describe('policy links on actions', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const policy = (id, extra = {}) => ({ policy_id: id, title: id, status: 'active', linked: false, ...extra });
+  const database = (policies, actionId = 'act-1') => (sql) => sql.includes('AS linked') ? policies
+    : sql.includes('SELECT id, organization_id FROM actions') ? [{ id: actionId, organization_id: 'org-b' }] : [];
+  const calls = (name) => invocations.filter((i) => i.functionName === name);
+
+  test('create_action links the policies its plan draws on', async () => {
+    rows = database([policy('pol-1')]);
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'create_action', arguments: { title: 'Collect eggs', policy_ids: ['pol-1'] } });
+    const [link] = calls('cwf-policies-lambda');
+    assert.strictEqual(link.event.path, '/api/actions/new-action/policies');
+    assert.deepStrictEqual(JSON.parse(link.event.body), { policy_ids: ['pol-1'] });
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).policies, ['Title of pol-1']);
+  });
+
+  test('nothing is saved for a retired or unknown policy', async () => {
+    for (const found of [[policy('pol-1', { status: 'deprecated' })], []]) {
+      rows = database(found);
+      const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+      for (const [name, args] of [['create_action', { title: 'x' }], ['update_action', { action_id: 'act-1', plan: 'New plan' }]]) {
+        const result = await client.callTool({ name, arguments: { ...args, policy_ids: ['pol-1'] } });
+        assert.strictEqual(result.isError, true, name);
+      }
+    }
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('update_action can change only the links, in the action\'s org, keeping a retired one it has', async () => {
+    rows = database([policy('pol-1', { status: 'deprecated', linked: true })]);
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_action', arguments: { action_id: 'act-1', policy_ids: ['pol-1'] } });
+    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(calls('cwf-actions-lambda').length, 0);
+    const [link] = calls('cwf-policies-lambda');
+    assert.strictEqual(link.event.headers['X-Organization-Id'], 'org-b');
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('AS linked')).params, [['pol-1'], 'org-b', 'act-1']);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text).changed, ['policy_ids']);
+  });
+
+  test('says when the plan was saved but the links were refused', async () => {
+    rows = database([policy('pol-1')], 'refused');
+    const client = await connect(['org-b'], 'Stefan Hamilton', writer);
+    const result = JSON.parse((await client.callTool({ name: 'update_action', arguments: { action_id: 'refused', plan: 'New plan', policy_ids: ['pol-1'] } })).content[0].text);
+    assert.match(result.policies_not_linked, /other changes were saved.*Not authorized/);
+    assert.deepStrictEqual(result.changed, ['policy']);
+  });
+
+  test('links in a plan become clickable, web addresses only, and read back as links', async () => {
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'create_action', arguments: { title: 'x',
+      plan: 'Check the bins ([Nov 20](https://stargazer-farm.com/observations/edit/o-1)). See https://example.com/a. [no](javascript:alert(1)) <b>' } });
+    const saved = JSON.parse(calls('cwf-actions-lambda')[0].event.body).policy;
+    assert.strictEqual(saved, '<p>Check the bins (<a href="https://stargazer-farm.com/observations/edit/o-1">Nov 20</a>). '
+      + 'See <a href="https://example.com/a">https://example.com/a</a>. [no](javascript:alert(1)) &lt;b&gt;</p>');
+    rows = (sql) => sql.includes('a.required_stock') ? [{ action_id: 'act-1', title: 'x', status: 'not_started', policy: saved }] : [];
+    const restore = mock.method(BedrockRuntimeClient.prototype, 'send', async () => ({ body: Buffer.from(JSON.stringify({ embedding: [0.1] })) }));
+    const context = JSON.parse((await client.callTool({ name: 'get_planning_context', arguments: { action_id: 'act-1' } })).content[0].text);
+    restore.mock.restore();
+    assert.match(context.action.plan, /\[Nov 20\]\(https:\/\/stargazer-farm\.com\/observations\/edit\/o-1\)/);
+    assert.match(context.action.plan, /See https:\/\/example\.com\/a\./);
+    assert.deepStrictEqual(context.action.policy_ids, []);
+  });
+});
+

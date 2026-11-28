@@ -33,7 +33,8 @@ const TiptapEditor: React.FC<TiptapEditorProps> = ({
         link: false, // Disable the default link extension from StarterKit
       }),
       Link.configure({
-        openOnClick: false,
+        // A plan's links go to what it rests on: a click or tap opens them in a new tab
+        openOnClick: true,
         HTMLAttributes: {
           class: 'text-primary underline',
         },
