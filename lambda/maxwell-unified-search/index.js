@@ -128,7 +128,7 @@ ${orderLimit})`;
       return `(SELECT ${baseSelect},
   json_build_object(
     'title', a.title,
-    'policy', a.policy,
+    'plan', a.policy,
     'status', a.status,
     'created_at', a.created_at,
     'completed_at', a.completed_at

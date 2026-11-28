@@ -44,7 +44,7 @@ describe('buildContext', () => {
     expect(text).toContain(`- Pastor (org id ${PASTOR_ORG})`);
     expect(text).toContain(`- Positive Sum (org id ${ASSOCIATION}, association)`);
     expect(text).toContain(`[observation ${OBS}] 2026-09-20 — Stefan: We paid Pastor`);
-    expect(text).not.toContain('Policy:');
+    expect(text).not.toContain('Plan (');
   });
 });
 

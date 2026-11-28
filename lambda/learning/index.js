@@ -1589,7 +1589,7 @@ INSTRUCTIONS:
 5. Each explanation should teach — explain WHY the option is correct or incorrect.
 6. Questions should test understanding (Bloom's level 2), not just recall.
 7. Make wrong options plausible but clearly distinguishable with good explanations.
-8. DO NOT use any policy content as source material.
+8. DO NOT use any plan or policy content as source material.
 9. Vary the correctIndex across questions (don't always put the correct answer in the same position).
 
 Return ONLY a JSON object with:

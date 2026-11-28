@@ -44,7 +44,7 @@ interface PolicyCreationDialogProps {
 interface PolicyFormData {
   title: string;
   description_text: string;
-  status: 'draft' | 'active' | 'deprecated';
+  status: 'active' | 'deprecated';
   effective_start_date?: Date;
   effective_end_date?: Date;
   category?: string;
@@ -60,7 +60,7 @@ export function PolicyCreationDialog({
   const [formData, setFormData] = useState<PolicyFormData>({
     title: '',
     description_text: '',
-    status: 'draft'
+    status: 'active'
   });
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -77,13 +77,13 @@ export function PolicyCreationDialog({
       setFormData({
         title: `Policy for ${exploration.exploration_code}`,
         description_text: '',
-        status: 'draft'
+        status: 'active'
       });
     } else if (!open) {
       setFormData({
         title: '',
         description_text: '',
-        status: 'draft'
+        status: 'active'
       });
     }
   }, [open, exploration]);
@@ -262,7 +262,7 @@ export function PolicyCreationDialog({
                 <Label htmlFor="status">Status</Label>
                 <Select
                   value={formData.status}
-                  onValueChange={(value: 'draft' | 'active' | 'deprecated') => 
+                  onValueChange={(value: 'active' | 'deprecated') => 
                     setFormData(prev => ({ ...prev, status: value }))
                   }
                 >
@@ -270,7 +270,6 @@ export function PolicyCreationDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="draft">Draft</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="deprecated">Deprecated</SelectItem>
                   </SelectContent>

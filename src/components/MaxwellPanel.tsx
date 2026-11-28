@@ -6,10 +6,10 @@ import { cn } from '@/lib/utils';
 import { useMaxwell, MaxwellSessionAttributes, MaxwellMessage } from '@/hooks/useMaxwell';
 
 const STARTER_QUESTIONS_ACTION = [
-  'Summarize what has happened so far and given our policy and observations what are next steps',
-  'Are we missing any information or materials to complete this action as defined in the policy.',
+  'Summarize what has happened so far and given our plan and observations what are next steps',
+  'Are we missing any information or materials to complete this action as defined in the plan.',
   'What might telos and entelechy look like for this action.',
-  'Are there any high entropy policy steps we might resolve before starting this action',
+  'Are there any high entropy plan steps we might resolve before starting this action',
 ];
 
 const STARTER_QUESTIONS_ASSET = [

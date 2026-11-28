@@ -1249,14 +1249,14 @@ export function ActionForm({
 
         <Tabs value={activeTab || getDefaultTab()} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="plan">Policy</TabsTrigger>
+            <TabsTrigger value="plan">Plan</TabsTrigger>
             <TabsTrigger value="observations">Implementation</TabsTrigger>
           </TabsList>
 
           <TabsContent value="plan" className="mt-4">
             <div>
               <div className="flex items-center justify-between">
-                <Label className="text-foreground">Action Policy</Label>
+                <Label className="text-foreground">Action Plan</Label>
                 <div className="flex items-center gap-1">
                   <Button
                     type="button"
@@ -1275,7 +1275,7 @@ export function ActionForm({
                   key={`plan-${action?.id || 'new'}`}
                   value={formData.policy || ''}
                   onChange={(value) => setFormData(prev => ({ ...prev, policy: value }))}
-                  placeholder="Describe the policy for this action..."
+                  placeholder="Describe the plan for this action..."
                 />
               </div>
             </div>

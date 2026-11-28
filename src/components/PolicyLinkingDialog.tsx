@@ -141,7 +141,7 @@ export function PolicyLinkingDialog({
               <p><strong>Code:</strong> {exploration.exploration_code}</p>
               <p><strong>State:</strong> {exploration.state_text}</p>
               {exploration.summary_policy_text && (
-                <p><strong>Summary Policy:</strong> {exploration.summary_policy_text.substring(0, 200)}...</p>
+                <p><strong>Summary Plan:</strong> {exploration.summary_policy_text.substring(0, 200)}...</p>
               )}
             </div>
           </div>
@@ -174,7 +174,6 @@ export function PolicyLinkingDialog({
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="draft">Draft</SelectItem>
                     <SelectItem value="deprecated">Deprecated</SelectItem>
                   </SelectContent>
                 </Select>
@@ -265,8 +264,6 @@ function PolicyCard({ policy, isSelected, onSelect }: PolicyCardProps) {
     switch (status) {
       case 'active':
         return 'bg-green-100 text-green-800';
-      case 'draft':
-        return 'bg-yellow-100 text-yellow-800';
       case 'deprecated':
         return 'bg-red-100 text-red-800';
       default:

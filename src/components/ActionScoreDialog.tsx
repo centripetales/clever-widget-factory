@@ -163,7 +163,7 @@ export function ActionScoreDialog({
     
     const policyText = stripHtml(action.policy);
     if (policyText) {
-      actionContext.policy = policyText;
+      actionContext.plan = policyText;
     }
     
     // Use aggregated observations from implementation updates, fallback to action.observations
@@ -429,7 +429,7 @@ IMPORTANT OVERRIDES (do not ignore):
                 )}
                 {action.policy && (
                   <div>
-                    <Label className="text-sm font-semibold">Policy</Label>
+                    <Label className="text-sm font-semibold">Plan</Label>
                     <p className="text-sm mt-1">{stripHtml(action.policy)}</p>
                   </div>
                 )}

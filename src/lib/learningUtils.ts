@@ -569,7 +569,7 @@ export function buildCopyContextText(
   if (action.expected_state) sections.push(`Expected State: ${action.expected_state}`);
 
   const policyText = stripHtmlToPlainText(action.policy || '');
-  if (policyText.trim()) sections.push(`Current Policy:\n${policyText}`);
+  if (policyText.trim()) sections.push(`Current Plan:\n${policyText}`);
 
   if (takeaways.length > 0) {
     sections.push(`Takeaways:\n${takeaways.map(t => `- ${t}`).join('\n')}`);

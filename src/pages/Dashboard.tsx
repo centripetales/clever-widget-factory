@@ -123,7 +123,7 @@ export default function Dashboard() {
     },
     {
       title: "Actions",
-      description: "Track and manage policy actions",
+      description: "Plan and track actions",
       icon: Target,
       path: "/actions",
       color: "bg-yellow-500",

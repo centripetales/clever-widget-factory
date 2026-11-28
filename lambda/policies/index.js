@@ -14,9 +14,30 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const STATUSES = ['draft', 'active', 'deprecated'];
+const STATUSES = ['active', 'deprecated'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const POLICY_COLUMNS = 'id, title, description_text, status, effective_from, effective_to, created_at, updated_at';
+// With the observations and experiences it rests on (its sources), oldest link first
+const POLICY_COLUMNS = `id, title, description_text, status, effective_from, effective_to, created_at, updated_at,
+  ARRAY(SELECT ps.state_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.state_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS observation_ids,
+  ARRAY(SELECT ps.experience_id FROM policy_sources ps WHERE ps.policy_id = policy.id AND ps.experience_id IS NOT NULL ORDER BY ps.created_at, ps.id) AS experience_ids`;
+
+// The two kinds of source: the field that lists them, the policy_sources column
+// and which ids are really that kind in the caller's orgs. An observation is a
+// person's, not a record the app keeps as a state.
+const SOURCES = [
+  {
+    field: 'observation_ids', column: 'state_id', name: 'observation',
+    findSql: `SELECT s.id FROM states s
+      WHERE s.id = ANY($1::uuid[]) AND s.organization_id = ANY($2::uuid[])
+        AND COALESCE(s.state_text, '') NOT LIKE '{"type":"positive_sum.%'
+        AND COALESCE(s.state_text, '') NOT LIKE '[%'
+        AND NOT EXISTS (SELECT 1 FROM state_links lo WHERE lo.state_id = s.id AND lo.entity_type = 'learning_objective')`,
+  },
+  {
+    field: 'experience_ids', column: 'experience_id', name: 'experience',
+    findSql: 'SELECT id FROM experiences WHERE id = ANY($1::uuid[]) AND organization_id = ANY($2::uuid[])',
+  },
+];
 
 exports.handler = async (event) => {
   const { httpMethod, path, pathParameters } = event;
@@ -30,7 +51,20 @@ exports.handler = async (event) => {
   }
   const organizationId = authContext?.organization_id;
   if (!organizationId) return error('Organization ID not found', 401);
-  const context = { organizationId, cognitoUserId: authContext.cognito_user_id, permissions: authContext.permissions || [] };
+  // A policy can rest on sources from any of the caller's orgs, so these are
+  // read before the X-Organization-Id header narrows them to one
+  let memberOrgIds = [];
+  try {
+    memberOrgIds = JSON.parse(event.requestContext?.authorizer?.accessible_organization_ids || '[]');
+  } catch (err) {
+    console.error('Could not read the accessible organizations:', err);
+  }
+  const context = {
+    organizationId,
+    memberOrgIds: memberOrgIds.length > 0 ? memberOrgIds : [organizationId],
+    cognitoUserId: authContext.cognito_user_id,
+    permissions: authContext.permissions || [],
+  };
 
   try {
     // GET/PUT /api/actions/:id/policies - the policies an action follows
@@ -52,6 +86,65 @@ exports.handler = async (event) => {
 };
 
 const canWrite = ({ permissions }) => hasPermission({ permissions }, 'data:write:all') || hasPermission({ permissions }, 'data:write:org');
+
+// The source lists given in a request, each without repeats; a list left out is
+// not in the result. A problem is returned for anything but lists of ids.
+function sourceLists(body) {
+  const lists = {};
+  for (const { field } of SOURCES) {
+    const ids = body[field];
+    if (ids === undefined) continue;
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && UUID.test(id))) {
+      return { problem: `${field} must be a list of ids` };
+    }
+    lists[field] = [...new Set(ids.map((id) => id.toLowerCase()))];
+  }
+  return { lists };
+}
+
+// Makes each list given the policy's sources of that kind: new ones are added,
+// those left out are removed and the rest are untouched. Only new ones are
+// checked. Returns a problem, for the caller to undo, when one is not found.
+async function saveSources(client, policyId, lists, { memberOrgIds }) {
+  for (const { field, column, name, findSql } of SOURCES) {
+    const wanted = lists[field];
+    if (!wanted) continue;
+    const current = (await client.query(
+      `SELECT ${column} AS id FROM policy_sources WHERE policy_id = $1 AND ${column} IS NOT NULL`,
+      [policyId]
+    )).rows.map((row) => row.id);
+    const added = wanted.filter((id) => !current.includes(id));
+    const removed = current.filter((id) => !wanted.includes(id));
+    if (added.length > 0) {
+      const found = (await client.query(findSql, [added, memberOrgIds])).rows.map((row) => row.id);
+      const missing = added.find((id) => !found.includes(id));
+      if (missing) return `No ${name} ${missing} in your organizations`;
+    }
+    if (removed.length > 0) {
+      await client.query(`DELETE FROM policy_sources WHERE policy_id = $1 AND ${column} = ANY($2::uuid[])`, [policyId, removed]);
+    }
+    if (added.length > 0) {
+      await client.query(`INSERT INTO policy_sources (policy_id, ${column}) SELECT $1, UNNEST($2::uuid[])`, [policyId, added]);
+    }
+  }
+  return null;
+}
+
+// Runs the work in one transaction; a response with an error status undoes it.
+async function inTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const response = await work(client);
+    await client.query(response.statusCode < 300 ? 'COMMIT' : 'ROLLBACK');
+    return response;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 function parseBody(event) {
   try {
@@ -82,17 +175,26 @@ async function createPolicy(event, context) {
   if (!canWrite(context)) return error('Not authorized to create policies', 403);
   const body = parseBody(event);
   if (!body) return error('Invalid JSON in request body', 400);
-  const { title, description_text, status = 'draft', effective_from = null, effective_to = null } = body;
+  const { title, description_text, status = 'active', effective_from = null, effective_to = null } = body;
   if (typeof title !== 'string' || !title.trim()) return error('title is required', 400);
   if (typeof description_text !== 'string' || !description_text.trim()) return error('description_text is required', 400);
   if (!STATUSES.includes(status)) return error(`status must be one of ${STATUSES.join(', ')}`, 400);
 
-  const result = await pool.query(
-    `INSERT INTO policy (organization_id, title, description_text, status, effective_from, effective_to, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${POLICY_COLUMNS}`,
-    [context.organizationId, title.trim(), description_text.trim(), status, effective_from, effective_to, context.cognitoUserId]
-  );
-  return success({ policy: result.rows[0] });
+  const { lists, problem } = sourceLists(body);
+  if (problem) return error(problem, 400);
+
+  return await inTransaction(async (client) => {
+    const { id } = (await client.query(
+      `INSERT INTO policy (organization_id, title, description_text, status, effective_from, effective_to, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [context.organizationId, title.trim(), description_text.trim(), status, effective_from, effective_to, context.cognitoUserId]
+    )).rows[0];
+    const sourceProblem = await saveSources(client, id, lists, context);
+    if (sourceProblem) return error(sourceProblem, 400);
+    // Read back after the links are saved, so the sources are in it
+    const result = await client.query(`SELECT ${POLICY_COLUMNS} FROM policy WHERE id = $1`, [id]);
+    return success({ policy: result.rows[0] });
+  });
 }
 
 // Only the fields given change. A policy is retired by setting it deprecated,
@@ -118,16 +220,23 @@ async function updatePolicy(event, id, context) {
   }
   if (body.effective_from !== undefined) changes.effective_from = body.effective_from;
   if (body.effective_to !== undefined) changes.effective_to = body.effective_to;
+  const { lists, problem } = sourceLists(body);
+  if (problem) return error(problem, 400);
   const fields = Object.keys(changes);
-  if (fields.length === 0) return error('Nothing to change', 400);
+  if (fields.length === 0 && Object.keys(lists).length === 0) return error('Nothing to change', 400);
 
-  const result = await pool.query(
-    `UPDATE policy SET ${fields.map((field, i) => `${field} = $${i + 3}`).join(', ')}, updated_at = NOW()
-      WHERE id = $1 AND organization_id = $2 RETURNING ${POLICY_COLUMNS}`,
-    [id, context.organizationId, ...fields.map((field) => changes[field])]
-  );
-  if (result.rows.length === 0) return error('Policy not found', 404);
-  return success({ policy: result.rows[0] });
+  return await inTransaction(async (client) => {
+    const updated = await client.query(
+      `UPDATE policy SET ${[...fields.map((field, i) => `${field} = $${i + 3}`), 'updated_at = NOW()'].join(', ')}
+        WHERE id = $1 AND organization_id = $2 RETURNING id`,
+      [id, context.organizationId, ...fields.map((field) => changes[field])]
+    );
+    if (updated.rows.length === 0) return error('Policy not found', 404);
+    const sourceProblem = await saveSources(client, id, lists, context);
+    if (sourceProblem) return error(sourceProblem, 400);
+    const result = await client.query(`SELECT ${POLICY_COLUMNS} FROM policy WHERE id = $1`, [id]);
+    return success({ policy: result.rows[0] });
+  });
 }
 
 async function actionInOrg(actionId, organizationId) {

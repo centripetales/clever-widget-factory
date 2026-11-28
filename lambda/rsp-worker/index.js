@@ -480,7 +480,7 @@ async function broadcastOfferActions(actionIds, organizationId) {
 // Found by model and version, so the extraction never picks up another task's
 // row. The system prompt is the one it ran with on Sonnet 4 (config v4.0).
 const EXTRACTION_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
-const EXTRACTION_VERSION = 'epistemic-v4.3';
+const EXTRACTION_VERSION = 'epistemic-v4.4';
 const EXTRACTION_SYSTEM_PROMPT = `You are the internal operations intelligence assistant for Stargazer Farm.
 
 Your purpose is to support operational clarity, structured experimentation tracking, and long-term farm resilience.
@@ -654,7 +654,7 @@ async function processPendingRecord(client, record, offersOnly = false, claimsOn
       const a = actionRes.rows[0];
       // Strip HTML from policy field so the LLM sees clean text
       const policyText = a.policy ? a.policy.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim() : null;
-      actionContext = `Action Title: "${a.title}"\nExisting State: "${a.description}"\nTarget State: "${a.expected_state || 'None'}"${policyText ? `\nStated Method / Best Practice:\n${policyText}` : ''}`;
+      actionContext = `Action Title: "${a.title}"\nExisting State: "${a.description}"\nTarget State: "${a.expected_state || 'None'}"${policyText ? `\nPlan (what was intended; it may deviate from policy or usual practice on purpose):\n${policyText}` : ''}`;
       const priorStatesRes = await client.query(`
         SELECT s.state_text, s.captured_at 
         FROM state_links sl
@@ -827,7 +827,7 @@ Extract two distinct epistemic dimensions. CRITICAL RULES:
 
 1. CLAIM: This observation restated densely in the person's own terms: what they saw, did, measured, decided or plan, in their tense and with their words for things. A reader of the claim alone learns exactly what this person said here, and nothing else.
 
-2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the stated method/policy for this action, or (b) widely accepted best practice for this type of task — whichever applies. When the policy does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both policy and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
+2. SIGNIFICANCE: Identify meaningful gaps between how the work was executed and either: (a) the plan for this action, or (b) widely accepted best practice for this type of task — whichever applies. Where the plan deliberately departs from usual practice (an experiment or a stated choice), the departure is not a gap; report what was observed about its result. When the plan does not specify a detail, apply reasonable best practice to assess the gap, but only within the operational scope visible in this observation (e.g. small-scale manual farm work; do not invoke equipment, lab tests, or techniques not plausible in this context). A gap is only worth noting if it is material to the outcome — not every deviation matters. If execution aligns with both the plan and best practice, state that clearly rather than manufacturing concerns. Also flag outcomes that the observation itself explicitly describes as surprising. Do NOT flag absence of measurement as a gap unless the method specifically required it.
 `;
 
 
@@ -841,7 +841,7 @@ Extract two distinct epistemic dimensions. CRITICAL RULES:
             type: 'object',
             properties: {
               claim: { type: 'string', description: 'This observation restated densely in the person\'s own terms and tense. Exactly what they said here, and nothing else.' },
-              significance: { type: 'string', description: 'Meaningful gaps vs. stated policy or scope-appropriate best practice. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' }
+              significance: { type: 'string', description: 'Meaningful gaps vs. the plan or scope-appropriate best practice. A deliberate departure in the plan is not a gap. If execution aligns with both, state that. Do not speculate on unmeasured variables. Do not invoke equipment or techniques implausible in this operational context.' }
             },
             required: ['claim', 'significance']
           }

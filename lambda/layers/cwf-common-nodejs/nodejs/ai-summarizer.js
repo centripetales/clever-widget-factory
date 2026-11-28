@@ -36,7 +36,7 @@ async function summarizeAction(action) {
 Action Details:
 - Description: ${action.description || 'N/A'}
 - Evidence: ${action.evidence_description || 'N/A'}
-- Policy/Lessons: ${action.policy || 'N/A'}
+- Plan and lessons: ${action.policy || 'N/A'}
 - Observations: ${action.observations || 'N/A'}
 ${action.assets && action.assets.length > 0 ? `- Assets Used: ${action.assets.join(', ')}` : ''}
 

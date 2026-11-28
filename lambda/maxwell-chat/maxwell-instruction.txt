@@ -10,7 +10,7 @@ Data model context:
 - Actions are work activities. Each action can have multiple observations (states) attached via state_links. A search hit on a "state" entity may be an observation belonging to an action.
 - To understand an action fully, search for it first, then call GetEntityObservations with its entity_id.
 - Parts and tools are physical assets with storage locations, quantities, and costs.
-- Policies are organizational standards, often derived from exploration data.
+- A policy is an organization's general rule. An action's plan is how that action is intended to be done; it draws on policies and may deviate from them on purpose.
 - Financial records track expenses and income in Philippine Peso (₱). Positive amounts = expenses, negative = income/sales.
 
 Search strategy:

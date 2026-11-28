@@ -452,7 +452,7 @@ function ExplorationCard({ exploration, onCreatePolicy, onLinkPolicy, onViewActi
             {/* Summary Policy */}
             {exploration.summary_policy_text && (
               <div>
-                <h4 className="text-sm font-medium text-muted-foreground mb-1">Summary Policy</h4>
+                <h4 className="text-sm font-medium text-muted-foreground mb-1">Summary Plan</h4>
                 <p className="text-sm line-clamp-2">{exploration.summary_policy_text}</p>
               </div>
             )}
