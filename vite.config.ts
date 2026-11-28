@@ -26,6 +26,10 @@ export default defineConfig(({ mode }) => {
   },
   define: {
     global: 'globalThis',
+    // Set by GitHub Actions on every deploy; plain values when building anywhere else.
+    __BUILD_NUMBER__: JSON.stringify(process.env.GITHUB_RUN_NUMBER ?? 'dev'),
+    __BUILD_COMMIT__: JSON.stringify((process.env.GITHUB_SHA ?? '').slice(0, 7)),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   optimizeDeps: {
     exclude: ['pg']

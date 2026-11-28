@@ -1,7 +1,11 @@
-// Version management for debugging and tracking
-export const APP_VERSION = "1.2.1";
-export const BUILD_DATE = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-export const BUILD_TIMESTAMP = new Date().toISOString(); // Full timestamp with time
+// Version management for debugging and tracking.
+// The last part of the version is the deploy's run number, so each deploy to main gets a higher one;
+// a build made anywhere else ends in "dev". The commit and time are those of the build, not of the page load.
+const MAJOR_MINOR = "1.2";
+export const APP_VERSION = `${MAJOR_MINOR}.${__BUILD_NUMBER__}`;
+export const BUILD_COMMIT = __BUILD_COMMIT__; // short SHA; empty outside a deploy
+export const BUILD_DATE = __BUILD_TIME__.split('T')[0]; // YYYY-MM-DD format
+export const BUILD_TIMESTAMP = __BUILD_TIME__; // Full timestamp with time
 
 // Get browser and device information for debugging
 export const getBrowserInfo = () => {
