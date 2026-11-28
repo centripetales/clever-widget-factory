@@ -6,8 +6,10 @@ import { X, Info } from 'lucide-react';
 import { useEffect } from 'react';
 import { useMetrics } from '@/hooks/metrics/useMetrics';
 import { validateMetricValue, describeRange } from '@/lib/metricValue';
+import { isEntryMetric } from '@/lib/metricsApi';
 
 interface MetricsInputProps {
+  // A tool or a part.
   toolId: string;
   values: Record<string, string>;
   onChange: (values: Record<string, string>) => void;
@@ -18,7 +20,7 @@ interface MetricsInputProps {
 
 export function MetricsInput({ toolId, values, onChange, onErrorsChange }: MetricsInputProps) {
   const { data: allMetrics, isLoading } = useMetrics(toolId);
-  const metrics = allMetrics?.filter((metric) => metric.active !== false);
+  const metrics = allMetrics?.filter(isEntryMetric);
 
   const errors: Record<string, string> = {};
   for (const metric of metrics ?? []) {
@@ -48,7 +50,7 @@ export function MetricsInput({ toolId, values, onChange, onErrorsChange }: Metri
   }
 
   if (!metrics || metrics.length === 0) {
-    return <div className="text-sm text-muted-foreground">No metrics defined for this tool.</div>;
+    return <div className="text-sm text-muted-foreground">No metrics defined.</div>;
   }
 
   return (

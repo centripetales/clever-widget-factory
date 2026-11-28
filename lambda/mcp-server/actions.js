@@ -16,13 +16,13 @@ async function invoke(functionName, payload) {
   return reply;
 }
 
-async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, snapshotId, query } = {}) {
+async function invokeApp(functionName, path, body, { cognitoUserId, orgId }, { method = 'POST', id, metricId, snapshotId, query } = {}) {
   const authorizer = await invoke(AUTHORIZER, { contextFor: cognitoUserId });
   const reply = await invoke(functionName, {
     httpMethod: method,
     path,
     queryStringParameters: query,
-    pathParameters: id ? { id } : snapshotId ? { snapshot_id: snapshotId } : undefined,
+    pathParameters: id ? { id, ...(metricId && { metric_id: metricId }) } : snapshotId ? { snapshot_id: snapshotId } : undefined,
     headers: orgId ? { 'X-Organization-Id': orgId } : {},
     body: JSON.stringify(body),
     requestContext: { authorizer },
@@ -53,6 +53,12 @@ export async function createObservation({ cognitoUserId, observation }) {
 // it (the person who recorded it, or an admin), as in the app.
 export async function updateObservation({ cognitoUserId, orgId, observationId, changes }) {
   return invokeApp('cwf-states-lambda', `/api/states/${observationId}`, changes, { cognitoUserId, orgId }, { method: 'PUT', id: observationId });
+}
+
+// The states service decides who may delete it (the person who recorded it, or
+// an admin), as in the app. Its photos, links and readings go with it.
+export async function deleteObservation({ cognitoUserId, orgId, observationId }) {
+  return invokeApp('cwf-states-lambda', `/api/states/${observationId}`, {}, { cognitoUserId, orgId }, { method: 'DELETE', id: observationId });
 }
 
 // Metric values (snapshots) are saved separately from the observation, as the
@@ -155,6 +161,12 @@ export async function deleteExperience({ cognitoUserId, orgId, experienceId }) {
 // files them under the caller's primary org, whatever org is asked for.
 export async function createMetric({ cognitoUserId, toolId, metric }) {
   return (await invokeApp('cwf-metrics-lambda', `/api/tools/${toolId}/metrics`, metric, { cognitoUserId }, { id: toolId })).metric;
+}
+
+// Deletes a metric of anything, with all its readings, from the caller's
+// primary org. The route names what the metric is about, then the metric.
+export async function deleteMetric({ cognitoUserId, entityId, metricId }) {
+  return invokeApp('cwf-metrics-lambda', `/api/tools/${entityId}/metrics/${metricId}`, {}, { cognitoUserId }, { method: 'DELETE', id: entityId, metricId });
 }
 
 // A metric of an organization, action, part or state, through the metrics

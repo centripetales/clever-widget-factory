@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { MetricsInput } from '@/components/observations/MetricsInput';
 import { useMetrics } from '@/hooks/metrics/useMetrics';
+import { isEntryMetric } from '@/lib/metricsApi';
 import { useSnapshots, useSnapshotMutations } from '@/hooks/useSnapshots';
 import { snapshotService } from '@/services/snapshotService';
 import {
@@ -189,7 +190,7 @@ export function StatesInline({ entity_type, entity_id, source_organization_id, t
   // src/pages/AddObservation.tsx, keyed by metric_id. Only meaningful when
   // `toolId` was passed in and that tool actually has metrics defined.
   const { data: metrics } = useMetrics(toolId || '');
-  const hasMetrics = !!metrics?.some(metric => metric.active !== false);
+  const hasMetrics = !!metrics?.some(isEntryMetric);
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
   const [metricErrors, setMetricErrors] = useState(false);
   // Existing snapshots for whichever observation is currently being edited —

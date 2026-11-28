@@ -722,7 +722,7 @@ describe('add_observation', () => {
 
 describe('metrics', () => {
   const writer = { cognitoUserId: 'cognito-1', canWrite: true };
-  const coverage = { metric_id: 'metric-1', tool_id: 'tool-1', name: 'Coverage %', unit: '%', value_type: 'number', min_value: 0, max_value: 100 };
+  const coverage = { metric_id: 'metric-1', entity_type: 'tool', entity_id: 'tool-1', tool_id: 'tool-1', name: 'Coverage %', unit: '%', value_type: 'number', min_value: 0, max_value: 100 };
 
   test('search_assets lists a tool\'s metrics', async () => {
     rows = (sql) => sql.includes('FROM metrics') ? [coverage] : sql.includes('unified_embeddings') ? [] : [{ type: 'tool', id: 'tool-1', name: 'Azolla pond' }];
@@ -796,6 +796,13 @@ describe('metrics', () => {
       assert.strictEqual(invocations.length, 0);
     });
 
+    test('create_metric looks for the same name among the metrics of that entity', async () => {
+      rows = answers();
+      const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+      await client.callTool({ name: 'create_metric', arguments: { entity_type: 'organization', entity_id: 'org-wilcon', name: 'Wait at checkout' } });
+      assert.deepStrictEqual(queries.find((q) => q.sql.includes('FROM metrics')).params.slice(0, 2), [['organization'], ['org-wilcon']]);
+    });
+
     test('add_observation records a reading of the metric of a linked organization', async () => {
       rows = (sql) => sql.includes('FROM metrics') ? [wait] : [{ entity_type: 'organization', entity_id: 'org-wilcon', name: 'Wilcon' }];
       const client = await connect(['org-a'], 'Stefan Hamilton', writer);
@@ -866,7 +873,7 @@ describe('metrics', () => {
     const depth = { ...coverage, metric_id: 'metric-2', name: 'Depth' };
     rows = (sql) => sql.includes('FROM metric_snapshots') ? [{ snapshot_id: 'snap-1', metric_id: 'metric-1' }]
       : sql.includes('FROM metrics') ? [coverage, depth]
-      : [{ id: 'obs-1', organization_id: 'org-b', tool_ids: ['tool-1'] }];
+      : [{ id: 'obs-1', organization_id: 'org-b', links: [{ entity_type: 'tool', entity_id: 'tool-1' }] }];
     const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
     await client.callTool({ name: 'update_observation', arguments: {
       observation_id: 'obs-1', metrics: [{ metric_id: 'metric-1', value: '70' }, { metric_id: 'metric-2', value: '12' }],
@@ -882,9 +889,30 @@ describe('metrics', () => {
     assert.deepStrictEqual(JSON.parse(create.event.body), { metric_id: 'metric-2', value: '12' });
   });
 
+  const eggs = { metric_id: 'metric-eggs', entity_type: 'part', entity_id: 'part-1', tool_id: null, name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: 0, max_value: null };
+
+  test('search_assets lists a part\'s metrics', async () => {
+    rows = (sql) => sql.includes('FROM metrics') ? [eggs] : sql.includes('unified_embeddings') ? [] : [{ type: 'part', id: 'part-1', name: 'Darag Chicken' }];
+    const client = await connect(['org-a'], 'Stefan Hamilton');
+    const [hens] = JSON.parse((await client.callTool({ name: 'search_assets', arguments: { query: 'darag' } })).content[0].text);
+    assert.deepStrictEqual(hens.metrics, [{ metric_id: 'metric-eggs', name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: 0, max_value: null }]);
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('FROM metrics')).params.slice(0, 2), [['part'], ['part-1']]);
+  });
+
+  test('update_observation adds a reading of a linked part\'s metric', async () => {
+    rows = (sql) => sql.includes('FROM metric_snapshots') ? [] : sql.includes('FROM metrics') ? [eggs]
+      : [{ id: 'obs-1', organization_id: 'org-a', links: [{ entity_type: 'part', entity_id: 'part-1' }] }];
+    const client = await connect(['org-a'], 'Stefan Hamilton', writer);
+    const result = await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1', metrics: [{ metric_id: 'metric-eggs', value: 2 }] } });
+    assert.strictEqual(result.isError, undefined);
+    assert.deepStrictEqual(queries.find((q) => q.sql.includes('FROM metrics')).params.slice(0, 2), [['part'], ['part-1']]);
+    const snapshot = invocations.find((i) => i.functionName === 'cwf-snapshots-lambda');
+    assert.deepStrictEqual(JSON.parse(snapshot.event.body), { metric_id: 'metric-eggs', value: '2' });
+  });
+
   test('someone who may not edit the observation changes no readings', async () => {
     rows = (sql) => sql.includes('FROM metric_snapshots') ? [] : sql.includes('FROM metrics') ? [coverage]
-      : [{ id: 'not-mine', organization_id: 'org-a', tool_ids: ['tool-1'] }];
+      : [{ id: 'not-mine', organization_id: 'org-a', links: [{ entity_type: 'tool', entity_id: 'tool-1' }] }];
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
     const result = await client.callTool({ name: 'update_observation', arguments: { observation_id: 'not-mine', metrics: [{ metric_id: 'metric-1', value: '5' }] } });
     assert.strictEqual(result.isError, true);
@@ -926,6 +954,58 @@ describe('update_observation', () => {
     const client = await connect(['org-a'], 'Stefan Hamilton', writer);
     assert.strictEqual((await client.callTool({ name: 'update_observation', arguments: { observation_id: 'obs-1' } })).isError, true);
     assert.strictEqual((await client.callTool({ name: 'update_observation', arguments: { observation_id: 'missing', text: 'x' } })).isError, true);
+    assert.strictEqual(invocations.length, 0);
+  });
+});
+
+describe('delete_observation and delete_metric', () => {
+  const writer = { cognitoUserId: 'cognito-1', canWrite: true };
+  const observation = { id: 'obs-1', organization_id: 'org-b', state_text: 'Found two eggs.', captured_at: '2026-11-28T02:04:00Z', captured_by: 'Stefan Hamilton', photo_count: '1', links: [{ entity_type: 'part', entity_id: 'part-1' }], readings: [{ metric: 'Eggs collected', value: '2', unit: 'count' }], experience_ids: ['exp-1'] };
+  const metric = { metric_id: 'metric-eggs', organization_id: 'org-a', entity_type: 'part', entity_id: 'part-1', tool_id: null, tool_name: 'Darag Chicken', name: 'Eggs collected', unit: 'eggs', value_type: 'number', min_value: null, max_value: null, benchmark_value: null, details: null };
+  const answers = (extra = {}) => (sql) => sql.includes('FROM states s') ? [observation]
+    : sql.includes('FROM metrics m') ? [{ ...metric, ...extra.metric }]
+    : sql.includes('FROM metric_snapshots') ? [{ observation_id: 'obs-1', captured_at: '2026-11-28T02:04:00Z', value: '2' }]
+    : sql.includes('state_space_models') ? [{ name: 'Egg laying' }]
+    : sql.includes('organization_members') ? [{ role: extra.role ?? 'admin' }]
+    : [{ entity_type: 'part', entity_id: 'part-1', name: 'Darag Chicken' }];
+
+  test('without confirm, shows what would go and deletes nothing', async () => {
+    rows = answers();
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    const first = JSON.parse((await client.callTool({ name: 'delete_observation', arguments: { observation_id: 'obs-1' } })).content[0].text);
+    assert.strictEqual(first.deleted, false);
+    assert.deepStrictEqual(first.will_delete.linked_to, ['part: Darag Chicken']);
+    assert.deepStrictEqual(first.will_delete.readings, observation.readings);
+    assert.deepStrictEqual(first.will_delete.removed_from_experiences, ['exp-1']);
+    const second = JSON.parse((await client.callTool({ name: 'delete_metric', arguments: { metric_id: 'metric-eggs' } })).content[0].text);
+    assert.strictEqual(second.deleted, false);
+    assert.strictEqual(second.will_delete.reading_count, 1);
+    assert.deepStrictEqual(second.will_delete.used_by_models, ['Egg laying']);
+    assert.strictEqual(invocations.length, 0);
+  });
+
+  test('with confirm, deletes through the app\'s services', async () => {
+    rows = answers();
+    const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', writer);
+    await client.callTool({ name: 'delete_observation', arguments: { observation_id: 'obs-1', confirm: true } });
+    await client.callTool({ name: 'delete_metric', arguments: { metric_id: 'metric-eggs', confirm: true } });
+    const [state, gone] = invocations;
+    assert.strictEqual(state.functionName, 'cwf-states-lambda');
+    assert.strictEqual(state.event.httpMethod, 'DELETE');
+    assert.strictEqual(state.event.pathParameters.id, 'obs-1');
+    assert.strictEqual(state.event.headers['X-Organization-Id'], 'org-b');
+    assert.strictEqual(gone.functionName, 'cwf-metrics-lambda');
+    assert.strictEqual(gone.event.httpMethod, 'DELETE');
+    assert.deepStrictEqual(gone.event.pathParameters, { id: 'part-1', metric_id: 'metric-eggs' });
+  });
+
+  test('a metric is not deleted if it is a part\'s Inventory, in another org, or the person is a viewer; nothing on a read-only connection', async () => {
+    for (const [extra, args] of [[{ metric: { name: 'Inventory' } }, writer], [{ metric: { organization_id: 'org-b' } }, writer], [{ role: 'viewer' }, writer], [{}, { cognitoUserId: 'cognito-1' }]]) {
+      rows = answers(extra);
+      const client = await connect(['org-a', 'org-b'], 'Stefan Hamilton', args);
+      const result = await client.callTool({ name: 'delete_metric', arguments: { metric_id: 'metric-eggs', confirm: true } });
+      assert.strictEqual(result.isError, true, JSON.stringify(extra));
+    }
     assert.strictEqual(invocations.length, 0);
   });
 });
@@ -1051,6 +1131,17 @@ describe('get_asset', () => {
     assert.deepStrictEqual(reply.recent_stock_changes[0].quantity_change, -2);
     assert.strictEqual(reply.observation_count, 0);
     assert.strictEqual(queries.some((q) => q.sql.includes('FROM actions a')), false);
+  });
+
+  test('a part lists its metrics', async () => {
+    rows = (sql) => {
+      if (sql.includes('FROM tools t')) return [{ type: 'part', fields: { name: 'Darag Chicken' } }];
+      if (sql.includes('FROM metrics')) return [{ metric_id: 'metric-eggs', entity_type: 'part', entity_id: 'part-1', tool_id: null, name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: 0, max_value: null }];
+      return [];
+    };
+    const client = await connect(['org-a']);
+    const reply = JSON.parse((await client.callTool({ name: 'get_asset', arguments: { asset_id: 'part-1' } })).content[0].text);
+    assert.deepStrictEqual(reply.metrics, [{ metric_id: 'metric-eggs', name: 'Eggs collected', unit: 'count', value_type: 'number', min_value: 0, max_value: null }]);
   });
 
   test('an asset outside the caller orgs is not found', async () => {

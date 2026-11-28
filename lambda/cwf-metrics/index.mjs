@@ -677,10 +677,12 @@ export const handler = async (event) => {
       };
     }
 
-    // DELETE /api/tools/{id}/metrics/{metric_id} - Delete a metric
+    // DELETE /api/tools/{id}/metrics/{metric_id} - Delete a metric. The id is what the metric is
+    // about: a tool or part from their pages, or an organization, action or state (MCP).
     if (httpMethod === 'DELETE' && toolId && metricId) {
+      const aboutAnything = '(tool_id::text = $2 OR entity_id::text = $2)';
       const target = (await executeQuery(
-        `SELECT name, entity_type FROM metrics WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3`,
+        `SELECT name, entity_type FROM metrics WHERE metric_id = $1 AND ${aboutAnything} AND organization_id = $3`,
         [metricId, toolId, organizationId]
       )).rows[0];
       if (target?.entity_type === 'part' && isInventoryName(target.name)) {
@@ -688,7 +690,7 @@ export const handler = async (event) => {
       }
       const result = await executeQuery(
         `DELETE FROM metrics
-         WHERE metric_id = $1 AND ${ABOUT('$2')} AND organization_id = $3
+         WHERE metric_id = $1 AND ${aboutAnything} AND organization_id = $3
          RETURNING metric_id`,
         [metricId, toolId, organizationId]
       );
