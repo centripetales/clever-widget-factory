@@ -184,3 +184,37 @@ describe('the policies an action follows', () => {
   });
 });
 
+describe('reading policies and who may write them', () => {
+  const as = (httpMethod, authorizer, body) => handler({
+    httpMethod, path: '/api/policies', body: body && JSON.stringify(body),
+    requestContext: { authorizer: { organization_id: ORG, cognito_user_id: 'cognito-1', ...authorizer } },
+  });
+
+  test('lists each policy of the active org with its sources and how many actions follow it', async () => {
+    rows = () => [saved];
+    const response = await as('GET', { permissions: '["data:read"]', accessible_organization_ids: JSON.stringify([ORG, OTHER_ORG]) });
+    assert.strictEqual(response.statusCode, 200);
+    const [list] = ran(/FROM policy WHERE organization_id = \$1/);
+    assert.match(list.sql, /AS action_count/);
+    assert.match(list.sql, /AS sources/);
+    assert.match(list.sql, /s\.organization_id = ANY\(\$3::uuid\[\]\)/);
+    assert.match(list.sql, /e\.organization_id = ANY\(\$3::uuid\[\]\)/);
+    assert.deepStrictEqual(list.params, [ORG, null, [ORG, OTHER_ORG]]);
+  });
+
+  test('lets leadership and admins write, an admin who switched organization included', async () => {
+    for (const user_role of ['admin', 'leadership']) {
+      const response = await as('POST', { user_role, permissions: '["data:write"]' }, { title: 't', description_text: 'd' });
+      assert.strictEqual(response.statusCode, 200, user_role);
+    }
+  });
+
+  test('refuses contributors and viewers', async () => {
+    for (const [user_role, permissions] of [['contributor', '["data:write"]'], ['viewer', '["data:read"]']]) {
+      const response = await as('POST', { user_role, permissions }, { title: 't', description_text: 'd' });
+      assert.strictEqual(response.statusCode, 403, user_role);
+    }
+    assert.strictEqual(queries.length, 0);
+  });
+});
+
